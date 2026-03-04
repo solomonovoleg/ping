@@ -19,23 +19,18 @@ export default function AppLayout({ children }: AppLayoutProps) {
   ];
 
   return (
-    <div className="flex h-screen w-full bg-secondary/30 items-center justify-center overflow-hidden">
-      {/* Mobile Device Wrapper for Desktop / Full width on mobile */}
-      <div className="relative w-full h-full sm:w-[390px] sm:h-[844px] sm:max-h-[95vh] sm:rounded-[3rem] sm:border-[8px] sm:border-foreground/10 bg-background overflow-hidden sm:shadow-2xl flex flex-col">
+    <div className="flex h-screen w-full bg-background overflow-hidden">
+      {/* Main Container - Full width and height, responsive constraints handled inside components if needed */}
+      <div className="relative w-full h-full flex flex-col bg-background">
         
-        {/* Dynamic Island / Notch Placeholder (Desktop only) */}
-        <div className="hidden sm:flex absolute top-0 inset-x-0 h-7 z-50 justify-center pointer-events-none">
-          <div className="w-32 h-7 bg-foreground/10 rounded-b-3xl"></div>
-        </div>
-
         {/* Main Content Area */}
-        <main className="flex-1 relative flex flex-col h-full overflow-hidden w-full sm:pt-6">
+        <main className="flex-1 relative flex flex-col h-full overflow-hidden w-full">
           {children}
         </main>
 
         {/* Mobile Bottom Nav */}
         <nav className="absolute bottom-0 left-0 right-0 glass pb-safe z-50 border-t border-border/50">
-          <div className="flex justify-around items-center h-16 px-2 sm:pb-2 sm:h-20">
+          <div className="flex justify-around items-center h-16 px-2 sm:pb-2 sm:h-20 max-w-md mx-auto">
             {navItems.map((item) => {
               const isActive = location === item.path;
               const Icon = item.icon;
