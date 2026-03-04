@@ -88,7 +88,7 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
             <div 
               className="h-full bg-white rounded-full transition-all duration-75 ease-linear"
               style={{ 
-                width: idx === currentIndex ? \`\${progress}%\` : idx < currentIndex ? '100%' : '0%' 
+                width: idx === currentIndex ? `${progress}%` : idx < currentIndex ? '100%' : '0%' 
               }}
             />
           </div>
