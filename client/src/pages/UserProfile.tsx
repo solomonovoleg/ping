@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Heart, Share2, Copy, Check } from "lucide-react";
+import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Share2, Copy, Check, Settings, PenSquare, Trash2, Edit3, BarChart2, Plus } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 
 import avatarDesign from "@/assets/images/avatar-design.png";
+import avatarMain from "@/assets/images/avatar-main.png";
 
 export default function UserProfile({ params }: { params: { id: string } }) {
   const [, setLocation] = useLocation();
@@ -15,18 +16,42 @@ export default function UserProfile({ params }: { params: { id: string } }) {
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
   const [activeCommentPostId, setActiveCommentPostId] = useState<number | null>(null);
 
+  const isMe = params.id === "me";
+
   const handleCopyLink = () => {
-    // In a real app, this would be the actual URL
     navigator.clipboard.writeText(`https://app.com/profile/${params.id}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Mock data for the profile
-  const profile = {
+  // Mock data for the profiles
+  const profile = isMe ? {
+    name: "Алексей Иванов",
+    handle: "@alex_ivanov",
+    avatar: avatarMain,
+    cover: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop",
+    bio: "Product Designer & Developer. Делюсь своими проектами, мыслями и процессами создания интерфейсов.",
+    link: "t.me/alex_ivanov",
+    subscribers: "842",
+    postsCount: "12",
+    stories: [
+      { id: 1, thumb: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=150&h=150&fit=crop", title: "Рабочее" },
+      { id: 2, thumb: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=150&h=150&fit=crop", title: "Жизнь" },
+    ],
+    posts: [
+      {
+        id: 101,
+        time: "5 минут назад",
+        text: "Закончил работу над новым концептом мобильного приложения. Как вам такой минималистичный подход к интерфейсу?",
+        image: "https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?q=80&w=1000&auto=format&fit=crop",
+        reactions: [{ emoji: "🔥", count: 5 }, { emoji: "👍", count: 2 }],
+        comments: 3,
+      }
+    ]
+  } : {
     name: "Design & UX",
     handle: "@design_ux",
-    avatar: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=150&h=150&fit=crop",
+    avatar: avatarDesign,
     cover: "https://images.unsplash.com/photo-1558655146-d09347e92766?q=80&w=1000&auto=format&fit=crop",
     bio: "Ежедневная доза вдохновения. Пишу про UI/UX, делюсь полезными ресурсами и разбираю тренды.",
     link: "t.me/design_ux",
@@ -43,18 +68,16 @@ export default function UserProfile({ params }: { params: { id: string } }) {
         time: "2 часа назад",
         text: "Новые тренды в UI дизайне 2024 года. Glassmorphism возвращается, но в более утонченном виде с акцентом на типографику и микро-взаимодействия.",
         image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop",
-        likes: 124,
+        reactions: [{ emoji: "❤️", count: 45 }, { emoji: "🔥", count: 23 }, { emoji: "👏", count: 12 }],
         comments: 18,
-        isLiked: false,
       },
       {
         id: 2,
         time: "Вчера",
         text: "Подборка отличных шрифтов для интерфейсов, которые можно использовать абсолютно бесплатно. Сохраняйте, чтобы не потерять!",
         image: null,
-        likes: 456,
+        reactions: [{ emoji: "👍", count: 120 }, { emoji: "💯", count: 34 }],
         comments: 32,
-        isLiked: true,
       }
     ]
   };
@@ -78,12 +101,24 @@ export default function UserProfile({ params }: { params: { id: string } }) {
           >
             {copied ? <Check className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
           </button>
-          <button className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors">
-            <Bell className="w-5 h-5" />
-          </button>
-          <button className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors">
-            <MoreHorizontal className="w-5 h-5" />
-          </button>
+          
+          {isMe ? (
+            <button 
+              onClick={() => setLocation("/settings")}
+              className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+          ) : (
+            <>
+              <button className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors">
+                <Bell className="w-5 h-5" />
+              </button>
+              <button className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors">
+                <MoreHorizontal className="w-5 h-5" />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -112,19 +147,39 @@ export default function UserProfile({ params }: { params: { id: string } }) {
                 className="w-full h-full rounded-full object-cover border-[3px] border-background"
               />
             </div>
+            {isMe && (
+              <div className="absolute bottom-1 right-1 bg-primary text-white p-1.5 rounded-full border-2 border-background">
+                <Plus className="w-3 h-3" />
+              </div>
+            )}
           </div>
           
-          <button 
-            onClick={() => setIsSubscribed(!isSubscribed)}
-            className={cn(
-              "px-6 py-2 rounded-full font-semibold text-[15px] transition-all duration-300 transform active:scale-95",
-              isSubscribed 
-                ? "bg-secondary text-foreground hover:bg-secondary/80" 
-                : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/20"
+          <div className="flex gap-2">
+            {isMe ? (
+              <>
+                <button className="px-4 py-2 rounded-full font-semibold text-[14px] bg-secondary text-foreground hover:bg-secondary/80 transition-all duration-300 flex items-center gap-2">
+                  <BarChart2 className="w-4 h-4" />
+                  Статистика
+                </button>
+                <button className="px-4 py-2 rounded-full font-semibold text-[14px] bg-primary text-primary-foreground hover:bg-primary/90 transition-all duration-300 flex items-center gap-2">
+                  <Edit3 className="w-4 h-4" />
+                  Изменить
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={() => setIsSubscribed(!isSubscribed)}
+                className={cn(
+                  "px-6 py-2 rounded-full font-semibold text-[15px] transition-all duration-300 transform active:scale-95",
+                  isSubscribed 
+                    ? "bg-secondary text-foreground hover:bg-secondary/80" 
+                    : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/20"
+                )}
+              >
+                {isSubscribed ? "Вы подписаны" : "Подписаться"}
+              </button>
             )}
-          >
-            {isSubscribed ? "Вы подписаны" : "Подписаться"}
-          </button>
+          </div>
         </div>
 
         <h1 className="text-2xl font-bold leading-tight">{profile.name}</h1>
@@ -154,6 +209,16 @@ export default function UserProfile({ params }: { params: { id: string } }) {
       {/* Profile Highlights/Stories */}
       <div className="mb-6">
         <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4 pb-2">
+          {isMe && (
+            <div className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group">
+              <div className="w-16 h-16 rounded-full border-2 border-dashed border-border flex items-center justify-center group-active:scale-95 transition-transform duration-200 text-muted-foreground group-hover:text-primary group-hover:border-primary/50">
+                <Plus className="w-6 h-6" />
+              </div>
+              <span className="text-[12px] font-medium text-foreground/80">
+                Новое
+              </span>
+            </div>
+          )}
           {profile.stories.map((story, idx) => (
             <div 
               key={story.id} 
@@ -207,9 +272,20 @@ export default function UserProfile({ params }: { params: { id: string } }) {
 
       {/* Content Area */}
       <div className="flex flex-col">
+        {activeTab === "posts" && isMe && (
+          <div className="p-4 border-b border-border/50 bg-secondary/10 flex items-center gap-3 cursor-pointer hover:bg-secondary/20 transition-colors" onClick={() => setLocation("/create-post")}>
+            <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-primary flex-shrink-0">
+              <PenSquare className="w-5 h-5" />
+            </div>
+            <div className="text-[15px] text-muted-foreground font-medium">
+              Написать новый пост...
+            </div>
+          </div>
+        )}
+
         {activeTab === "posts" ? (
           profile.posts.map((post) => (
-            <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors">
+            <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors relative group/article">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <img 
@@ -222,9 +298,21 @@ export default function UserProfile({ params }: { params: { id: string } }) {
                     <p className="text-xs text-muted-foreground">{post.time}</p>
                   </div>
                 </div>
-                <button className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary">
-                  <MoreHorizontal className="w-5 h-5" />
-                </button>
+                
+                {isMe ? (
+                  <div className="flex items-center gap-1 opacity-0 group-hover/article:opacity-100 transition-opacity">
+                    <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button className="p-2 rounded-full text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <button className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary">
+                    <MoreHorizontal className="w-5 h-5" />
+                  </button>
+                )}
               </div>
 
               <div className="mb-3">
@@ -244,16 +332,20 @@ export default function UserProfile({ params }: { params: { id: string } }) {
               </div>
 
               <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center gap-1">
-                  <button className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors text-sm font-medium",
-                    post.isLiked 
-                      ? "bg-red-500/10 text-red-500" 
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  )}>
-                    <Heart className={cn("w-4 h-4", post.isLiked && "fill-current")} />
-                    {post.likes}
-                  </button>
+                <div className="flex items-center gap-2">
+                  {/* Reactions Pill instead of Like button */}
+                  <div className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer border border-border/30">
+                    {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <span className="text-base leading-none">{reaction.emoji}</span>
+                        {i === post.reactions.length - 1 && (
+                          <span className="text-sm font-medium ml-1">
+                            {post.reactions.reduce((sum: number, r: {count: number}) => sum + r.count, 0)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                   
                   <button 
                     onClick={() => setActiveCommentPostId(post.id)}

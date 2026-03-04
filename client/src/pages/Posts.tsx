@@ -29,9 +29,8 @@ const POSTS = [
     time: "2 часа назад",
     text: "Новые тренды в UI дизайне 2024 года. Glassmorphism возвращается, но в более утонченном виде с акцентом на типографику и микро-взаимодействия.",
     image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop",
-    likes: 124,
+    reactions: [{ emoji: "❤️", count: 45 }, { emoji: "🔥", count: 23 }, { emoji: "👏", count: 12 }],
     comments: 18,
-    isLiked: false,
   },
   {
     id: 2,
@@ -41,9 +40,8 @@ const POSTS = [
     time: "4 часа назад",
     text: "Анонсирован новый фреймворк для создания невероятно быстрых веб-приложений. Скорость загрузки увеличена в 3 раза по сравнению с React.",
     image: null,
-    likes: 890,
+    reactions: [{ emoji: "👍", count: 120 }, { emoji: "💯", count: 34 }],
     comments: 142,
-    isLiked: true,
   },
   {
     id: 3,
@@ -53,9 +51,8 @@ const POSTS = [
     time: "Вчера",
     text: "Закат в горах Швейцарии. Невероятная палитра цветов.",
     image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=1000&auto=format&fit=crop",
-    likes: 3450,
+    reactions: [{ emoji: "❤️", count: 850 }, { emoji: "😍", count: 120 }],
     comments: 56,
-    isLiked: false,
   }
 ];
 
@@ -158,7 +155,7 @@ export default function Posts() {
                 <div className="flex items-center justify-between mb-3">
                   <div 
                     className="flex items-center gap-3 cursor-pointer group"
-                    onClick={() => setLocation(`/profile/${post.creatorId}`)}
+                    onClick={() => setLocation(post.creatorId === "me" ? "/profile/me" : `/profile/${post.creatorId}`)}
                   >
                     <img 
                       src={post.channelAvatar} 
@@ -194,20 +191,24 @@ export default function Posts() {
 
                 {/* Post Actions */}
                 <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center gap-1">
-                    <button className={cn(
-                      "flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors text-sm font-medium",
-                      post.isLiked 
-                        ? "bg-red-500/10 text-red-500" 
-                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    )}>
-                      <Heart className={cn("w-4 h-4", post.isLiked && "fill-current")} />
-                      {post.likes}
-                    </button>
+                  <div className="flex items-center gap-2">
+                    {/* Reactions Pill instead of Like button */}
+                    <div className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer border border-border/30">
+                      {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => (
+                        <div key={i} className="flex items-center gap-1">
+                          <span className="text-base leading-none">{reaction.emoji}</span>
+                          {i === post.reactions.length - 1 && (
+                            <span className="text-sm font-medium ml-1">
+                              {post.reactions.reduce((sum: number, r: {count: number}) => sum + r.count, 0)}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                     
                     <button 
                       onClick={() => setActiveCommentPostId(post.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium border border-border/30"
                     >
                       <MessageSquare className="w-4 h-4" />
                       {post.comments}
