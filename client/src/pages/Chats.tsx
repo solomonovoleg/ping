@@ -16,6 +16,8 @@ const FOLDERS = [
   { id: "unread", name: "Новые", count: 3 },
   { id: "personal", name: "Личное", count: 0 },
   { id: "work", name: "Работа", count: 12 },
+  { id: "projects", name: "Проекты", count: 5 },
+  { id: "news", name: "Новости", count: 18 },
 ];
 
 const CHATS = [
