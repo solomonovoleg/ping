@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { MessageCircle, LayoutGrid, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
+import { MessageCircle, Newspaper, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AppLayoutProps {
@@ -11,7 +11,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const navItems = [
     { id: "chats", path: "/", icon: MessageCircle, label: "Чаты" },
-    { id: "posts", path: "/posts", icon: LayoutGrid, label: "Лента" },
+    { id: "posts", path: "/posts", icon: Newspaper, label: "Лента" },
     { id: "board", path: "/board", icon: LayoutDashboard, label: "Борд" },
     { id: "settings", path: "/settings", icon: SettingsIcon, label: "Настройки" },
   ];
