@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare } from "lucide-react";
+import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 import StoryViewer from "@/components/StoryViewer";
@@ -13,11 +13,11 @@ import avatarNews from "@/assets/images/avatar-news.png";
 
 // Mock Data
 const STORIES = [
-  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", likes: 12 },
-  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&h=1200&fit=crop", time: "1ч", likes: 5 },
-  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=800&h=1200&fit=crop", time: "3ч", likes: 0 },
-  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&h=1200&fit=crop", time: "5ч", likes: 48 },
-  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&h=1200&fit=crop", time: "8ч", likes: 156 },
+  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", views: 128 },
+  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&h=1200&fit=crop", time: "1ч", isTrending: true },
+  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=800&h=1200&fit=crop", time: "3ч" },
+  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&h=1200&fit=crop", time: "5ч" },
+  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&h=1200&fit=crop", time: "8ч", isTrending: true },
 ];
 
 const POSTS = [
@@ -128,16 +128,21 @@ export default function Posts() {
                         <Plus className="w-3.5 h-3.5" />
                       </div>
                     )}
-                    {story.likes !== undefined && story.likes > 0 && (
-                      <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-background shadow-sm border border-border/50 px-1.5 py-0.5 rounded-full flex items-center gap-0.5 z-10">
-                        <Heart className="w-2.5 h-2.5 text-red-500 fill-red-500" />
-                        <span className="text-[10px] font-medium leading-none">{story.likes}</span>
+                    {story.isTrending && (
+                      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-gradient-to-r from-orange-500 to-rose-500 text-white shadow-sm border-[1.5px] border-background px-1.5 py-0.5 rounded-md flex items-center gap-0.5 z-10 animate-[pulse_2s_ease-in-out_infinite]">
+                        <span className="text-[9px] font-bold tracking-wide uppercase leading-none">HOT</span>
+                      </div>
+                    )}
+                    {story.views !== undefined && (
+                      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-secondary text-secondary-foreground shadow-sm border border-background px-1.5 py-0.5 rounded-full flex items-center gap-1 z-10">
+                        <Eye className="w-3 h-3 opacity-70" />
+                        <span className="text-[10px] font-semibold leading-none">{story.views}</span>
                       </div>
                     )}
                   </div>
                   <span className={cn(
                     "text-[11px] font-medium text-foreground/80 max-w-[64px] truncate text-center",
-                    story.likes && story.likes > 0 ? "mt-2" : ""
+                    (story.isTrending || story.views !== undefined) ? "mt-1.5" : ""
                   )}>
                     {story.name}
                   </span>
