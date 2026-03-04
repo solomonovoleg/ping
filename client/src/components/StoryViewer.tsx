@@ -19,10 +19,13 @@ interface StoryViewerProps {
 export default function StoryViewer({ stories, initialIndex = 0, onClose }: StoryViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
 
   // Auto-advance stories
   useEffect(() => {
-    const duration = 5000; // 5 seconds per story
+    if (isPaused) return;
+
+    const duration = 15000; // 15 seconds per story
     const interval = 50; // update every 50ms
     const step = (interval / duration) * 100;
 
@@ -43,7 +46,7 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
     }, interval);
 
     return () => clearInterval(timer);
-  }, [currentIndex, stories.length, onClose]);
+  }, [currentIndex, stories.length, onClose, isPaused]);
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -66,9 +69,9 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
   };
 
   const handleTap = (e: React.MouseEvent<HTMLDivElement>) => {
-    const width = e.currentTarget.offsetWidth;
-    const x = e.nativeEvent.offsetX;
-    if (x < width / 3) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x < rect.width / 3) {
       handlePrev(e);
     } else {
       handleNext(e);
@@ -79,7 +82,10 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
   const currentStory = stories[currentIndex];
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black text-white flex flex-col animate-in fade-in zoom-in-[0.98] duration-200">
+    <div 
+      className="fixed inset-0 w-full max-w-[480px] mx-auto z-[200] bg-black text-white flex flex-col animate-in fade-in zoom-in-[0.98] duration-200"
+      style={{ height: '100dvh' }}
+    >
       
       {/* Progress Bars */}
       <div className="absolute top-0 inset-x-0 px-2 pt-safe-offset-2 flex gap-1 z-50">
@@ -122,11 +128,16 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
       <div 
         className="flex-1 relative bg-zinc-900 w-full h-full flex items-center justify-center cursor-pointer"
         onClick={handleTap}
+        onPointerDown={() => setIsPaused(true)}
+        onPointerUp={() => setIsPaused(false)}
+        onPointerLeave={() => setIsPaused(false)}
+        onContextMenu={(e) => e.preventDefault()}
       >
         <img 
           src={currentStory.image} 
           alt="Story content" 
-          className="w-full h-full object-cover sm:object-contain"
+          className="w-full h-full object-cover sm:object-contain select-none"
+          draggable={false}
         />
       </div>
 

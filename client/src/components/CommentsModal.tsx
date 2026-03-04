@@ -60,12 +60,12 @@ export default function CommentsModal({ isOpen, onClose, postId }: CommentsModal
     <>
       {/* Backdrop */}
       <div 
-        className="fixed inset-0 bg-black/40 z-[200] backdrop-blur-sm animate-in fade-in duration-200"
+        className="fixed inset-0 w-full bg-black/40 z-[200] backdrop-blur-sm animate-in fade-in duration-200"
         onClick={onClose}
       />
       
       {/* Modal / Bottom Sheet */}
-      <div className="fixed bottom-0 left-0 right-0 z-[201] bg-background rounded-t-3xl sm:max-w-[480px] sm:mx-auto sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2 sm:rounded-3xl flex flex-col h-[75vh] sm:h-[600px] shadow-2xl animate-in slide-in-from-bottom-full duration-300">
+      <div className="fixed bottom-0 left-0 right-0 w-full max-w-[480px] mx-auto z-[201] bg-background rounded-t-3xl flex flex-col h-[75vh] shadow-2xl animate-in slide-in-from-bottom-full duration-300">
         
         {/* Drag handle (Mobile) */}
         <div className="w-full flex justify-center pt-3 pb-1 sm:hidden">
