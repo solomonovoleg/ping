@@ -41,20 +41,22 @@ export default function AppLayout({ children }: AppLayoutProps) {
                 <button
                   key={item.id}
                   onClick={() => setLocation(item.path)}
-                  className="flex flex-col items-center justify-center w-full h-full space-y-1 relative"
+                  className="flex flex-col items-center justify-center w-full h-full pt-1 pb-1 gap-1 relative"
                   data-testid={`mobile-nav-${item.id}`}
                 >
-                  <div className={cn(
-                    "absolute inset-0 bg-primary/10 rounded-2xl scale-0 transition-transform duration-300",
-                    isActive && "scale-100 opacity-100 w-12 h-8 m-auto -translate-y-3 sm:-translate-y-4"
-                  )} />
-                  <Icon className={cn(
-                    "w-6 h-6 transition-all duration-300 relative z-10", 
-                    isActive ? "text-primary -translate-y-1 sm:-translate-y-2" : "text-muted-foreground"
-                  )} />
+                  <div className="relative flex items-center justify-center w-14 h-8">
+                    <div className={cn(
+                      "absolute inset-0 bg-primary/10 rounded-full scale-0 transition-transform duration-200",
+                      isActive && "scale-100"
+                    )} />
+                    <Icon className={cn(
+                      "w-6 h-6 transition-colors duration-200 relative z-10", 
+                      isActive ? "text-primary" : "text-muted-foreground"
+                    )} />
+                  </div>
                   <span className={cn(
-                    "text-[10px] font-medium transition-all duration-300 absolute bottom-2 sm:bottom-4",
-                    isActive ? "text-primary opacity-100 translate-y-0" : "text-muted-foreground opacity-100"
+                    "text-[10px] font-medium transition-colors duration-200",
+                    isActive ? "text-primary" : "text-muted-foreground"
                   )}>
                     {item.label}
                   </span>
