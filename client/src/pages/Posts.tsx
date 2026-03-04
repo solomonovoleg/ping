@@ -40,16 +40,16 @@ const POSTS = [
 
 export default function Posts() {
   return (
-    <div className="flex h-full w-full justify-center bg-background/50">
-      <div className="w-full max-w-2xl h-full flex flex-col border-x border-border/50 bg-background shadow-sm">
+    <div className="flex h-full w-full justify-center bg-background">
+      <div className="w-full h-full flex flex-col bg-background">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0 border-b border-border/50">
+        <div className="px-4 py-4 glass z-10 sticky top-0">
           <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
         </div>
 
         {/* Feed */}
-        <div className="flex-1 overflow-y-auto pb-24 md:pb-4">
+        <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
           <div className="flex flex-col">
             {POSTS.map((post) => (
               <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors">

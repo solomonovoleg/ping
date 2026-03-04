@@ -29,7 +29,7 @@ export default function Contacts() {
 
   return (
     <div className="flex h-full w-full justify-center bg-background">
-      <div className="w-full max-w-md h-full flex flex-col border-x border-border/50">
+      <div className="w-full h-full flex flex-col">
         
         {/* Header */}
         <div className="px-4 pt-6 pb-4 glass z-10 sticky top-0">
@@ -54,7 +54,7 @@ export default function Contacts() {
         </div>
 
         {/* Contacts List */}
-        <div className="flex-1 overflow-y-auto pb-24 md:pb-4 px-2">
+        <div className="flex-1 overflow-y-auto pb-24 sm:pb-28 px-2">
           {Object.keys(groupedContacts).length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
               <p>Контакты не найдены</p>
@@ -62,7 +62,7 @@ export default function Contacts() {
           ) : (
             Object.keys(groupedContacts).sort().map(letter => (
               <div key={letter} className="mb-4">
-                <div className="px-4 py-1 text-sm font-bold text-muted-foreground bg-background sticky top-0">
+                <div className="px-4 py-1 text-sm font-bold text-muted-foreground bg-background sticky top-0 z-10">
                   {letter}
                 </div>
                 <div className="flex flex-col gap-1">

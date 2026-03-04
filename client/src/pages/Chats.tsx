@@ -97,7 +97,7 @@ export default function Chats() {
   return (
     <div className="flex h-full w-full">
       {/* Chats List Panel */}
-      <div className="w-full md:w-[350px] lg:w-[400px] flex flex-col h-full bg-background border-r border-border/50">
+      <div className="w-full flex flex-col h-full bg-background">
         
         {/* Header */}
         <div className="px-4 pt-6 pb-2 glass z-10 sticky top-0">
@@ -145,7 +145,7 @@ export default function Chats() {
         </div>
 
         {/* Chats List */}
-        <div className="flex-1 overflow-y-auto pb-24 md:pb-0">
+        <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
           {filteredChats.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8 text-center">
               <MessageCircle className="w-12 h-12 mb-4 opacity-20" />
@@ -199,17 +199,6 @@ export default function Chats() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Placeholder for Chat Content (Desktop only) */}
-      <div className="hidden md:flex flex-1 flex-col items-center justify-center bg-secondary/20">
-        <div className="w-24 h-24 rounded-full bg-secondary flex items-center justify-center mb-6 shadow-sm">
-          <MessageCircle className="w-10 h-10 text-muted-foreground/50" />
-        </div>
-        <h2 className="text-xl font-semibold mb-2">Выберите чат</h2>
-        <p className="text-muted-foreground max-w-sm text-center">
-          Выберите собеседника из списка слева, чтобы начать общение
-        </p>
       </div>
     </div>
   );

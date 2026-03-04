@@ -38,10 +38,10 @@ const SETTINGS_GROUPS = [
 export default function Settings() {
   return (
     <div className="flex h-full w-full justify-center bg-secondary/30">
-      <div className="w-full max-w-2xl h-full flex flex-col border-x border-border/50 bg-background shadow-sm overflow-y-auto pb-24 md:pb-8">
+      <div className="w-full h-full flex flex-col bg-background overflow-y-auto pb-24 sm:pb-28">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0 border-b border-border/50 flex justify-between items-center">
+        <div className="px-4 py-4 glass z-10 sticky top-0 flex justify-between items-center">
           <h1 className="text-2xl font-bold tracking-tight">Настройки</h1>
           <button className="text-primary font-medium text-[15px]">Изм.</button>
         </div>
