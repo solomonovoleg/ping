@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import avatarMain from "@/assets/images/avatar-main.png";
+
 const SETTINGS_GROUPS = [
   {
     title: "Основные",
@@ -50,7 +52,7 @@ export default function Settings() {
         <div className="p-6 flex flex-col items-center justify-center border-b border-border/30 bg-card">
           <div className="relative mb-4 group cursor-pointer">
             <img 
-              src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&h=200&fit=crop&crop=face" 
+              src={avatarMain} 
               alt="Avatar" 
               className="w-24 h-24 rounded-full object-cover border-2 border-background shadow-md group-hover:opacity-80 transition-opacity"
             />

@@ -2,6 +2,13 @@ import { useState } from "react";
 import { Search, Edit, MoreHorizontal, Check, CheckCheck, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import avatarAlisa from "@/assets/images/avatar-alisa.png";
+import avatarDesign from "@/assets/images/avatar-design.png";
+import avatarProduct from "@/assets/images/avatar-product.png";
+import avatarMom from "@/assets/images/avatar-mom.png";
+import avatarNews from "@/assets/images/avatar-news.png";
+import avatarIvan from "@/assets/images/avatar-ivan.png";
+
 // Mock Data
 const FOLDERS = [
   { id: "all", name: "Все чаты", count: 0 },
@@ -14,7 +21,7 @@ const CHATS = [
   {
     id: 1,
     name: "Алиса Смирнова",
-    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=face",
+    avatar: avatarAlisa,
     lastMessage: "Давай встретимся в 19:00 у входа?",
     time: "14:23",
     unread: 2,
@@ -25,7 +32,7 @@ const CHATS = [
   {
     id: 2,
     name: "Команда Дизайна",
-    avatar: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&h=150&fit=crop",
+    avatar: avatarDesign,
     lastMessage: "Максим: Я обновил макеты в фигме",
     time: "11:45",
     unread: 0,
@@ -36,7 +43,7 @@ const CHATS = [
   {
     id: 3,
     name: "Product Sync",
-    avatar: "https://images.unsplash.com/photo-1552664730-d307ca884978?w=150&h=150&fit=crop",
+    avatar: avatarProduct,
     lastMessage: "Созвон через 10 минут, ссылка в описании.",
     time: "Вчера",
     unread: 5,
@@ -47,7 +54,7 @@ const CHATS = [
   {
     id: 4,
     name: "Мама",
-    avatar: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&h=150&fit=crop&crop=face",
+    avatar: avatarMom,
     lastMessage: "Как дела на работе? Не забудь покушать!",
     time: "Вчера",
     unread: 0,
@@ -59,7 +66,7 @@ const CHATS = [
   {
     id: 5,
     name: "Telegram News",
-    avatar: "https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=150&h=150&fit=crop",
+    avatar: avatarNews,
     lastMessage: "Новое обновление уже доступно для всех пользователей...",
     time: "Пн",
     unread: 12,
@@ -70,7 +77,7 @@ const CHATS = [
   {
     id: 6,
     name: "Иван Разработчик",
-    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=face",
+    avatar: avatarIvan,
     lastMessage: "Пулл реквест заапрувил, можешь мержить.",
     time: "Пн",
     unread: 0,
