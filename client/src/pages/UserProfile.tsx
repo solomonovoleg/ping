@@ -99,15 +99,17 @@ export default function UserProfile({ params }: { params: { id: string } }) {
       {/* Profile Info */}
       <div className="px-4 relative -mt-12 mb-6">
         <div className="flex justify-between items-end mb-3">
-          <div className="relative">
-            <div className="w-24 h-24 rounded-full p-1 bg-background">
+          <div 
+            className="relative cursor-pointer group" 
+            onClick={() => setActiveStoryIndex(0)}
+          >
+            <div className="w-24 h-24 rounded-full p-[3px] bg-gradient-to-tr from-primary to-purple-500 transition-transform duration-200 group-active:scale-95">
               <img 
                 src={profile.avatar} 
                 alt={profile.name} 
-                className="w-full h-full rounded-full object-cover border border-border/50"
+                className="w-full h-full rounded-full object-cover border-[3px] border-background"
               />
             </div>
-            {/* Online status indicator if needed */}
           </div>
           
           <button 
