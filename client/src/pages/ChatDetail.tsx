@@ -33,9 +33,32 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
   
   // Mock messages
   const [messages, setMessages] = useState([
-    { id: 1, text: "Привет! Как дела?", time: "14:20", isMe: false },
-    { id: 2, text: "Всё отлично, работаю над новым дизайном 🚀", time: "14:22", isMe: true },
-    { id: 3, text: chatInfo?.isAI ? "Чем могу помочь сегодня?" : "Давай встретимся в 19:00 у входа?", time: "14:23", isMe: false }
+    { 
+      id: 1, 
+      text: "Привет! Как дела?", 
+      time: "14:20", 
+      isMe: false, 
+      sender: chatInfo?.name || "Алиса Смирнова",
+      avatar: chatInfo?.avatar || avatarAlisa,
+      reactions: ["👍"]
+    },
+    { 
+      id: 2, 
+      text: "Всё отлично, работаю над новым дизайном 🚀", 
+      time: "14:22", 
+      isMe: true,
+      sender: "Вы",
+      reactions: ["🔥", "❤️"]
+    },
+    { 
+      id: 3, 
+      text: chatInfo?.isAI ? "Чем могу помочь сегодня?" : "Давай встретимся в 19:00 у входа?", 
+      time: "14:23", 
+      isMe: false,
+      sender: chatInfo?.name || "Алиса Смирнова",
+      avatar: chatInfo?.avatar || avatarAlisa,
+      reactions: []
+    }
   ]);
 
   const handleSend = () => {
@@ -45,7 +68,9 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
       id: Date.now(),
       text: message,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isMe: true
+      isMe: true,
+      sender: "Вы",
+      reactions: []
     }]);
     
     setMessage("");
@@ -57,7 +82,10 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
           id: Date.now(),
           text: "Я обрабатываю ваш запрос. Подождите секунду...",
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          isMe: false
+          isMe: false,
+          sender: chatInfo.name,
+          avatar: chatInfo.avatar,
+          reactions: []
         }]);
       }, 1000);
     }
@@ -144,29 +172,65 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
           <div 
             key={msg.id} 
             className={cn(
-              "flex flex-col max-w-[80%]",
-              msg.isMe ? "self-end" : "self-start"
+              "flex max-w-[85%] gap-2",
+              msg.isMe ? "self-end flex-row-reverse" : "self-start flex-row"
             )}
           >
-            <div className={cn(
-              "px-4 py-2.5 rounded-2xl relative group",
-              msg.isMe 
-                ? "bg-primary text-primary-foreground rounded-tr-sm" 
-                : chatInfo.isAI 
-                  ? "bg-primary/10 text-foreground rounded-tl-sm border border-primary/20"
-                  : "bg-card border shadow-sm text-foreground rounded-tl-sm"
-            )}>
-              <p className="text-[15px] leading-relaxed break-words">{msg.text}</p>
-              <div className={cn(
-                "text-[11px] mt-1 flex justify-end items-center gap-1",
-                msg.isMe ? "text-primary-foreground/70" : "text-muted-foreground"
-              )}>
-                {msg.time}
-                {msg.isMe && (
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinelinejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                  </svg>
+            {/* Avatar for others */}
+            {!msg.isMe && (
+              <img 
+                src={msg.avatar} 
+                alt={msg.sender} 
+                className={cn(
+                  "w-8 h-8 object-cover flex-shrink-0 mt-auto",
+                  chatInfo.isAI ? "rounded-lg" : "rounded-full"
                 )}
+              />
+            )}
+
+            <div className="flex flex-col gap-1 w-full">
+              {/* Sender name for groups/others */}
+              {!msg.isMe && !chatInfo.isAI && (
+                <span className="text-[12px] font-medium text-muted-foreground ml-1">
+                  {msg.sender}
+                </span>
+              )}
+              
+              <div className="relative">
+                <div className={cn(
+                  "px-4 py-2.5 rounded-2xl relative group",
+                  msg.isMe 
+                    ? "bg-primary text-primary-foreground rounded-br-sm" 
+                    : chatInfo.isAI 
+                      ? "bg-primary/10 text-foreground rounded-bl-sm border border-primary/20"
+                      : "bg-card border shadow-sm text-foreground rounded-bl-sm"
+                )}>
+                  <p className="text-[15px] leading-relaxed break-words">{msg.text}</p>
+                  
+                  {/* Reactions */}
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <div className={cn(
+                      "absolute -bottom-3 flex gap-1 bg-background/90 backdrop-blur-md border shadow-sm rounded-full px-1.5 py-0.5 text-[12px]",
+                      msg.isMe ? "right-2" : "left-2"
+                    )}>
+                      {msg.reactions.map((r, i) => (
+                        <span key={i} className="cursor-pointer hover:scale-125 transition-transform">{r}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className={cn(
+                    "text-[10px] mt-1 flex justify-end items-center gap-1 opacity-70",
+                    msg.isMe ? "text-primary-foreground" : "text-muted-foreground"
+                  )}>
+                    {msg.time}
+                    {msg.isMe && (
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
