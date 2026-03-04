@@ -7,7 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import AppLayout from "@/components/layout/AppLayout";
 import Chats from "@/pages/Chats";
 import Posts from "@/pages/Posts";
-import Contacts from "@/pages/Contacts";
+import Board from "@/pages/Board";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
@@ -17,7 +17,7 @@ function Router() {
       <Switch>
         <Route path="/" component={Chats} />
         <Route path="/posts" component={Posts} />
-        <Route path="/contacts" component={Contacts} />
+        <Route path="/board" component={Board} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>
