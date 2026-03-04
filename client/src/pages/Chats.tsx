@@ -14,7 +14,7 @@ const CHATS = [
   {
     id: 1,
     name: "Алиса Смирнова",
-    avatar: "https://i.pravatar.cc/150?u=1",
+    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=face",
     lastMessage: "Давай встретимся в 19:00 у входа?",
     time: "14:23",
     unread: 2,
@@ -25,7 +25,7 @@ const CHATS = [
   {
     id: 2,
     name: "Команда Дизайна",
-    avatar: "https://i.pravatar.cc/150?u=2",
+    avatar: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150&h=150&fit=crop",
     lastMessage: "Максим: Я обновил макеты в фигме",
     time: "11:45",
     unread: 0,
@@ -36,7 +36,7 @@ const CHATS = [
   {
     id: 3,
     name: "Product Sync",
-    avatar: "https://i.pravatar.cc/150?u=3",
+    avatar: "https://images.unsplash.com/photo-1552664730-d307ca884978?w=150&h=150&fit=crop",
     lastMessage: "Созвон через 10 минут, ссылка в описании.",
     time: "Вчера",
     unread: 5,
@@ -47,7 +47,7 @@ const CHATS = [
   {
     id: 4,
     name: "Мама",
-    avatar: "https://i.pravatar.cc/150?u=4",
+    avatar: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&h=150&fit=crop&crop=face",
     lastMessage: "Как дела на работе? Не забудь покушать!",
     time: "Вчера",
     unread: 0,
@@ -59,7 +59,7 @@ const CHATS = [
   {
     id: 5,
     name: "Telegram News",
-    avatar: "https://i.pravatar.cc/150?u=5",
+    avatar: "https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=150&h=150&fit=crop",
     lastMessage: "Новое обновление уже доступно для всех пользователей...",
     time: "Пн",
     unread: 12,
@@ -70,7 +70,7 @@ const CHATS = [
   {
     id: 6,
     name: "Иван Разработчик",
-    avatar: "https://i.pravatar.cc/150?u=6",
+    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=face",
     lastMessage: "Пулл реквест заапрувил, можешь мержить.",
     time: "Пн",
     unread: 0,
