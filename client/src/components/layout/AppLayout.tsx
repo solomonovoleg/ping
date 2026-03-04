@@ -1,6 +1,8 @@
 import { useLocation } from "wouter";
-import { MessageCircle, Newspaper, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
+import { MessageCircle, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+import feedIcon from "@/assets/images/feed-icon.png";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -11,7 +13,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const navItems = [
     { id: "chats", path: "/", icon: MessageCircle, label: "Чаты" },
-    { id: "posts", path: "/posts", icon: Newspaper, label: "Лента" },
+    { id: "posts", path: "/posts", customIcon: feedIcon, label: "Лента" },
     { id: "board", path: "/board", icon: LayoutDashboard, label: "Борд" },
     { id: "settings", path: "/settings", icon: SettingsIcon, label: "Настройки" },
   ];
@@ -49,10 +51,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
                       "absolute inset-0 bg-primary/10 rounded-full scale-0 transition-transform duration-200",
                       isActive && "scale-100"
                     )} />
-                    <Icon className={cn(
-                      "w-6 h-6 transition-colors duration-200 relative z-10", 
-                      isActive ? "text-primary" : "text-muted-foreground"
-                    )} />
+                    {item.customIcon ? (
+                      <img 
+                        src={item.customIcon} 
+                        alt={item.label}
+                        className={cn(
+                          "w-6 h-6 object-contain transition-all duration-200 relative z-10",
+                          !isActive && "opacity-60 grayscale"
+                        )}
+                      />
+                    ) : Icon && (
+                      <Icon className={cn(
+                        "w-6 h-6 transition-colors duration-200 relative z-10", 
+                        isActive ? "text-primary" : "text-muted-foreground"
+                      )} />
+                    )}
                   </div>
                   <span className={cn(
                     "text-[10px] font-medium transition-colors duration-200",
