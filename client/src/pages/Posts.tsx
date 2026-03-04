@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
+import StoryViewer from "@/components/StoryViewer";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -10,11 +12,11 @@ import avatarNews from "@/assets/images/avatar-news.png";
 
 // Mock Data
 const STORIES = [
-  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false },
-  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true },
-  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true },
-  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true },
-  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false },
+  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м" },
+  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&h=1200&fit=crop", time: "1ч" },
+  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=800&h=1200&fit=crop", time: "3ч" },
+  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&h=1200&fit=crop", time: "5ч" },
+  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&h=1200&fit=crop", time: "8ч" },
 ];
 
 const POSTS = [
@@ -58,7 +60,16 @@ const POSTS = [
 
 export default function Posts() {
   const [, setLocation] = useLocation();
+  const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
   
+  const storiesForViewer = STORIES.map(s => ({
+    id: s.id,
+    image: s.image,
+    userName: s.name,
+    userAvatar: s.avatar,
+    time: s.time
+  }));
+
   return (
     <div className="flex h-full w-full justify-center bg-background">
       <div className="w-full h-full flex flex-col bg-background">
@@ -80,8 +91,12 @@ export default function Posts() {
           {/* Stories Section */}
           <div className="py-4 border-b border-border/50 bg-background/50">
             <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4">
-              {STORIES.map((story) => (
-                <div key={story.id} className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group">
+              {STORIES.map((story, idx) => (
+                <div 
+                  key={story.id} 
+                  className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
+                  onClick={() => setActiveStoryIndex(idx)}
+                >
                   <div className="relative">
                     <div className={cn(
                       "w-16 h-16 rounded-full p-[2px] transition-transform duration-200 group-active:scale-95",
@@ -186,6 +201,13 @@ export default function Posts() {
           </div>
         </div>
 
+        {activeStoryIndex !== null && (
+          <StoryViewer 
+            stories={storiesForViewer} 
+            initialIndex={activeStoryIndex} 
+            onClose={() => setActiveStoryIndex(null)} 
+          />
+        )}
       </div>
     </div>
   );

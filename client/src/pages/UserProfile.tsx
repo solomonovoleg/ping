@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Heart, Share2, Copy, Check } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import StoryViewer from "@/components/StoryViewer";
 
 import avatarDesign from "@/assets/images/avatar-design.png";
 
@@ -10,6 +11,7 @@ export default function UserProfile({ params }: { params: { id: string } }) {
   const [activeTab, setActiveTab] = useState<"posts" | "saved">("posts");
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
   
   const handleCopyLink = () => {
     // In a real app, this would be the actual URL
@@ -148,8 +150,12 @@ export default function UserProfile({ params }: { params: { id: string } }) {
       {/* Profile Highlights/Stories */}
       <div className="mb-6">
         <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4 pb-2">
-          {profile.stories.map((story) => (
-            <div key={story.id} className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group">
+          {profile.stories.map((story, idx) => (
+            <div 
+              key={story.id} 
+              className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
+              onClick={() => setActiveStoryIndex(idx)}
+            >
               <div className="w-16 h-16 rounded-full p-[2px] border border-border group-active:scale-95 transition-transform duration-200">
                 <img 
                   src={story.thumb} 
@@ -269,6 +275,20 @@ export default function UserProfile({ params }: { params: { id: string } }) {
           </div>
         )}
       </div>
+
+      {activeStoryIndex !== null && (
+        <StoryViewer 
+          stories={profile.stories.map(s => ({
+            id: s.id,
+            image: s.thumb,
+            userName: profile.name,
+            userAvatar: profile.avatar,
+            time: "2ч"
+          }))} 
+          initialIndex={activeStoryIndex} 
+          onClose={() => setActiveStoryIndex(null)} 
+        />
+      )}
     </div>
   );
 }
