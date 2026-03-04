@@ -3,6 +3,7 @@ import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, Me
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import StoryViewer from "@/components/StoryViewer";
+import CommentsModal from "@/components/CommentsModal";
 
 import avatarDesign from "@/assets/images/avatar-design.png";
 
@@ -12,7 +13,8 @@ export default function UserProfile({ params }: { params: { id: string } }) {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
-  
+  const [activeCommentPostId, setActiveCommentPostId] = useState<number | null>(null);
+
   const handleCopyLink = () => {
     // In a real app, this would be the actual URL
     navigator.clipboard.writeText(`https://app.com/profile/${params.id}`);
@@ -253,7 +255,10 @@ export default function UserProfile({ params }: { params: { id: string } }) {
                     {post.likes}
                   </button>
                   
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium">
+                  <button 
+                    onClick={() => setActiveCommentPostId(post.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
+                  >
                     <MessageSquare className="w-4 h-4" />
                     {post.comments}
                   </button>
@@ -291,6 +296,12 @@ export default function UserProfile({ params }: { params: { id: string } }) {
           onClose={() => setActiveStoryIndex(null)} 
         />
       )}
+
+      <CommentsModal 
+        isOpen={activeCommentPostId !== null} 
+        onClose={() => setActiveCommentPostId(null)} 
+        postId={activeCommentPostId} 
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 import StoryViewer from "@/components/StoryViewer";
+import CommentsModal from "@/components/CommentsModal";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -61,6 +62,7 @@ const POSTS = [
 export default function Posts() {
   const [, setLocation] = useLocation();
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
+  const [activeCommentPostId, setActiveCommentPostId] = useState<number | null>(null);
   
   const storiesForViewer = STORIES.map(s => ({
     id: s.id,
@@ -180,7 +182,10 @@ export default function Posts() {
                       {post.likes}
                     </button>
                     
-                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium">
+                    <button 
+                      onClick={() => setActiveCommentPostId(post.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
+                    >
                       <MessageSquare className="w-4 h-4" />
                       {post.comments}
                     </button>
@@ -208,6 +213,12 @@ export default function Posts() {
             onClose={() => setActiveStoryIndex(null)} 
           />
         )}
+
+        <CommentsModal 
+          isOpen={activeCommentPostId !== null} 
+          onClose={() => setActiveCommentPostId(null)} 
+          postId={activeCommentPostId} 
+        />
       </div>
     </div>
   );
