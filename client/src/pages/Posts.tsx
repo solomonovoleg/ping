@@ -78,13 +78,23 @@ export default function Posts() {
         
         {/* Header */}
         <div className="px-4 py-4 glass z-10 sticky top-0 flex justify-between items-center">
-          <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
-          <button 
-            onClick={() => setLocation("/create-post")}
-            className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-          >
-            <PenSquare className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setLocation("/create-post")}
+              className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            >
+              <PenSquare className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={() => setLocation("/profile/me")}
+              className="w-9 h-9 rounded-full overflow-hidden border-2 border-border/50 hover:border-primary transition-colors focus:outline-none"
+            >
+              <img src={avatarMain} alt="Мой профиль" className="w-full h-full object-cover" />
+            </button>
+          </div>
         </div>
 
         {/* Feed Content */}
