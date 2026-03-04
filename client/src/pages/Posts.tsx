@@ -1,5 +1,6 @@
 import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLocation } from "wouter";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -19,6 +20,7 @@ const STORIES = [
 const POSTS = [
   {
     id: 1,
+    creatorId: "design_ux",
     channelName: "Design & UX",
     channelAvatar: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=150&h=150&fit=crop",
     time: "2 часа назад",
@@ -30,6 +32,7 @@ const POSTS = [
   },
   {
     id: 2,
+    creatorId: "tech_news",
     channelName: "Tech News Daily",
     channelAvatar: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=150&h=150&fit=crop",
     time: "4 часа назад",
@@ -41,6 +44,7 @@ const POSTS = [
   },
   {
     id: 3,
+    creatorId: "nature",
     channelName: "Nature Photography",
     channelAvatar: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=150&h=150&fit=crop",
     time: "Вчера",
@@ -53,6 +57,8 @@ const POSTS = [
 ];
 
 export default function Posts() {
+  const [, setLocation] = useLocation();
+  
   return (
     <div className="flex h-full w-full justify-center bg-background">
       <div className="w-full h-full flex flex-col bg-background">
@@ -104,14 +110,17 @@ export default function Posts() {
                 
                 {/* Post Header */}
                 <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3 cursor-pointer">
+                  <div 
+                    className="flex items-center gap-3 cursor-pointer group"
+                    onClick={() => setLocation(`/profile/${post.creatorId}`)}
+                  >
                     <img 
                       src={post.channelAvatar} 
                       alt={post.channelName} 
-                      className="w-10 h-10 rounded-xl object-cover"
+                      className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity"
                     />
                     <div>
-                      <h3 className="font-semibold text-[15px]">{post.channelName}</h3>
+                      <h3 className="font-semibold text-[15px] group-hover:text-primary transition-colors">{post.channelName}</h3>
                       <p className="text-xs text-muted-foreground">{post.time}</p>
                     </div>
                   </div>
