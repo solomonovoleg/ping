@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Search, Edit, Check, CheckCheck, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, PenSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import avatarAi from "@/assets/images/avatar-ai.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
 import avatarDesign from "@/assets/images/avatar-design.png";
 import avatarProduct from "@/assets/images/avatar-product.png";
@@ -18,6 +19,18 @@ const FOLDERS = [
 ];
 
 const CHATS = [
+  {
+    id: 0,
+    name: "AI Assistant",
+    avatar: avatarAi,
+    lastMessage: "Привет! Чем могу помочь сегодня?",
+    time: "Сейчас",
+    unread: 0,
+    online: true,
+    folder: "all",
+    typing: false,
+    isAI: true,
+  },
   {
     id: 1,
     name: "Алиса Смирнова",
@@ -323,29 +336,37 @@ export default function Chats() {
               filteredChats.map((chat) => (
                 <div 
                   key={`chat-${chat.id}`}
-                  className="flex items-center gap-3 p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer active:scale-[0.98]"
+                  className={cn(
+                    "flex items-center gap-3 p-3 rounded-2xl transition-colors cursor-pointer active:scale-[0.98]",
+                    chat.isAI ? "bg-primary/5 hover:bg-primary/10 border border-primary/20 shadow-sm" : "hover:bg-secondary/50"
+                  )}
                 >
                   <div className="relative flex-shrink-0">
                     <img 
                       src={chat.avatar} 
                       alt={chat.name} 
-                      className="w-14 h-14 rounded-full object-cover"
+                      className={cn(
+                        "w-14 h-14 object-cover",
+                        chat.isAI ? "rounded-2xl shadow-inner" : "rounded-full"
+                      )}
                     />
-                    {chat.online && (
+                    {chat.online && !chat.isAI && (
                       <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full"></div>
                     )}
                   </div>
                   
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline mb-0.5">
-                      <h3 className="font-semibold text-[16px] truncate pr-2">{chat.name}</h3>
-                      <span className="text-xs text-muted-foreground flex-shrink-0">{chat.time}</span>
+                      <h3 className={cn("font-semibold text-[16px] truncate pr-2", chat.isAI && "text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500")}>
+                        {chat.name}
+                      </h3>
+                      <span className={cn("text-xs flex-shrink-0", chat.isAI ? "text-primary/70 font-medium" : "text-muted-foreground")}>{chat.time}</span>
                     </div>
                     
                     <div className="flex justify-between items-center gap-2">
                       <p className={cn(
                         "text-[14px] truncate",
-                        chat.typing ? "text-primary" : "text-muted-foreground"
+                        chat.typing ? "text-primary" : chat.isAI ? "text-foreground/80 font-medium" : "text-muted-foreground"
                       )}>
                         {chat.typing ? "Печатает..." : chat.lastMessage}
                       </p>
@@ -356,9 +377,9 @@ export default function Chats() {
                         </div>
                       ) : chat.read ? (
                         <CheckCheck className="w-4 h-4 text-primary flex-shrink-0" />
-                      ) : (
+                      ) : !chat.isAI ? (
                         <Check className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </div>
