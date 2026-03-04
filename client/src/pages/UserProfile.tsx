@@ -15,6 +15,10 @@ export default function UserProfile({ params }: { params: { id: string } }) {
   const [copied, setCopied] = useState(false);
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
   const [activeCommentPostId, setActiveCommentPostId] = useState<number | null>(null);
+  const [userReactions, setUserReactions] = useState<Record<number, string>>({});
+  const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
+  
+  const EMOJIS = ['👍', '❤️', '🔥', '👏', '😂', '🤔'];
 
   const isMe = params.id === "me";
 
@@ -332,29 +336,103 @@ export default function UserProfile({ params }: { params: { id: string } }) {
               </div>
 
               <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center gap-2">
-                  {/* Reactions Pill instead of Like button */}
-                  <div className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors cursor-pointer border border-border/30">
-                    {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => (
-                      <div key={i} className="flex items-center gap-1">
-                        <span className="text-base leading-none">{reaction.emoji}</span>
-                        {i === post.reactions.length - 1 && (
-                          <span className="text-sm font-medium ml-1">
-                            {post.reactions.reduce((sum: number, r: {count: number}) => sum + r.count, 0)}
-                          </span>
-                        )}
+                  <div className="flex items-center gap-2 relative">
+                    {/* Reactions Pill */}
+                    <div 
+                      className={cn(
+                        "flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary transition-colors cursor-pointer border active:scale-95 select-none",
+                        userReactions[post.id]
+                          ? "bg-primary/10 border-primary/30 text-foreground" 
+                          : "text-secondary-foreground hover:bg-secondary/80 border-border/30"
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (userReactions[post.id]) {
+                          // Remove reaction if already reacted
+                          const newReactions = {...userReactions};
+                          delete newReactions[post.id];
+                          setUserReactions(newReactions);
+                        } else {
+                          // Show picker if no reaction yet
+                          setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                        }
+                      }}
+                    >
+                      {/* Show existing reactions */}
+                      {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => {
+                        // If this is the emoji the user reacted with, don't show it here (it will be shown as the user's reaction)
+                        if (userReactions[post.id] === reaction.emoji) return null;
+                        
+                        return (
+                          <div key={i} className="flex items-center gap-1 pointer-events-none">
+                            <span className="text-base leading-none">{reaction.emoji}</span>
+                          </div>
+                        );
+                      })}
+                      
+                      {/* Show user's reaction if they have one */}
+                      {userReactions[post.id] && (
+                        <div className="flex items-center gap-1 pointer-events-none">
+                          <span className="text-base leading-none">{userReactions[post.id]}</span>
+                        </div>
+                      )}
+                      
+                      {/* Total count */}
+                      <span className="text-sm font-medium ml-1 pointer-events-none">
+                        {post.reactions.reduce((sum: number, r: {count: number, emoji: string}) => {
+                          // Don't double count if user reacted with an existing emoji
+                          if (userReactions[post.id] === r.emoji) return sum + r.count;
+                          return sum + r.count;
+                        }, 0) + (userReactions[post.id] && !post.reactions.find(r => r.emoji === userReactions[post.id]) ? 1 : 0)}
+                      </span>
+                    </div>
+                    
+                    {/* Add Reaction Button */}
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                      }}
+                      className={cn(
+                        "flex items-center justify-center w-8 h-8 rounded-full bg-secondary transition-colors border",
+                        showReactionPicker === post.id 
+                          ? "text-primary border-primary/50 bg-primary/10" 
+                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
+                      )}
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    
+                    {/* Reaction Picker Popup */}
+                    {showReactionPicker === post.id && (
+                      <div className="absolute bottom-full left-0 mb-2 bg-background/95 backdrop-blur-xl border border-border shadow-lg rounded-full px-3 py-2 flex items-center gap-2 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
+                        {EMOJIS.map(emoji => (
+                          <button
+                            key={emoji}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUserReactions(prev => ({
+                                ...prev,
+                                [post.id]: emoji
+                              }));
+                              setShowReactionPicker(null);
+                            }}
+                            className="text-2xl hover:scale-125 transition-transform active:scale-95"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    
+                    <button 
+                      onClick={() => setActiveCommentPostId(post.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium border border-border/30 ml-auto"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      {post.comments}
+                    </button>
                   </div>
-                  
-                  <button 
-                    onClick={() => setActiveCommentPostId(post.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium"
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                    {post.comments}
-                  </button>
-                </div>
 
                 <div className="flex items-center gap-1">
                   <button className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
