@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import AppLayout from "@/components/layout/AppLayout";
 import Chats from "@/pages/Chats";
+import ChatDetail from "@/pages/ChatDetail";
 import Posts from "@/pages/Posts";
 import Board from "@/pages/Board";
 import Settings from "@/pages/Settings";
@@ -16,6 +17,7 @@ function Router() {
     <AppLayout>
       <Switch>
         <Route path="/" component={Chats} />
+        <Route path="/chat/:id" component={ChatDetail} />
         <Route path="/posts" component={Posts} />
         <Route path="/board" component={Board} />
         <Route path="/settings" component={Settings} />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Search, Edit, Check, CheckCheck, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, PenSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -116,6 +117,7 @@ const CONTACTS = [
 ];
 
 export default function Chats() {
+  const [, setLocation] = useLocation();
   const [activeFolder, setActiveFolder] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [showContactsPage, setShowContactsPage] = useState(false);
@@ -338,6 +340,7 @@ export default function Chats() {
               filteredChats.map((chat) => (
                 <div 
                   key={`chat-${chat.id}`}
+                  onClick={() => setLocation(`/chat/${chat.id}`)}
                   className={cn(
                     "flex items-center gap-3 p-3 rounded-2xl transition-colors cursor-pointer active:scale-[0.98]",
                     chat.isAI ? "bg-primary/5 hover:bg-primary/10 border border-primary/20 shadow-sm" : "hover:bg-secondary/50"
