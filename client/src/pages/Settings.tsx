@@ -1,13 +1,16 @@
+import { useState, useEffect } from "react";
 import { 
   Bell, 
-  Moon, 
   Lock, 
   Database, 
   Palette, 
   HelpCircle, 
   LogOut,
   ChevronRight,
-  Camera
+  Camera,
+  Sun,
+  Moon,
+  Sparkles
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -23,13 +26,6 @@ const SETTINGS_GROUPS = [
     ]
   },
   {
-    title: "Внешний вид",
-    items: [
-      { icon: Palette, label: "Оформление", color: "bg-purple-500" },
-      { icon: Moon, label: "Ночной режим", color: "bg-indigo-500", action: "toggle" },
-    ]
-  },
-  {
     title: "Прочее",
     items: [
       { icon: HelpCircle, label: "Помощь", color: "bg-teal-500" },
@@ -38,6 +34,29 @@ const SETTINGS_GROUPS = [
 ];
 
 export default function Settings() {
+  const [theme, setTheme] = useState("light");
+
+  // Sync state with actual DOM class on mount
+  useEffect(() => {
+    const isDark = document.documentElement.classList.contains("dark");
+    const isFitfin = document.documentElement.classList.contains("theme-fitfin");
+    
+    if (isFitfin) setTheme("fitfin");
+    else if (isDark) setTheme("dark");
+    else setTheme("light");
+  }, []);
+
+  const changeTheme = (newTheme: string) => {
+    setTheme(newTheme);
+    document.documentElement.classList.remove("dark", "theme-fitfin");
+    
+    if (newTheme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else if (newTheme === "fitfin") {
+      document.documentElement.classList.add("theme-fitfin");
+    }
+  };
+
   return (
     <div className="flex h-full w-full justify-center bg-secondary/30">
       <div className="w-full h-full flex flex-col bg-background overflow-y-auto pb-24 sm:pb-28">
@@ -69,8 +88,56 @@ export default function Settings() {
           </p>
         </div>
 
-        {/* Settings Groups */}
         <div className="p-4 flex flex-col gap-6 bg-secondary/20 flex-1">
+          
+          {/* Theme Selector */}
+          <div className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider ml-4">
+              Оформление
+            </h3>
+            <div className="grid grid-cols-3 gap-3">
+              <button 
+                onClick={() => changeTheme('light')}
+                className={cn(
+                  "flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all duration-300",
+                  theme === 'light' ? "border-primary bg-primary/5" : "border-transparent bg-card shadow-sm hover:scale-95"
+                )}
+              >
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-500 mb-1">
+                  <Sun className="w-5 h-5" />
+                </div>
+                <span className={cn("text-[13px] font-medium", theme === 'light' ? "text-primary" : "text-foreground")}>Светлая</span>
+              </button>
+              
+              <button 
+                onClick={() => changeTheme('dark')}
+                className={cn(
+                  "flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all duration-300",
+                  theme === 'dark' ? "border-primary bg-primary/5" : "border-transparent bg-card shadow-sm hover:scale-95"
+                )}
+              >
+                <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-300 mb-1">
+                  <Moon className="w-5 h-5" />
+                </div>
+                <span className={cn("text-[13px] font-medium", theme === 'dark' ? "text-primary" : "text-foreground")}>Тёмная</span>
+              </button>
+
+              <button 
+                onClick={() => changeTheme('fitfin')}
+                className={cn(
+                  "flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all duration-300 relative overflow-hidden",
+                  theme === 'fitfin' ? "border-[#FF6B35] bg-[#FF6B35]/5" : "border-transparent bg-card shadow-sm hover:scale-95"
+                )}
+              >
+                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#FF6B35] to-[#FF9F1C] flex items-center justify-center text-white mb-1 shadow-sm">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <span className={cn("text-[13px] font-medium", theme === 'fitfin' ? "text-[#FF6B35]" : "text-foreground")}>Фитфин</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Settings Groups */}
           {SETTINGS_GROUPS.map((group, i) => (
             <div key={i}>
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
