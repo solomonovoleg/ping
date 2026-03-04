@@ -1,7 +1,21 @@
-import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark } from "lucide-react";
+import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import avatarMain from "@/assets/images/avatar-main.png";
+import avatarAlisa from "@/assets/images/avatar-alisa.png";
+import avatarDesign from "@/assets/images/avatar-design.png";
+import avatarMom from "@/assets/images/avatar-mom.png";
+import avatarNews from "@/assets/images/avatar-news.png";
+
 // Mock Data
+const STORIES = [
+  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false },
+  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true },
+  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true },
+  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true },
+  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false },
+];
+
 const POSTS = [
   {
     id: 1,
@@ -48,8 +62,42 @@ export default function Posts() {
           <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
         </div>
 
-        {/* Feed */}
+        {/* Feed Content */}
         <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
+          
+          {/* Stories Section */}
+          <div className="py-4 border-b border-border/50 bg-background/50">
+            <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4">
+              {STORIES.map((story) => (
+                <div key={story.id} className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group">
+                  <div className="relative">
+                    <div className={cn(
+                      "w-16 h-16 rounded-full p-[2px] transition-transform duration-200 group-active:scale-95",
+                      story.hasUnseen 
+                        ? "bg-gradient-to-tr from-primary to-purple-500" 
+                        : "bg-border"
+                    )}>
+                      <img 
+                        src={story.avatar} 
+                        alt={story.name} 
+                        className="w-full h-full rounded-full object-cover border-2 border-background"
+                      />
+                    </div>
+                    {story.isMe && (
+                      <div className="absolute bottom-0 right-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center border-2 border-background">
+                        <Plus className="w-3.5 h-3.5" />
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-medium text-foreground/80 max-w-[64px] truncate text-center">
+                    {story.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Posts List */}
           <div className="flex flex-col">
             {POSTS.map((post) => (
               <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors">
