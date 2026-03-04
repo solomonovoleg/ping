@@ -199,7 +199,10 @@ export default function UserProfile({ params }: { params: { id: string } }) {
         </div>
 
         <div className="flex items-center gap-6">
-          <div className="flex flex-col">
+          <div 
+            className="flex flex-col cursor-pointer hover:opacity-80 transition-opacity active:scale-95"
+            onClick={() => setLocation("/subscribers")}
+          >
             <span className="font-bold text-lg">{profile.subscribers}</span>
             <span className="text-xs text-muted-foreground">Подписчиков</span>
           </div>

@@ -13,6 +13,7 @@ import CreatePost from "@/pages/CreatePost";
 import Board from "@/pages/Board";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
+import Subscribers from "@/pages/Subscribers";
 
 function Router() {
   return (
@@ -23,6 +24,7 @@ function Router() {
         <Route path="/posts" component={Posts} />
         <Route path="/create-post" component={CreatePost} />
         <Route path="/profile/:id" component={UserProfile} />
+        <Route path="/subscribers" component={Subscribers} />
         <Route path="/board" component={Board} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
