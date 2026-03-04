@@ -1,4 +1,4 @@
-import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus } from "lucide-react";
+import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 
@@ -64,8 +64,14 @@ export default function Posts() {
       <div className="w-full h-full flex flex-col bg-background">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0">
+        <div className="px-4 py-4 glass z-10 sticky top-0 flex justify-between items-center">
           <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
+          <button 
+            onClick={() => setLocation("/create-post")}
+            className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+          >
+            <PenSquare className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Feed Content */}

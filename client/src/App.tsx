@@ -9,6 +9,7 @@ import Chats from "@/pages/Chats";
 import ChatDetail from "@/pages/ChatDetail";
 import Posts from "@/pages/Posts";
 import UserProfile from "@/pages/UserProfile";
+import CreatePost from "@/pages/CreatePost";
 import Board from "@/pages/Board";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
@@ -20,6 +21,7 @@ function Router() {
         <Route path="/" component={Chats} />
         <Route path="/chat/:id" component={ChatDetail} />
         <Route path="/posts" component={Posts} />
+        <Route path="/create-post" component={CreatePost} />
         <Route path="/profile/:id" component={UserProfile} />
         <Route path="/board" component={Board} />
         <Route path="/settings" component={Settings} />

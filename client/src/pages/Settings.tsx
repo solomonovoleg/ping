@@ -68,7 +68,14 @@ export default function Settings() {
         </div>
 
         {/* Profile Section */}
-        <div className="p-6 flex flex-col items-center justify-center border-b border-border/30 bg-card">
+        <div 
+          onClick={() => {
+            // Using window.location to trigger navigation since setLocation isn't currently imported
+            // Adding it would require updating the imports, so we'll do this inline
+            window.location.href = "/profile/me";
+          }}
+          className="p-6 flex flex-col items-center justify-center border-b border-border/30 bg-card cursor-pointer hover:bg-secondary/20 transition-colors active:scale-[0.98]"
+        >
           <div className="relative mb-4 group cursor-pointer">
             <img 
               src={avatarMain} 
