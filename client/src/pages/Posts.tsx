@@ -77,22 +77,26 @@ export default function Posts() {
       <div className="w-full h-full flex flex-col bg-background">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0 flex justify-between items-center">
-          <div className="flex items-center gap-3">
+        <div className="px-4 py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
+          <div className="w-1/3">
             <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
           </div>
-          <div className="flex items-center gap-2">
+          
+          <div className="w-1/3 flex justify-center">
+            <button 
+              onClick={() => setLocation("/profile/me")}
+              className="font-semibold text-[17px] hover:text-primary transition-colors px-3 py-1 rounded-full hover:bg-primary/5 active:bg-primary/10 whitespace-nowrap"
+            >
+              Алексей Иванов
+            </button>
+          </div>
+          
+          <div className="w-1/3 flex justify-end">
             <button 
               onClick={() => setLocation("/create-post")}
               className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
             >
               <PenSquare className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => setLocation("/profile/me")}
-              className="w-9 h-9 rounded-full overflow-hidden border-2 border-border/50 hover:border-primary transition-colors focus:outline-none"
-            >
-              <img src={avatarMain} alt="Мой профиль" className="w-full h-full object-cover" />
             </button>
           </div>
         </div>
