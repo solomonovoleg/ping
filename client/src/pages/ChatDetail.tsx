@@ -23,12 +23,15 @@ const CHAT_DETAILS = {
   "6": { name: "Иван Разработчик", avatar: avatarIvan, online: false, status: "был(а) недавно" },
 };
 
+const EMOJIS = ["😀", "😂", "🥰", "😎", "🤔", "🙌", "👍", "🔥", "❤️", "✨", "🎉", "💯", "😭", "🥺", "💀", "🫡", "👀", "🙏", "💪", "💡", "✅", "❌", "👏", "👋"];
+
 export default function ChatDetail({ params }: { params: { id: string } }) {
   const [, setLocation] = useLocation();
   const chatId = params.id;
   const chatInfo = CHAT_DETAILS[chatId as keyof typeof CHAT_DETAILS] || CHAT_DETAILS["1"];
   
   const [message, setMessage] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Mock messages based on chat type
@@ -288,8 +291,37 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Emoji Picker */}
+      {showEmojiPicker && (
+        <div className="absolute bottom-[80px] right-4 bg-background/95 backdrop-blur-xl border border-border/50 shadow-lg rounded-2xl p-3 z-[110] w-[300px] animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex justify-between items-center mb-2 px-1">
+            <span className="text-sm font-medium text-muted-foreground">Эмодзи</span>
+            <button 
+              onClick={() => setShowEmojiPicker(false)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div className="grid grid-cols-6 gap-2">
+            {EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => {
+                  setMessage(prev => prev + emoji);
+                  setShowEmojiPicker(false);
+                }}
+                className="text-2xl hover:bg-secondary rounded-lg p-1 transition-colors flex items-center justify-center"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input Area */}
-      <div className="glass px-3 py-3 border-t border-border/50 pb-safe">
+      <div className="glass px-3 py-3 border-t border-border/50 pb-safe relative z-[105]">
         <div className="flex items-end gap-2">
           <button className="p-2 flex-shrink-0 text-muted-foreground hover:text-primary transition-colors">
             <Paperclip className="w-6 h-6" />
@@ -304,7 +336,13 @@ export default function ChatDetail({ params }: { params: { id: string } }) {
               className="w-full bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[40px] py-2.5 px-3 text-[15px] outline-none"
               rows={1}
             />
-            <button className="p-2.5 flex-shrink-0 text-muted-foreground hover:text-primary transition-colors">
+            <button 
+              className={cn(
+                "p-2.5 flex-shrink-0 transition-colors",
+                showEmojiPicker ? "text-primary" : "text-muted-foreground hover:text-primary"
+              )}
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            >
               <Smile className="w-5 h-5" />
             </button>
           </div>
