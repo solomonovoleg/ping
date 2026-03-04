@@ -21,7 +21,7 @@ const FOLDERS = [
 const CHATS = [
   {
     id: 0,
-    name: "AI Assistant",
+    name: "AI CHAT",
     avatar: avatarAi,
     lastMessage: "Привет! Чем могу помочь сегодня?",
     time: "Сейчас",
