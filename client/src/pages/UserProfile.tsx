@@ -61,7 +61,7 @@ export default function UserProfile({ params }: { params: { id: string } }) {
     <div className="flex flex-col h-full bg-background absolute inset-0 z-[100] animate-in slide-in-from-right-full duration-300 overflow-y-auto hide-scrollbar pb-24 sm:pb-28">
       
       {/* Header - Transparent over cover */}
-      <div className="fixed top-0 left-0 right-0 px-2 py-3 flex items-center justify-between pt-safe z-50 transition-all duration-300 bg-gradient-to-b from-black/50 to-transparent sm:absolute">
+      <div className="absolute top-0 left-0 right-0 px-2 py-3 flex items-center justify-between pt-safe z-50 transition-all duration-300 bg-gradient-to-b from-black/50 to-transparent">
         <button 
           onClick={() => setLocation("/posts")}
           className="p-2 ml-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors flex items-center"

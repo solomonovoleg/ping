@@ -19,18 +19,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
   ];
 
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden">
-      {/* Main Container - Full width and height, responsive constraints handled inside components if needed */}
-      <div className="relative w-full h-full flex flex-col bg-background">
+    <div className="flex h-[100dvh] w-full bg-background overflow-hidden items-center justify-center">
+      {/* 
+        This wrapper creates a mobile-only layout even on desktop.
+        It forces the app to look and behave like a mobile phone regardless of screen size.
+      */}
+      <div className="relative w-full h-full max-w-[480px] flex flex-col bg-background shadow-2xl overflow-hidden border-x border-border/10">
         
         {/* Main Content Area */}
-        <main className="flex-1 relative flex flex-col h-full overflow-hidden w-full">
+        <main className="flex-1 relative flex flex-col h-full overflow-y-auto overflow-x-hidden w-full bg-background">
           {children}
         </main>
 
         {/* Mobile Bottom Nav */}
-        <nav className="absolute bottom-0 left-0 right-0 glass pb-safe z-50 border-t border-border/50">
-          <div className="flex justify-around items-center h-16 px-2 sm:pb-2 sm:h-20 max-w-md mx-auto">
+        <nav className="sticky bottom-0 left-0 right-0 glass pb-safe z-50 border-t border-border/50 bg-background/80 backdrop-blur-lg">
+          <div className="flex justify-around items-center h-16 px-2 sm:pb-2 sm:h-20 w-full">
             {navItems.map((item) => {
               const isActive = location === item.path;
               const Icon = item.icon;
