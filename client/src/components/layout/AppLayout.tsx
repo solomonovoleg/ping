@@ -51,7 +51,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         src={item.customIcon} 
                         alt={item.label}
                         className={cn(
-                          "w-6 h-6 object-contain transition-all duration-200 relative z-10",
+                          "w-9 h-9 scale-[1.3] object-contain transition-all duration-200 relative z-10",
                           !isActive && "opacity-60 grayscale"
                         )}
                       />
