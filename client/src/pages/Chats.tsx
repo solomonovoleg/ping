@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Search, Edit, Check, CheckCheck, MessageCircle, Phone, Video, X, UserPlus, Newspaper } from "lucide-react";
+import { useState } from "react";
+import { Search, Edit, Check, CheckCheck, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, PenSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -103,11 +103,9 @@ const CONTACTS = [
 export default function Chats() {
   const [activeFolder, setActiveFolder] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [showContactsPage, setShowContactsPage] = useState(false);
+  const [contactsSearchQuery, setContactsSearchQuery] = useState("");
 
-  // Search logic
-  const isSearching = isSearchFocused || searchQuery.length > 0;
   const searchLower = searchQuery.toLowerCase();
   
   const filteredChats = CHATS.filter(chat => {
@@ -119,41 +117,153 @@ export default function Chats() {
           chat.folder === activeFolder;
   });
 
+  const contactsSearchLower = contactsSearchQuery.toLowerCase();
   const filteredContacts = CONTACTS.filter(contact => 
-    contact.name.toLowerCase().includes(searchLower)
+    contact.name.toLowerCase().includes(contactsSearchLower)
   );
 
+  const groupedContacts = filteredContacts.reduce((acc, contact) => {
+    if (!acc[contact.letter]) {
+      acc[contact.letter] = [];
+    }
+    acc[contact.letter].push(contact);
+    return acc;
+  }, {} as Record<string, typeof CONTACTS>);
+
+  // Экран контактов
+  if (showContactsPage) {
+    return (
+      <div className="flex h-full w-full bg-background animate-in slide-in-from-right-4 duration-300">
+        <div className="w-full flex flex-col h-full relative">
+          {/* Contacts Header */}
+          <div className="px-4 pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setShowContactsPage(false);
+                    setContactsSearchQuery("");
+                  }}
+                  className="p-2 -ml-2 rounded-full text-primary hover:bg-primary/10 transition-colors"
+                >
+                  <ChevronLeft className="w-6 h-6" />
+                </button>
+                <h1 className="text-2xl font-bold tracking-tight">Контакты</h1>
+              </div>
+              <button className="text-primary font-medium px-2">Изм.</button>
+            </div>
+
+            <div className="relative mb-2">
+              <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input 
+                type="text" 
+                placeholder="Поиск контактов..." 
+                value={contactsSearchQuery}
+                onChange={(e) => setContactsSearchQuery(e.target.value)}
+                className="w-full bg-secondary/50 border-none rounded-xl py-2.5 pl-10 pr-10 text-[15px] focus:ring-2 focus:ring-primary/30 transition-all placeholder:text-muted-foreground/70 outline-none"
+              />
+              {contactsSearchQuery && (
+                <button 
+                  onClick={() => setContactsSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-muted-foreground hover:bg-muted-foreground/30 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Contacts List */}
+          <div className="flex-1 overflow-y-auto pb-24 sm:pb-28 px-2">
+            {!contactsSearchQuery && (
+              <div className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                Добавить контакт
+              </div>
+            )}
+
+            {Object.keys(groupedContacts).length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                <p>Ничего не найдено</p>
+              </div>
+            ) : (
+              Object.keys(groupedContacts).sort().map(letter => (
+                <div key={letter} className="mb-2">
+                  {!contactsSearchQuery && (
+                    <div className="px-4 py-1 text-sm font-bold text-muted-foreground bg-background sticky top-[120px] z-10">
+                      {letter}
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-0.5">
+                    {groupedContacts[letter].map(contact => (
+                      <div 
+                        key={`contact-${contact.id}`}
+                        className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors group active:scale-[0.98]"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <img 
+                              src={contact.avatar} 
+                              alt={contact.name} 
+                              className="w-12 h-12 rounded-full object-cover"
+                            />
+                            {contact.status === "в сети" && (
+                              <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-background rounded-full"></div>
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-[16px]">{contact.name}</h3>
+                            <p className={`text-sm ${contact.status === 'в сети' ? 'text-primary' : 'text-muted-foreground'}`}>
+                              {contact.status}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity pr-1">
+                          <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
+                            <Phone className="w-4 h-4" />
+                          </button>
+                          <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
+                            <Video className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Экран чатов
   return (
-    <div className="flex h-full w-full">
+    <div className="flex h-full w-full animate-in fade-in duration-300">
       <div className="w-full flex flex-col h-full bg-background relative">
         
-        {/* Header (Hidden when searching to save space) */}
-        <div className={cn(
-          "px-4 pt-6 pb-2 glass z-20 sticky top-0 transition-all duration-300",
-          isSearching ? "pt-4 pb-4 bg-background/95 border-b-transparent shadow-none" : "border-b border-border/50"
-        )}>
+        {/* Header */}
+        <div className="px-4 pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
           
-          <div className={cn(
-            "flex justify-between items-center overflow-hidden transition-all duration-300",
-            isSearching ? "h-0 mb-0 opacity-0" : "h-8 mb-4 opacity-100"
-          )}>
+          <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-bold tracking-tight">Чаты</h1>
             <button className="p-2 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors">
               <Edit className="w-5 h-5" />
             </button>
           </div>
 
-          {/* Search Bar */}
-          <div className="flex items-center gap-2">
+          {/* Search Bar with Contact Icon inside/next to it */}
+          <div className="flex items-center gap-2 mb-4">
             <div className="relative flex-1 group">
               <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
               <input 
-                ref={inputRef}
                 type="text" 
-                placeholder="Поиск или новый чат..." 
+                placeholder="Поиск по чатам..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                onFocus={() => setIsSearchFocused(true)}
                 className="w-full bg-secondary/50 border-none rounded-xl py-2.5 pl-10 pr-10 text-[15px] focus:ring-2 focus:ring-primary/30 transition-all placeholder:text-muted-foreground/70 outline-none"
               />
               {searchQuery && (
@@ -166,23 +276,18 @@ export default function Chats() {
               )}
             </div>
             
-            {isSearching && (
-              <button 
-                onClick={() => {
-                  setIsSearchFocused(false);
-                  setSearchQuery("");
-                  inputRef.current?.blur();
-                }}
-                className="text-[15px] font-medium text-primary px-2 animate-in fade-in slide-in-from-right-4"
-              >
-                Отмена
-              </button>
-            )}
+            <button 
+              onClick={() => setShowContactsPage(true)}
+              className="p-2.5 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 transition-colors flex-shrink-0"
+              title="Контакты"
+            >
+              <UserPlus className="w-5 h-5" />
+            </button>
           </div>
 
           {/* Folders (Scrollable) */}
-          {!isSearching && (
-            <div className="flex overflow-x-auto hide-scrollbar pt-4 -mx-4 px-4 gap-2 animate-in fade-in slide-in-from-top-2">
+          {!searchQuery && (
+            <div className="flex overflow-x-auto hide-scrollbar pt-1 -mx-4 px-4 gap-2">
               {FOLDERS.map(folder => (
                 <button
                   key={folder.id}
@@ -208,184 +313,58 @@ export default function Chats() {
 
         {/* List Content */}
         <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
-          
-          {/* SEARCH OVERLAY */}
-          {isSearching ? (
-            <div className="animate-in fade-in duration-200 px-2">
-              
-              {/* Quick Contacts (When not typing) */}
-              {searchQuery.length === 0 && (
-                <div className="mb-4 pt-2">
-                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 ml-2">
-                    Недавние контакты
-                  </h3>
-                  <div className="flex overflow-x-auto hide-scrollbar -mx-2 px-2 pb-2 gap-4">
-                    <div className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer">
-                      <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center text-primary transition-transform active:scale-95">
-                        <UserPlus className="w-6 h-6" />
-                      </div>
-                      <span className="text-[11px] font-medium text-primary">Новый</span>
-                    </div>
-                    {CONTACTS.slice(0, 6).map(contact => (
-                      <div key={`quick-${contact.id}`} className="flex flex-col items-center gap-1.5 flex-shrink-0 cursor-pointer transition-transform active:scale-95 group">
-                        <div className="relative">
-                          <img 
-                            src={contact.avatar} 
-                            alt={contact.name} 
-                            className="w-14 h-14 rounded-full object-cover border border-border/50 group-hover:border-primary/50 transition-colors"
-                          />
-                          {contact.status === "в сети" && (
-                            <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full"></div>
-                          )}
-                        </div>
-                        <span className="text-[11px] font-medium w-16 text-center truncate">{contact.name.split(' ')[0]}</span>
-                      </div>
-                    ))}
+          <div className="px-2 py-2">
+            {filteredChats.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-40 text-muted-foreground p-8 text-center">
+                <MessageCircle className="w-12 h-12 mb-4 opacity-20" />
+                <p>Нет чатов, соответствующих фильтру</p>
+              </div>
+            ) : (
+              filteredChats.map((chat) => (
+                <div 
+                  key={`chat-${chat.id}`}
+                  className="flex items-center gap-3 p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer active:scale-[0.98]"
+                >
+                  <div className="relative flex-shrink-0">
+                    <img 
+                      src={chat.avatar} 
+                      alt={chat.name} 
+                      className="w-14 h-14 rounded-full object-cover"
+                    />
+                    {chat.online && (
+                      <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full"></div>
+                    )}
                   </div>
-                </div>
-              )}
-
-              {/* Chat Results */}
-              {filteredChats.length > 0 && (
-                <div className="mb-4">
-                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-2">
-                    {searchQuery.length > 0 ? "Найденные чаты" : "Недавние чаты"}
-                  </h3>
-                  <div className="flex flex-col">
-                    {filteredChats.map((chat) => (
-                      <div 
-                        key={`search-chat-${chat.id}`}
-                        className="flex items-center gap-3 p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer active:scale-[0.98]"
-                      >
-                        <div className="relative flex-shrink-0">
-                          <img 
-                            src={chat.avatar} 
-                            alt={chat.name} 
-                            className="w-12 h-12 rounded-full object-cover"
-                          />
-                        </div>
-                        
-                        <div className="flex-1 min-w-0">
-                          <div className="flex justify-between items-baseline mb-0.5">
-                            <h3 className="font-semibold text-[15px] truncate pr-2">{chat.name}</h3>
-                          </div>
-                          <p className="text-[13px] text-muted-foreground truncate">
-                            {chat.lastMessage}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Contact Results */}
-              {filteredContacts.length > 0 && (
-                <div className="mb-4">
-                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-2">
-                    {searchQuery.length > 0 ? "Найденные контакты" : "Все контакты"}
-                  </h3>
-                  <div className="flex flex-col">
-                    {filteredContacts.map((contact) => (
-                      <div 
-                        key={`search-contact-${contact.id}`}
-                        className="flex items-center justify-between p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer active:scale-[0.98]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="relative flex-shrink-0">
-                            <img 
-                              src={contact.avatar} 
-                              alt={contact.name} 
-                              className="w-12 h-12 rounded-full object-cover"
-                            />
-                            {contact.status === "в сети" && (
-                              <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-background rounded-full"></div>
-                            )}
-                          </div>
-                          <div>
-                            <h3 className="font-semibold text-[15px]">{contact.name}</h3>
-                            <p className="text-[13px] text-muted-foreground">
-                              {contact.status}
-                            </p>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-2 pr-1">
-                          <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
-                            <Phone className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* No Results */}
-              {filteredChats.length === 0 && filteredContacts.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
-                  <Search className="w-10 h-10 mb-3 opacity-20" />
-                  <p>Ничего не найдено</p>
-                </div>
-              )}
-
-            </div>
-          ) : (
-            /* REGULAR CHATS LIST */
-            <div className="px-2 py-2">
-              {filteredChats.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground p-8 text-center">
-                  <MessageCircle className="w-12 h-12 mb-4 opacity-20" />
-                  <p>Нет чатов, соответствующих фильтру</p>
-                </div>
-              ) : (
-                filteredChats.map((chat) => (
-                  <div 
-                    key={`chat-${chat.id}`}
-                    className="flex items-center gap-3 p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer active:scale-[0.98]"
-                  >
-                    <div className="relative flex-shrink-0">
-                      <img 
-                        src={chat.avatar} 
-                        alt={chat.name} 
-                        className="w-14 h-14 rounded-full object-cover"
-                      />
-                      {chat.online && (
-                        <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full"></div>
-                      )}
+                  
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline mb-0.5">
+                      <h3 className="font-semibold text-[16px] truncate pr-2">{chat.name}</h3>
+                      <span className="text-xs text-muted-foreground flex-shrink-0">{chat.time}</span>
                     </div>
                     
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-baseline mb-0.5">
-                        <h3 className="font-semibold text-[16px] truncate pr-2">{chat.name}</h3>
-                        <span className="text-xs text-muted-foreground flex-shrink-0">{chat.time}</span>
-                      </div>
+                    <div className="flex justify-between items-center gap-2">
+                      <p className={cn(
+                        "text-[14px] truncate",
+                        chat.typing ? "text-primary" : "text-muted-foreground"
+                      )}>
+                        {chat.typing ? "Печатает..." : chat.lastMessage}
+                      </p>
                       
-                      <div className="flex justify-between items-center gap-2">
-                        <p className={cn(
-                          "text-[14px] truncate",
-                          chat.typing ? "text-primary" : "text-muted-foreground"
-                        )}>
-                          {chat.typing ? "Печатает..." : chat.lastMessage}
-                        </p>
-                        
-                        {chat.unread > 0 ? (
-                          <div className="flex-shrink-0 min-w-[20px] h-[20px] px-1.5 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-[11px] font-bold">
-                            {chat.unread}
-                          </div>
-                        ) : chat.read ? (
-                          <CheckCheck className="w-4 h-4 text-primary flex-shrink-0" />
-                        ) : (
-                          <Check className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        )}
-                      </div>
+                      {chat.unread > 0 ? (
+                        <div className="flex-shrink-0 min-w-[20px] h-[20px] px-1.5 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-[11px] font-bold">
+                          {chat.unread}
+                        </div>
+                      ) : chat.read ? (
+                        <CheckCheck className="w-4 h-4 text-primary flex-shrink-0" />
+                      ) : (
+                        <Check className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                      )}
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-          )}
-
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>
