@@ -1,0 +1,26 @@
+---
+description: Страница чата и хуки чата — контракт, чтобы чат не ломался
+globs: client/src/pages/ChatDetail.tsx,client/src/features/chat/**/*.ts,client/src/features/chat/**/*.tsx
+alwaysApply: false
+---
+
+# Чат (ChatDetail и хуки)
+
+При изменении страницы чата или хуков чата **обязательно** соблюдать контракт из `docs/CHAT_DETAIL_RULES.md`.
+
+## Кратко
+
+1. **Три хука в ChatDetail** (порядок не менять):
+   - `useChatMessages` → загрузка чата/сообщений, loading, error;
+   - `useSendMessage` → результат в переменную **`send`**;
+   - `useMessageActions` → результат в переменную **`actions`**.
+
+2. **В JSX и колбэках только префиксы:**
+   - Всё про ввод и отправку — **`send.*`** (например `send.editingId`, `send.message`, `send.setMessage`, `send.handleSend`). Не использовать голые `editingId`, `message`, `setMessage`.
+   - Всё про меню сообщения и действия — **`actions.*`** (например `actions.messageMenu`, `actions.setMessageMenu`, `actions.handleForward`). Не использовать голые переменные из useMessageActions.
+
+3. **В useChatMessages:** на каждой ветке, где вызывается `setError(...)`, обязательно вызывать **`setLoading(false)`**, иначе экран зависнет в скелетоне.
+
+4. Черновик: в ChatDetail восстановление черновика только через **ref** (`sendDraftRef`), не через прямой вызов `send.setMessage` в `onDraftRestore` (send ещё не создан в момент вызова).
+
+Полный текст: `docs/CHAT_DETAIL_RULES.md`.

@@ -1,9 +1,11 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
 const app = express();
+app.set("trust proxy", 1);
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -14,6 +16,7 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "6mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
@@ -21,6 +24,28 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+// CORS с credentials: чтобы куки сессии отправлялись при запросах с другого origin (поддомен или мобильное приложение).
+// iOS/Android Capacitor иногда не шлют Origin; при запросе с Bearer считаем нативным приложением и разрешаем capacitor://localhost.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  let allowOrigin: string | undefined;
+  if (origin && typeof origin === "string") {
+    allowOrigin = origin;
+  } else if (req.headers.authorization?.startsWith?.("Bearer ")) {
+    allowOrigin = "capacitor://localhost";
+  }
+  if (allowOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -89,7 +114,7 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  const port = parseInt(process.env.PORT || "3080", 10);
   httpServer.listen(
     {
       port,

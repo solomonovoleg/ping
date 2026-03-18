@@ -1,173 +1,391 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, memo } from "react";
+import { flushSync } from "react-dom";
 import { useLocation } from "wouter";
-import { Search, Edit, Check, CheckCheck, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, PenSquare } from "lucide-react";
+import { Search, Edit, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, Mic, Pin, Users } from "lucide-react";
+import { motion } from "framer-motion";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { GlobalSearch } from "@/components/GlobalSearch";
+import { UserAvatar } from "@/components/UserAvatar";
+import { useCallContext } from "@/contexts/CallContext";
+import { useAuth } from "@/contexts/AuthContext";
 
-import avatarAi from "@/assets/images/avatar-ai.png";
-import avatarAlisa from "@/assets/images/avatar-alisa.png";
-import avatarDesign from "@/assets/images/avatar-design.png";
-import avatarProduct from "@/assets/images/avatar-product.png";
-import avatarMom from "@/assets/images/avatar-mom.png";
-import avatarNews from "@/assets/images/avatar-news.png";
-import avatarIvan from "@/assets/images/avatar-ivan.png";
+import { API, apiFetch } from "@/lib/api-base";
+import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
+import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
+import { LoadingProgress } from "@/components/ui/loading-progress";
+import { PageTitle } from "@/components/PageTitle";
+import { PullToRefresh } from "@/components/PullToRefresh";
+import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { startDm, createGroupChat } from "@/lib/search";
+import { searchMessages, type SearchMessageHit } from "@/lib/chat";
+import { AI_CHAT_ID } from "@/features/chat/constants";
+import { usePrefersReducedMotion } from "@/lib/motion";
+import { DURATION_NORMAL_S, EASING_OUT_BEZIER } from "@/lib/motion";
 
-// Mock Data
-const FOLDERS = [
-  { id: "all", name: "Все чаты", count: 0 },
-  { id: "unread", name: "Новые", count: 3 },
-  { id: "personal", name: "Личное", count: 0 },
-  { id: "work", name: "Работа", count: 12 },
-  { id: "projects", name: "Проекты", count: 5 },
-  { id: "news", name: "Новости", count: 18 },
-];
+type ApiChat = {
+  id: string;
+  type: string;
+  name: string | null;
+  createdAt: string;
+  otherMember?: { id: string; publicId: number } | null;
+  otherMemberAvatarUrl?: string | null;
+  otherMemberLastSeenAt?: string | null;
+  lastMessage?: { type: string; content: string; createdAt: string } | null;
+};
 
-const CHATS = [
-  {
-    id: 0,
-    name: "AI CHAT",
-    avatar: avatarAi,
-    lastMessage: "Привет! Чем могу помочь сегодня?",
-    time: "Сейчас",
-    unread: 0,
-    online: true,
-    folder: "all",
-    typing: false,
-    isAI: true,
-  },
-  {
-    id: 1,
-    name: "Алиса Смирнова",
-    avatar: avatarAlisa,
-    lastMessage: "Давай встретимся в 19:00 у входа?",
-    time: "14:23",
-    unread: 2,
-    online: true,
-    folder: "personal",
-    typing: false,
-  },
-  {
-    id: 2,
-    name: "Команда Дизайна",
-    avatar: avatarDesign,
-    lastMessage: "Максим: Я обновил макеты в фигме",
-    time: "11:45",
-    unread: 0,
-    online: false,
-    folder: "work",
-    typing: true,
-  },
-  {
-    id: 3,
-    name: "Product Sync",
-    avatar: avatarProduct,
-    lastMessage: "Созвон через 10 минут, ссылка в описании.",
-    time: "Вчера",
-    unread: 5,
-    online: false,
-    folder: "work",
-    typing: false,
-  },
-  {
-    id: 4,
-    name: "Мама",
-    avatar: avatarMom,
-    lastMessage: "Как дела на работе? Не забудь покушать!",
-    time: "Вчера",
-    unread: 0,
-    online: true,
-    folder: "personal",
-    typing: false,
-    read: true
-  },
-  {
-    id: 5,
-    name: "Telegram News",
-    avatar: avatarNews,
-    lastMessage: "Новое обновление уже доступно для всех пользователей...",
-    time: "Пн",
-    unread: 12,
-    online: false,
-    folder: "all",
-    typing: false,
-  },
-  {
-    id: 6,
-    name: "Иван Разработчик",
-    avatar: avatarIvan,
-    lastMessage: "Пулл реквест заапрувил, можешь мержить.",
-    time: "Пн",
-    unread: 0,
-    online: false,
-    folder: "work",
-    typing: false,
-    read: true
-  },
-];
+/** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM». */
+function formatLastSeen(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMin = diffMs / 60000;
+  if (diffMin < 2) return "в сети";
+  if (diffMin < 60) return "был(а) недавно";
+  const diffHours = diffMin / 60;
+  if (diffHours < 24) return `был(а) в ${d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+  if (diffHours < 48) return "был(а) вчера";
+  return `был(а) ${d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`;
+}
 
-const CONTACTS = [
-  { id: 101, name: "Алексей Иванов", status: "был(а) недавно", avatar: "https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=150&h=150&fit=crop&crop=face", letter: "А" },
-  { id: 102, name: "Алиса Смирнова", status: "в сети", avatar: avatarAlisa, letter: "А" },
-  { id: 103, name: "Борис Ельцин", status: "был(а) в 14:00", avatar: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=150&h=150&fit=crop&crop=face", letter: "Б" },
-  { id: 104, name: "Виктория Секрет", status: "в сети", avatar: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&h=150&fit=crop&crop=face", letter: "В" },
-  { id: 105, name: "Григорий Лепс", status: "был(а) вчера", avatar: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face", letter: "Г" },
-  { id: 106, name: "Дмитрий Нагиев", status: "в сети", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=face", letter: "Д" },
-  { id: 107, name: "Елена Ваенга", status: "печатает...", avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&h=150&fit=crop&crop=face", letter: "Е" },
-  { id: 108, name: "Иван Разработчик", status: "в сети", avatar: avatarIvan, letter: "И" },
-  { id: 109, name: "Мама", status: "в сети", avatar: avatarMom, letter: "М" },
-];
+async function fetchChats(): Promise<ApiChat[]> {
+  const res = await apiFetch(`${API}/chats`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Не удалось загрузить чаты");
+  return res.json();
+}
+
+function formatChatTime(createdAt: string): string {
+  const d = new Date(createdAt);
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff < 86400000) return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (diff < 172800000) return "Вчера";
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+}
+
+type DateSectionKey = "today" | "yesterday" | "week" | "earlier";
+const DATE_SECTION_ORDER: DateSectionKey[] = ["today", "yesterday", "week", "earlier"];
+const DATE_SECTION_LABELS: Record<DateSectionKey, string> = {
+  today: "Сегодня",
+  yesterday: "Вчера",
+  week: "На этой неделе",
+  earlier: "Ранее",
+};
+
+function getDateSectionKey(iso: string): DateSectionKey {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86400000;
+  const weekAgo = startOfToday - 7 * 86400000;
+  const t = d.getTime();
+  if (t >= startOfToday) return "today";
+  if (t >= startOfYesterday) return "yesterday";
+  if (t >= weekAgo) return "week";
+  return "earlier";
+}
+
+function groupChatsByDateSection(chats: ApiChat[]): Map<DateSectionKey, ApiChat[]> {
+  const map = new Map<DateSectionKey, ApiChat[]>();
+  for (const chat of chats) {
+    const key = getDateSectionKey(chat.lastMessage?.createdAt ?? chat.createdAt);
+    const list = map.get(key) ?? [];
+    list.push(chat);
+    map.set(key, list);
+  }
+  return map;
+}
+
+function contactDisplayName(c: ContactUser): string {
+  const name = [c.displayName, c.surname].filter(Boolean).join(" ").trim();
+  return name || `ID ${c.publicId}`;
+}
+
+function contactLetter(c: ContactUser): string {
+  const name = contactDisplayName(c);
+  const char = name[0]?.toUpperCase();
+  return char && /[A-ZА-Я0-9]/.test(char) ? char : "?";
+}
+
+const TYPING_PREVIEW_TTL_MS = 5000;
+const VOICE_RECORDING_PREVIEW_TTL_MS = 6000;
+
+/** Строка чата: мемоизация уменьшает перерисовку списка при обновлении «печатает»/«записывает» только в одном чате */
+const ChatRow = memo(function ChatRow({
+  chat,
+  typingLabel,
+  voiceLabel,
+  onSelect,
+  isAiChat,
+}: {
+  chat: ApiChat;
+  typingLabel: string | null;
+  voiceLabel: string | null;
+  onSelect: () => void;
+  isAiChat?: boolean;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const preview =
+    voiceLabel != null ? (
+      <span className="text-primary/90 flex items-center gap-1">
+        <Mic className="w-3 h-3 flex-shrink-0" />
+        {voiceLabel} записывает голосовое
+      </span>
+    ) : typingLabel != null ? (
+      <span className="italic text-primary/90">{typingLabel} печатает...</span>
+    ) : (
+      chat.lastMessage?.content ?? "Нет сообщений"
+    );
+  const content = (
+    <>
+      <UserAvatar
+        avatarUrl={chat.otherMemberAvatarUrl ?? undefined}
+        displayName={chat.name ?? "Диалог"}
+        seed={chat.id}
+        size={46}
+        className={cn("h-[46px] w-[46px] flex-shrink-0 sm:h-[50px] sm:w-[50px]", isAiChat && "ring-2 ring-indigo-400/60 ring-offset-2 ring-offset-indigo-500/10")}
+        showOnlineIndicator={chat.type === "dm" && !isAiChat}
+        lastSeenAt={chat.otherMemberLastSeenAt ?? undefined}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex justify-between items-baseline gap-1.5">
+          <h3 className={cn("truncate text-[15px] font-semibold leading-5 sm:text-[16px]", isAiChat && "text-indigo-700 dark:text-indigo-200")}>
+            {chat.name ?? (chat.type === "dm" ? "Диалог" : "Чат")}
+          </h3>
+          <span className="flex-shrink-0 text-[11px] text-muted-foreground/90 sm:text-xs">
+            {formatChatTime(chat.lastMessage?.createdAt ?? chat.createdAt)}
+          </span>
+        </div>
+        <p className={cn("mt-0.5 truncate text-[13px] leading-[1.25rem] sm:text-[13.5px]", isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : "text-muted-foreground")}>{preview}</p>
+      </div>
+    </>
+  );
+
+  if (isAiChat) {
+    return (
+      <motion.div
+        initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+        className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-500/12 via-violet-500/8 to-indigo-500/5 shadow-sm border border-indigo-500/20 hover:from-indigo-500/18 hover:via-violet-500/12 hover:to-indigo-500/8 hover:border-indigo-500/30 hover:shadow-md transition-all duration-200"
+      >
+        <div
+          className="absolute left-0 top-0 bottom-0 w-1 rounded-l-full bg-gradient-to-b from-indigo-400 via-violet-500 to-indigo-600 pinned-chat-accent"
+          aria-hidden
+        />
+        <TapScaleDiv
+          onClick={onSelect}
+          className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-2xl bg-transparent py-2 pl-4 pr-0 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:py-2.5 sm:pl-5 sm:pr-2 hover:bg-transparent"
+        >
+          {content}
+        </TapScaleDiv>
+      </motion.div>
+    );
+  }
+
+  return (
+    <TapScaleDiv
+      onClick={onSelect}
+      className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl px-0 py-2 transition-colors duration-75 hover:bg-secondary/50 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2 sm:py-2.5"
+    >
+      {content}
+    </TapScaleDiv>
+  );
+});
 
 export default function Chats() {
   const [, setLocation] = useLocation();
-  const [activeFolder, setActiveFolder] = useState("all");
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [showContactsPage, setShowContactsPage] = useState(false);
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
+  const [groupCreateLoading, setGroupCreateLoading] = useState(false);
   const [contactsSearchQuery, setContactsSearchQuery] = useState("");
+  const [contactOpeningId, setContactOpeningId] = useState<string | null>(null);
+  const [typingByChatId, setTypingByChatId] = useState<Record<string, string | null>>({});
+  const [voiceRecordingByChatId, setVoiceRecordingByChatId] = useState<Record<string, string | null>>({});
+  const [messageSearchResults, setMessageSearchResults] = useState<SearchMessageHit[]>([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const typingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const voiceTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const searchLower = searchQuery.toLowerCase();
-  
-  const filteredChats = CHATS.filter(chat => {
-    if (searchQuery.length > 0) {
-      return chat.name.toLowerCase().includes(searchLower) || chat.lastMessage.toLowerCase().includes(searchLower);
-    }
-    return activeFolder === "all" || 
-          (activeFolder === "unread" && chat.unread > 0) ||
-          chat.folder === activeFolder;
+  const { subscribeChat, subscribeTyping, subscribeVoiceRecording } = useCallContext();
+
+  const { data: chats = [], isLoading, isError, refetch } = useQuery({
+    queryKey: ["chats"],
+    queryFn: fetchChats,
   });
 
-  const contactsSearchLower = contactsSearchQuery.toLowerCase();
-  const filteredContacts = CONTACTS.filter(contact => 
-    contact.name.toLowerCase().includes(contactsSearchLower)
-  );
+  // Подписка на все чаты: новые сообщения → обновить список; типинг и запись ГС → показать в превью
+  useEffect(() => {
+    if (!chats.length) return;
+    const unsubs: Array<() => void> = [];
+    chats.forEach((chat) => {
+      const chatId = chat.id;
+      unsubs.push(
+        subscribeChat(chatId, () => {
+          window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
+        })
+      );
+      unsubs.push(
+        subscribeTyping(chatId, (userId, displayName) => {
+          if (userId === user?.id) return;
+          const name = displayName?.trim() || "Кто-то";
+          flushSync(() => setTypingByChatId((prev) => ({ ...prev, [chatId]: name })));
+          if (typingTimeoutsRef.current[chatId]) clearTimeout(typingTimeoutsRef.current[chatId]);
+          typingTimeoutsRef.current[chatId] = setTimeout(() => {
+            setTypingByChatId((prev) => {
+              const next = { ...prev };
+              delete next[chatId];
+              return next;
+            });
+            delete typingTimeoutsRef.current[chatId];
+          }, TYPING_PREVIEW_TTL_MS);
+        })
+      );
+      unsubs.push(
+        subscribeVoiceRecording(chatId, (userId, displayName, recording) => {
+          if (userId === user?.id) return;
+          if (voiceTimeoutsRef.current[chatId]) {
+            clearTimeout(voiceTimeoutsRef.current[chatId]);
+            delete voiceTimeoutsRef.current[chatId];
+          }
+          if (recording) {
+            const name = displayName?.trim() || "Кто-то";
+            flushSync(() => setVoiceRecordingByChatId((prev) => ({ ...prev, [chatId]: name })));
+            voiceTimeoutsRef.current[chatId] = setTimeout(() => {
+              setVoiceRecordingByChatId((prev) => {
+                const next = { ...prev };
+                delete next[chatId];
+                return next;
+              });
+              delete voiceTimeoutsRef.current[chatId];
+            }, VOICE_RECORDING_PREVIEW_TTL_MS);
+          } else {
+            flushSync(() =>
+              setVoiceRecordingByChatId((prev) => {
+                const next = { ...prev };
+                delete next[chatId];
+                return next;
+              })
+            );
+          }
+        })
+      );
+    });
+    return () => {
+      unsubs.forEach((f) => f());
+      Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
+      typingTimeoutsRef.current = {};
+      Object.values(voiceTimeoutsRef.current).forEach(clearTimeout);
+      voiceTimeoutsRef.current = {};
+    };
+  }, [chats, user?.id, subscribeChat, subscribeTyping, subscribeVoiceRecording]);
 
-  const groupedContacts = filteredContacts.reduce((acc, contact) => {
-    if (!acc[contact.letter]) {
-      acc[contact.letter] = [];
+  const { data: contactsList = [] } = useQuery({
+    queryKey: ["contacts", "list"],
+    queryFn: listContactsWithProfiles,
+    enabled: showContactsPage || showCreateGroupModal,
+  });
+
+  // Поиск по сообщениям (с задержкой)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setMessageSearchResults([]);
+      return;
     }
-    acc[contact.letter].push(contact);
-    return acc;
-  }, {} as Record<string, typeof CONTACTS>);
+    const t = setTimeout(() => {
+      setMessageSearchLoading(true);
+      searchMessages(q)
+        .then(setMessageSearchResults)
+        .catch(() => setMessageSearchResults([]))
+        .finally(() => setMessageSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const searchLower = searchQuery.toLowerCase().trim();
+  const filteredChats =
+    searchLower === ""
+      ? chats
+      : chats.filter(
+          (c) =>
+            (c.name ?? "").toLowerCase().includes(searchLower)
+        );
+  const showAiOver = searchLower === "" || "ai over".includes(searchLower);
+  const aiOverChat: ApiChat = {
+    id: AI_CHAT_ID,
+    type: "dm",
+    name: "AI OVER",
+    createdAt: new Date().toISOString(),
+    otherMemberAvatarUrl: "/ai-over-avatar.png",
+    lastMessage: { type: "text", content: "Чат с ИИ по любым вопросам", createdAt: new Date().toISOString() },
+  };
+
+  const contactsSearchLower = contactsSearchQuery.toLowerCase().trim();
+  const filteredContacts = contactsSearchLower
+    ? contactsList.filter((c) =>
+        contactDisplayName(c).toLowerCase().includes(contactsSearchLower) ||
+        String(c.publicId).includes(contactsSearchLower)
+      )
+    : contactsList;
+  const groupedContacts = filteredContacts.reduce(
+    (acc, contact) => {
+      const letter = contactLetter(contact);
+      if (!acc[letter]) acc[letter] = [];
+      acc[letter].push(contact);
+      return acc;
+    },
+    {} as Record<string, ContactUser[]>
+  );
 
   // Экран контактов
   if (showContactsPage) {
     return (
-      <div className="flex h-full w-full bg-background animate-in slide-in-from-right-4 duration-300">
+      <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden bg-background animate-in slide-in-from-right-4 duration-150">
         <div className="w-full flex flex-col h-full relative">
           {/* Contacts Header */}
-          <div className="px-4 pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
+          <div className="uix-content-x pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
-                <button 
+                <TapScaleButton
+                  type="button"
                   onClick={() => {
                     setShowContactsPage(false);
                     setContactsSearchQuery("");
                   }}
-                  className="p-2 -ml-2 rounded-full text-primary hover:bg-primary/10 transition-colors"
+                  haptic
+                  subtle
+                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 -ml-2 rounded-full text-primary hover:bg-primary/10 transition-colors flex items-center justify-center"
+                  aria-label="Назад к чатам"
                 >
                   <ChevronLeft className="w-6 h-6" />
-                </button>
-                <h1 className="text-2xl font-bold tracking-tight">Контакты</h1>
+                </TapScaleButton>
+                <h1 className="uix-text-title">Контакты</h1>
               </div>
-              <button className="text-primary font-medium px-2">Изм.</button>
+              <TapScaleButton type="button" haptic subtle className="text-primary font-medium px-2 min-h-[var(--uix-touch-min)]" aria-label="Изменить контакты">
+                Изм.
+              </TapScaleButton>
             </div>
 
             <div className="relative mb-2">
@@ -180,76 +398,133 @@ export default function Chats() {
                 className="w-full bg-secondary/50 border-none rounded-xl py-2.5 pl-10 pr-10 text-[15px] focus:ring-2 focus:ring-primary/30 transition-all placeholder:text-muted-foreground/70 outline-none"
               />
               {contactsSearchQuery && (
-                <button 
+                <TapScaleButton
+                  type="button"
                   onClick={() => setContactsSearchQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-muted-foreground hover:bg-muted-foreground/30 transition-colors"
+                  subtle
+                  className="absolute right-3 top-1/2 -translate-y-1/2 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] rounded-full bg-muted-foreground/20 flex items-center justify-center text-muted-foreground hover:bg-muted-foreground/30 transition-colors"
+                  aria-label="Очистить поиск"
                 >
                   <X className="w-3 h-3" />
-                </button>
+                </TapScaleButton>
               )}
             </div>
           </div>
 
           {/* Contacts List */}
-          <div className="flex-1 overflow-y-auto pb-24 sm:pb-28 px-2">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))] uix-content-x">
             {!contactsSearchQuery && (
-              <div className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors">
+              <div
+                className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors"
+                onClick={() => { setShowContactsPage(false); setContactsSearchQuery(""); }}
+              >
                 <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
                   <UserPlus className="w-5 h-5" />
                 </div>
-                Добавить контакт
+                Добавить контакт (поиск в «Чаты»)
               </div>
             )}
 
             {Object.keys(groupedContacts).length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
-                <p>Ничего не найдено</p>
+              <div className="flex flex-col items-center justify-center py-10 text-muted-foreground text-center">
+                <p>Пока нет контактов</p>
+                <p className="text-sm mt-1">Найдите пользователя через поиск в разделе «Чаты» и начните диалог</p>
               </div>
             ) : (
-              Object.keys(groupedContacts).sort().map(letter => (
-                <div key={letter} className="mb-2">
-                  {!contactsSearchQuery && (
-                    <div className="px-4 py-1 text-sm font-bold text-muted-foreground bg-background sticky top-[120px] z-10">
-                      {letter}
-                    </div>
-                  )}
-                  <div className="flex flex-col gap-0.5">
-                    {groupedContacts[letter].map(contact => (
-                      <div 
-                        key={`contact-${contact.id}`}
-                        className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors group active:scale-[0.98]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="relative">
-                            <img 
-                              src={contact.avatar} 
-                              alt={contact.name} 
-                              className="w-12 h-12 rounded-full object-cover"
-                            />
-                            {contact.status === "в сети" && (
-                              <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-background rounded-full"></div>
-                            )}
-                          </div>
-                          <div>
-                            <h3 className="font-semibold text-[16px]">{contact.name}</h3>
-                            <p className={`text-sm ${contact.status === 'в сети' ? 'text-primary' : 'text-muted-foreground'}`}>
-                              {contact.status}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity pr-1">
-                          <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
-                            <Phone className="w-4 h-4" />
-                          </button>
-                          <button className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors">
-                            <Video className="w-4 h-4" />
-                          </button>
-                        </div>
+              Object.keys(groupedContacts)
+                .sort()
+                .map((letter) => (
+                  <div key={letter} className="mb-2">
+                    {!contactsSearchQuery && (
+                      <div className="px-4 py-1 text-sm font-bold text-muted-foreground">
+                        {letter}
                       </div>
-                    ))}
+                    )}
+                    <div className="flex flex-col gap-0.5">
+                      {groupedContacts[letter].map((contact) => (
+                        <div
+                          key={`contact-${contact.id}`}
+                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors group active:scale-[0.98]"
+                          onClick={async () => {
+                            if (contactOpeningId) return;
+                            setContactOpeningId(contact.id);
+                            try {
+                              const chat = await startDm(contact.id);
+                              setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                              setShowContactsPage(false);
+                            } finally {
+                              setContactOpeningId(null);
+                            }
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <UserAvatar avatarUrl={contact.avatarUrl ?? undefined} displayName={contactDisplayName(contact)} seed={String(contact.id)} size={48} className="w-12 h-12" />
+                            <div>
+                              <h3 className="font-semibold text-[16px]">{contactDisplayName(contact)}</h3>
+                              <p className="text-sm text-muted-foreground">В контактах</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (contactOpeningId) return;
+                                setContactOpeningId(contact.id);
+                                try {
+                                  const chat = await startDm(contact.id);
+                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setShowContactsPage(false);
+                                } finally {
+                                  setContactOpeningId(null);
+                                }
+                              }}
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (contactOpeningId) return;
+                                setContactOpeningId(contact.id);
+                                try {
+                                  const chat = await startDm(contact.id);
+                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setShowContactsPage(false);
+                                } finally {
+                                  setContactOpeningId(null);
+                                }
+                              }}
+                            >
+                              <Phone className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (contactOpeningId) return;
+                                setContactOpeningId(contact.id);
+                                try {
+                                  const chat = await startDm(contact.id);
+                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setShowContactsPage(false);
+                                } finally {
+                                  setContactOpeningId(null);
+                                }
+                              }}
+                            >
+                              <Video className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))
+                ))
             )}
           </div>
         </div>
@@ -259,140 +534,270 @@ export default function Chats() {
 
   // Экран чатов
   return (
-    <div className="flex h-full w-full animate-in fade-in duration-300">
-      <div className="w-full flex flex-col h-full bg-background relative">
+        <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden animate-in fade-in duration-150">
+      <PageTitle title="Чаты" />
+      <div className="w-full max-w-full min-w-0 flex flex-col h-full bg-background relative">
         
-        {/* Header */}
-        <div className="px-4 pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
-          
-          <div className="flex justify-between items-center mb-4">
-            <h1 className="text-2xl font-bold tracking-tight">Чаты</h1>
-            <button className="p-2 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors">
-              <Edit className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Search Bar with Contact Icon inside/next to it */}
-          <div className="flex items-center gap-2 mb-4">
-            <div className="relative flex-1 group">
-              <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
-              <input 
-                type="text" 
-                placeholder="Поиск по чатам..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-secondary/50 border-none rounded-xl py-2.5 pl-10 pr-10 text-[15px] focus:ring-2 focus:ring-primary/30 transition-all placeholder:text-muted-foreground/70 outline-none"
-              />
-              {searchQuery && (
-                <button 
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-muted-foreground/20 flex items-center justify-center text-muted-foreground hover:bg-muted-foreground/30 transition-colors"
+        {/* Header — компактно, как в TG: ~5px от краёв */}
+        <div className="uix-content-x-tight pt-1.5 pb-1 sm:pt-3 sm:pb-1.5 glass z-20 sticky top-0 border-b border-border/50">
+          <div className="flex justify-between items-center mb-1 sm:mb-1.5">
+            <span className="uix-text-title font-semibold">Чаты</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center p-1.5 sm:p-2 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 active:scale-95"
+                  title="Новый чат или группа"
+                  aria-label="Новый чат или групповой чат"
                 >
-                  <X className="w-3 h-3" />
+                  <Edit className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
-              )}
-            </div>
-            
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setShowContactsPage(true);
+                  }}
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  Новый чат
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setShowCreateGroupModal(true);
+                    setGroupName("");
+                    setSelectedMemberIds(new Set());
+                  }}
+                >
+                  <Users className="w-4 h-4" />
+                  Групповой чат
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <GlobalSearch
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Поиск по номеру, ID или имени..."
+              className="[&_input]:py-2 [&_input]:text-[14px] sm:[&_input]:py-2.5 sm:[&_input]:text-[15px]"
+            />
             <button 
               onClick={() => setShowContactsPage(true)}
-              className="p-2.5 rounded-xl bg-primary/10 text-primary hover:bg-primary/20 transition-colors flex-shrink-0"
+              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center p-2 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors duration-75 flex-shrink-0 active:scale-95"
               title="Контакты"
             >
-              <UserPlus className="w-5 h-5" />
+              <UserPlus className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
-
-          {/* Folders (Scrollable) */}
-          {!searchQuery && (
-            <div className="flex overflow-x-auto hide-scrollbar pt-1 -mx-4 px-4 gap-2">
-              {FOLDERS.map(folder => (
-                <button
-                  key={folder.id}
-                  onClick={() => setActiveFolder(folder.id)}
-                  className={cn(
-                    "whitespace-nowrap px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200",
-                    activeFolder === folder.id 
-                      ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" 
-                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  )}
-                >
-                  {folder.name}
-                  {folder.count > 0 && activeFolder !== folder.id && (
-                    <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-[10px]">
-                      {folder.count}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
-        {/* List Content */}
-        <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
-          <div className="px-2 py-2">
-            {filteredChats.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-40 text-muted-foreground p-8 text-center">
-                <MessageCircle className="w-12 h-12 mb-4 opacity-20" />
-                <p>Нет чатов, соответствующих фильтру</p>
+        {/* List Content — чаты в 5px от краёв, как в Telegram */}
+        <PullToRefresh onRefresh={() => refetch()} className="min-h-0">
+          <div className="uix-content-x-tight py-1 sm:py-2 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
+            {searchQuery.trim().length >= 2 && (
+              <div className="mb-3">
+                <p className="text-xs font-medium text-muted-foreground mb-1.5">В сообщениях</p>
+                {messageSearchLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">Поиск...</div>
+                ) : messageSearchResults.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-2">Ничего не найдено</p>
+                ) : (
+                  <ul className="space-y-0.5 max-h-[200px] overflow-y-auto">
+                    {messageSearchResults.map((hit) => (
+                      <li key={`${hit.chatId}-${hit.messageId}`}>
+                        <TapScaleDiv
+                          onClick={() => setLocation(`/chat/${hit.chatId}?messageId=${hit.messageId}`)}
+                          className="flex flex-col gap-0.5 p-2.5 rounded-lg hover:bg-secondary/50 cursor-pointer"
+                        >
+                          <span className="text-xs text-muted-foreground">{hit.chatName}</span>
+                          <span className="text-sm truncate">{hit.content}</span>
+                        </TapScaleDiv>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
+            )}
+            {isLoading ? (
+              <LoadingProgress loading minHeight="200px" className="rounded-xl">
+                <div className="min-h-[200px]" />
+              </LoadingProgress>
+            ) : isError ? (
+              <ErrorWithRetry
+                title="Не удалось загрузить чаты"
+                description="Проверьте интернет и попробуйте снова"
+                onRetry={() => refetch()}
+              />
+            ) : filteredChats.length === 0 ? (
+              <ListEmptyState
+                icon={MessageCircle}
+                title={chats.length === 0 ? "У вас пока нет чатов" : "Нет чатов по запросу"}
+                description={
+                  chats.length === 0
+                    ? "Найдите пользователя через поиск и начните диалог"
+                    : "Измените поиск или выберите другой фильтр"
+                }
+                actionLabel={chats.length === 0 ? "Найти человека" : undefined}
+                onAction={chats.length === 0 ? () => setShowContactsPage(true) : undefined}
+              />
             ) : (
-              filteredChats.map((chat) => (
-                <div 
-                  key={`chat-${chat.id}`}
-                  onClick={() => setLocation(`/chat/${chat.id}`)}
-                  className={cn(
-                    "flex items-center gap-3 p-3 rounded-2xl transition-colors cursor-pointer active:scale-[0.98]",
-                    chat.isAI ? "bg-primary/5 hover:bg-primary/10 border border-primary/20 shadow-sm" : "hover:bg-secondary/50"
-                  )}
-                >
-                  <div className="relative flex-shrink-0">
-                    <img 
-                      src={chat.avatar} 
-                      alt={chat.name} 
-                      className={cn(
-                        "w-14 h-14 object-cover",
-                        chat.isAI ? "rounded-2xl shadow-inner" : "rounded-full"
-                      )}
-                    />
-                    {chat.online && !chat.isAI && (
-                      <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full"></div>
-                    )}
-                  </div>
-                  
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-baseline mb-0.5">
-                      <h3 className={cn("font-semibold text-[16px] truncate pr-2", chat.isAI && "text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500")}>
-                        {chat.name}
-                      </h3>
-                      <span className={cn("text-xs flex-shrink-0", chat.isAI ? "text-primary/70 font-medium" : "text-muted-foreground")}>{chat.time}</span>
-                    </div>
-                    
-                    <div className="flex justify-between items-center gap-2">
-                      <p className={cn(
-                        "text-[14px] truncate",
-                        chat.typing ? "text-primary" : chat.isAI ? "text-foreground/80 font-medium" : "text-muted-foreground"
-                      )}>
-                        {chat.typing ? "Печатает..." : chat.lastMessage}
-                      </p>
-                      
-                      {chat.unread > 0 ? (
-                        <div className="flex-shrink-0 min-w-[20px] h-[20px] px-1.5 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-[11px] font-bold">
-                          {chat.unread}
-                        </div>
-                      ) : chat.read ? (
-                        <CheckCheck className="w-4 h-4 text-primary flex-shrink-0" />
-                      ) : !chat.isAI ? (
-                        <Check className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ))
+              (() => {
+                const chatsWithoutAi = filteredChats.filter((c) => c.id !== AI_CHAT_ID);
+                const bySection = groupChatsByDateSection(chatsWithoutAi);
+                return [
+                  ...(showAiOver
+                    ? [
+                        <motion.p
+                          key="ai-over-label"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: DURATION_NORMAL_S * 0.6, ease: EASING_OUT_BEZIER }}
+                          className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground px-0 py-1.5 sm:py-2 sticky top-0 bg-background/95 backdrop-blur z-10"
+                        >
+                          <Pin className="w-3 h-3 text-indigo-500/80" aria-hidden />
+                          Закреплён
+                        </motion.p>,
+                        <ChatRow
+                          key={AI_CHAT_ID}
+                          chat={aiOverChat}
+                          typingLabel={null}
+                          voiceLabel={null}
+                          onSelect={() => setLocation(`/chat/${AI_CHAT_ID}`)}
+                          isAiChat
+                        />,
+                      ]
+                    : []),
+                  ...DATE_SECTION_ORDER.flatMap((key) => {
+                    const sectionChats = bySection.get(key) ?? [];
+                    if (sectionChats.length === 0) return [];
+                    return [
+                      <p key={key} className="text-[11px] font-medium text-muted-foreground px-0 py-1.5 sm:py-2 sticky top-0 bg-background/95 backdrop-blur z-10">
+                        {DATE_SECTION_LABELS[key]}
+                      </p>,
+                      ...sectionChats.map((chat) => (
+                        <ChatRow
+                          key={chat.id}
+                          chat={chat}
+                          typingLabel={typingByChatId[chat.id] ?? null}
+                          voiceLabel={voiceRecordingByChatId[chat.id] ?? null}
+                          onSelect={() => setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`)}
+                        />
+                      )),
+                    ];
+                  }),
+                ];
+              })()
             )}
           </div>
-        </div>
+        </PullToRefresh>
       </div>
+
+      {/* Модальное окно создания группового чата */}
+      <Dialog
+        open={showCreateGroupModal}
+        onOpenChange={(open) => {
+          setShowCreateGroupModal(open);
+          if (!open) {
+            setGroupName("");
+            setSelectedMemberIds(new Set());
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] flex flex-col gap-4 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Новый групповой чат</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 min-h-0">
+            <label className="text-sm font-medium">
+              Название группы (необязательно)
+            </label>
+            <input
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Например: Семья, Работа"
+              className="w-full bg-secondary/50 border border-border rounded-xl py-2.5 px-3 text-[15px] focus:ring-2 focus:ring-primary/30 outline-none placeholder:text-muted-foreground"
+            />
+            <label className="text-sm font-medium">Участники</label>
+            <div className="border border-border rounded-xl overflow-y-auto max-h-[240px] min-h-[120px] divide-y divide-border">
+              {contactsList.length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground text-center">
+                  Нет контактов. Добавьте контакты в разделе «Чаты» и начните диалог.
+                </p>
+              ) : (
+                contactsList.map((contact) => {
+                  const checked = selectedMemberIds.has(contact.id);
+                  return (
+                    <label
+                      key={contact.id}
+                      className="flex items-center gap-3 p-3 cursor-pointer hover:bg-secondary/50 transition-colors min-h-[var(--uix-touch-min)]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setSelectedMemberIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(contact.id)) next.delete(contact.id);
+                            else next.add(contact.id);
+                            return next;
+                          });
+                        }}
+                        className="rounded border-input"
+                      />
+                      <UserAvatar
+                        avatarUrl={contact.avatarUrl ?? undefined}
+                        displayName={contactDisplayName(contact)}
+                        seed={String(contact.id)}
+                        size={40}
+                        className="w-10 h-10"
+                      />
+                      <span className="font-medium text-[15px]">{contactDisplayName(contact)}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <TapScaleButton
+              type="button"
+              onClick={() => setShowCreateGroupModal(false)}
+              className="min-h-[var(--uix-touch-min)] border border-input bg-background hover:bg-secondary"
+            >
+              Отмена
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              disabled={selectedMemberIds.size === 0 || groupCreateLoading}
+              className="min-h-[var(--uix-touch-min)] bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              onClick={async () => {
+                if (selectedMemberIds.size === 0) return;
+                setGroupCreateLoading(true);
+                try {
+                  const chat = await createGroupChat(groupName, Array.from(selectedMemberIds));
+                  await queryClient.invalidateQueries({ queryKey: ["chats"] });
+                  setShowCreateGroupModal(false);
+                  setGroupName("");
+                  setSelectedMemberIds(new Set());
+                  setLocation(`/chat/${chat.id}`);
+                } catch (err) {
+                  toast({
+                    title: "Не удалось создать группу",
+                    description: err instanceof Error ? err.message : undefined,
+                    variant: "destructive",
+                  });
+                } finally {
+                  setGroupCreateLoading(false);
+                }
+              }}
+            >
+              {groupCreateLoading ? "Создание…" : "Создать"}
+            </TapScaleButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

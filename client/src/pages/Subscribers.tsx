@@ -1,22 +1,24 @@
 import { useState } from "react";
-import { ChevronLeft, Search, UserPlus, Check } from "lucide-react";
+import { ChevronLeft, Search, UserPlus, Check, Users } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { ListEmptyState } from "@/components/ui/empty";
+import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
 import avatarMom from "@/assets/images/avatar-mom.png";
 import avatarDesign from "@/assets/images/avatar-design.png";
 import avatarNews from "@/assets/images/avatar-news.png";
 
-// Mock Data
+// Mock Data (publicId для ссылки на профиль: /profile/:publicId или /id/:publicId)
 const SUBSCRIBERS = [
-  { id: 1, name: "Алиса", handle: "@alisa_wonder", avatar: avatarAlisa, isFollowing: true, isMutual: true },
-  { id: 2, name: "Мама", handle: "@mom_best", avatar: avatarMom, isFollowing: true, isMutual: true },
-  { id: 3, name: "Design & UX", handle: "@design_ux", avatar: avatarDesign, isFollowing: false, isMutual: false },
-  { id: 4, name: "Tech News", handle: "@tech_news", avatar: avatarNews, isFollowing: false, isMutual: false },
-  { id: 5, name: "Максим П.", handle: "@max_dev", avatar: "https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=150&h=150&fit=crop", isFollowing: true, isMutual: false },
-  { id: 6, name: "Елена Смирнова", handle: "@helen_s", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop", isFollowing: false, isMutual: false },
-  { id: 7, name: "Крипто Инвестор", handle: "@crypto_king", avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop", isFollowing: true, isMutual: true },
+  { id: 1, publicId: 100, name: "Алиса", handle: "@alisa_wonder", avatar: avatarAlisa, isFollowing: true, isMutual: true },
+  { id: 2, publicId: 101, name: "Мама", handle: "@mom_best", avatar: avatarMom, isFollowing: true, isMutual: true },
+  { id: 3, publicId: 102, name: "Design & UX", handle: "@design_ux", avatar: avatarDesign, isFollowing: false, isMutual: false },
+  { id: 4, publicId: 103, name: "Tech News", handle: "@tech_news", avatar: avatarNews, isFollowing: false, isMutual: false },
+  { id: 5, publicId: 104, name: "Максим П.", handle: "@max_dev", avatar: "https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=150&h=150&fit=crop", isFollowing: true, isMutual: false },
+  { id: 6, publicId: 105, name: "Елена Смирнова", handle: "@helen_s", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop", isFollowing: false, isMutual: false },
+  { id: 7, publicId: 106, name: "Крипто Инвестор", handle: "@crypto_king", avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop", isFollowing: true, isMutual: true },
 ];
 
 export default function Subscribers() {
@@ -39,27 +41,31 @@ export default function Subscribers() {
   };
 
   return (
-    <div className="flex h-full w-full justify-center bg-background">
-      <div className="w-full h-full max-w-[480px] flex flex-col bg-background relative shadow-2xl overflow-hidden">
+    <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden justify-center bg-background">
+      <div className="w-full h-full max-w-[480px] min-w-0 flex flex-col bg-background relative shadow-2xl overflow-hidden">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
-          <button 
+        <div className="uix-content-x py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
+          <TapScaleButton
+            type="button"
             onClick={() => window.history.back()}
-            className="p-2 -ml-2 rounded-full hover:bg-secondary transition-colors"
+            haptic
+            subtle
+            className="p-2 -ml-2 rounded-full hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+            aria-label="Назад"
           >
             <ChevronLeft className="w-6 h-6" />
-          </button>
+          </TapScaleButton>
           
-          <div className="flex-1 text-center font-bold text-lg">
+          <h1 className="flex-1 text-center uix-text-title">
             Подписчики
-          </div>
+          </h1>
           
           <div className="w-10"></div> {/* Spacer for centering */}
         </div>
 
         {/* Search */}
-        <div className="px-4 py-2 border-b border-border/50">
+        <div className="uix-content-x py-2 border-b border-border/50">
           <div className="relative">
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input 
@@ -73,14 +79,14 @@ export default function Subscribers() {
         </div>
 
         {/* Subscribers List */}
-        <div className="flex-1 overflow-y-auto hide-scrollbar">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 hide-scrollbar">
           <div className="p-2">
             {filteredSubscribers.length > 0 ? (
               filteredSubscribers.map((user) => (
-                <div 
-                  key={user.id} 
+                <TapScaleDiv
+                  key={user.id}
                   className="flex items-center justify-between p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer"
-                  onClick={() => setLocation(`/profile/${user.id === 1 || user.id === 2 ? user.id : user.handle.replace('@', '')}`)}
+                  onClick={() => setLocation(`/profile/${(user as { publicId?: number }).publicId ?? user.id}`)}
                 >
                   <div className="flex items-center gap-3">
                     <div className="relative">
@@ -96,7 +102,8 @@ export default function Subscribers() {
                     </div>
                   </div>
                   
-                  <button 
+                  <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleFollow(user.id);
@@ -107,6 +114,7 @@ export default function Subscribers() {
                         ? "bg-secondary text-foreground hover:bg-secondary/80" 
                         : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
                     )}
+                    aria-label={followingState[user.id] ? `В подписках: ${user.name}` : `Подписаться на ${user.name}`}
                   >
                     {followingState[user.id] ? (
                       <>
@@ -120,13 +128,14 @@ export default function Subscribers() {
                       </>
                     )}
                   </button>
-                </div>
+                </TapScaleDiv>
               ))
             ) : (
-              <div className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
-                <Search className="w-12 h-12 mb-4 opacity-20" />
-                <p>Ничего не найдено</p>
-              </div>
+              <ListEmptyState
+                icon={Users}
+                title="Никого не найдено"
+                description="Измените поиск или посмотрите подписчиков позже"
+              />
             )}
           </div>
         </div>

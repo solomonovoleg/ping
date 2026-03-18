@@ -1,0 +1,5 @@
+# Скопируй в local.properties и укажи путь к Android SDK.
+# После установки Android Studio SDK обычно здесь:
+#   Mac: /Users/ТВОЙ_ЛОГИН/Library/Android/sdk
+#   Linux: /home/ТВОЙ_ЛОГИН/Android/Sdk
+sdk.dir=/Users/admin/Library/Android/sdk

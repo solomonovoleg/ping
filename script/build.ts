@@ -1,10 +1,17 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, writeFile } from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, "..");
+const buildNumberPath = path.join(root, ".build-number");
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
 const allowlist = [
+  "@aws-sdk/client-s3",
   "@google/generative-ai",
   "axios",
   "connect-pg-simple",
@@ -35,7 +42,17 @@ const allowlist = [
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
-  console.log("building client...");
+  let buildNumber = 1;
+  try {
+    const num = await readFile(buildNumberPath, "utf-8");
+    buildNumber = Math.max(1, parseInt(num.trim(), 10) || 1);
+  } catch {
+    /* файла нет — остаётся 1 */
+  }
+  const nextNumber = buildNumber + 1;
+  await writeFile(buildNumberPath, String(nextNumber), "utf-8");
+  process.env.BUILD_VERSION = String(buildNumber);
+  console.log(`building client (версия ${buildNumber})...`);
   await viteBuild();
 
   console.log("building server...");
@@ -47,17 +64,51 @@ async function buildAll() {
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
   await esbuild({
-    entryPoints: ["server/index.ts"],
+    entryPoints: [path.join(root, "server/index.ts")],
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: "dist/index.cjs",
+    outfile: path.join(root, "dist/index.cjs"),
     define: {
       "process.env.NODE_ENV": '"production"',
+      "process.env.BUILD_VERSION": JSON.stringify(process.env.BUILD_VERSION || "0"),
     },
     minify: true,
     external: externals,
     logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
+  });
+
+  console.log("building seed-admin...");
+  const seedExternals = externals.filter((d) => d !== "dotenv");
+  await esbuild({
+    entryPoints: [path.join(root, "scripts/seed-admin.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/seed-admin.cjs"),
+    minify: false,
+    external: seedExternals,
+    logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
+  });
+  console.log("building seed-first-user...");
+  await esbuild({
+    entryPoints: [path.join(root, "scripts/seed-first-user.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/seed-first-user.cjs"),
+    minify: false,
+    external: seedExternals,
+    logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
   });
 }
 

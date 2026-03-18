@@ -10,10 +10,24 @@ export function serveStatic(app: Express) {
     );
   }
 
+  // index.html — без кэша, чтобы после деплоя браузер подтянул новый JS
+  app.get(["/", "/index.html"], (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.sendFile(path.resolve(distPath, "index.html"));
+  });
+
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
-  app.use("/{*path}", (_req, res) => {
+  // SPA fallback: любой GET, не отданный static, отдаём index.html.
+  // Не отдаём HTML для /uploads и /api — иначе браузер получит HTML вместо аудио/картинки → красные запросы и 00:00 у голосовых.
+  app.get("/{*path}", (req, res) => {
+    if (req.path.startsWith("/uploads") || req.path.startsWith("/api")) {
+      res.status(404).send("Not found");
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

@@ -6,7 +6,10 @@ import type {
 } from "@/components/ui/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+/** После закрытия — убрать из DOM через время exit-анимации */
+const TOAST_REMOVE_DELAY = 400
+/** Авто-скрытие тоста через 2.5 с (лаконичная обратная связь) */
+const TOAST_DURATION_MS = 2500
 
 type ToasterToast = ToastProps & {
   id: string
@@ -137,10 +140,11 @@ function dispatch(action: Action) {
   })
 }
 
-type Toast = Omit<ToasterToast, "id">
+type Toast = Omit<ToasterToast, "id"> & { duration?: number }
 
-function toast({ ...props }: Toast) {
+function toast({ duration, ...props }: Toast) {
   const id = genId()
+  const durationMs = duration ?? TOAST_DURATION_MS
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -160,6 +164,10 @@ function toast({ ...props }: Toast) {
       },
     },
   })
+
+  if (durationMs > 0) {
+    setTimeout(() => dismiss(), durationMs)
+  }
 
   return {
     id: id,

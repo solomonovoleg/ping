@@ -35,6 +35,34 @@
 }
 
 :root {
+  /* ========== UIX design tokens (proportions & consistency) ========== */
+  /* Spacing scale — use for padding/gap/margin to keep rhythm (e.g. gap-[var(--uix-space-4)]) */
+  --uix-space-1: 4px;
+  --uix-space-2: 8px;
+  --uix-space-3: 12px;
+  --uix-space-4: 16px;
+  --uix-space-5: 24px;
+  --uix-space-6: 32px;
+  --uix-space-7: 48px;
+  --uix-space-8: 64px;
+  /* Typography roles — use for consistent hierarchy (see docs/UIX_AUDIT.md) */
+  --uix-text-title: 1.5rem;        /* 24px — screen title */
+  --uix-text-list-primary: 1rem;  /* 16px — list item main */
+  --uix-text-list-secondary: 0.875rem; /* 14px — list item secondary */
+  --uix-text-caption: 0.75rem;     /* 12px — time, hints */
+  --uix-text-input: 1.0625rem;    /* 17px — iOS-style input */
+  --uix-touch-min: 44px;          /* minimum touch target (a11y) */
+  --uix-nav-height: 3.5rem;       /* высота нижней навигации */
+  --uix-nav-bottom: calc(var(--uix-nav-height) + env(safe-area-inset-bottom, 0px));
+
+  /* Motion — единые длительность и easing (Design System) */
+  --uix-duration-instant: 0ms;
+  --uix-duration-fast: 75ms;
+  --uix-duration-normal: 200ms;
+  --uix-duration-slow: 300ms;
+  --uix-easing-out: cubic-bezier(0.33, 1, 0.68, 1);
+  --uix-easing-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
   /* Apple/Native Inspired Light Theme */
   --background: 0 0% 98%; /* Very light grey */
   --foreground: 240 10% 3.9%;
@@ -65,6 +93,50 @@
   --ring: 211 100% 50%;
   
   --radius: 1rem;
+}
+
+/* ========== UIX utility classes (Design System) ========== */
+/* Контент: горизонтальный отступ от края экрана + safe-area (вырезы, островки) */
+.uix-content-x {
+  padding-left: max(var(--uix-space-4), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--uix-space-4), env(safe-area-inset-right, 0px));
+}
+
+/* Компактные отступы под список чатов (как в Telegram — ~5px от краёв) */
+.uix-content-x-tight {
+  padding-left: max(5px, env(safe-area-inset-left, 0px));
+  padding-right: max(5px, env(safe-area-inset-right, 0px));
+}
+
+/* Типографика по ролям — использовать вместо произвольных text-sm/text-base */
+.uix-text-title {
+  font-size: var(--uix-text-title);
+  font-weight: 700;
+  line-height: 1.25;
+}
+.uix-text-list-primary {
+  font-size: var(--uix-text-list-primary);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.uix-text-list-secondary {
+  font-size: var(--uix-text-list-secondary);
+  color: hsl(var(--muted-foreground));
+  line-height: 1.4;
+}
+.uix-text-caption {
+  font-size: var(--uix-text-caption);
+  color: hsl(var(--muted-foreground));
+  line-height: 1.3;
+}
+.uix-text-input {
+  font-size: var(--uix-text-input);
+  line-height: 1.4;
+}
+
+/* Строка списка: минимальная высота для касания */
+.uix-list-row {
+  min-height: var(--uix-touch-min);
 }
 
 .dark {
@@ -147,14 +219,73 @@
     @apply border-border outline-ring/50;
     -webkit-tap-highlight-color: transparent;
   }
+  /* Фиксируем страницу по ширине экрана; высота — 100% + 100dvh для корректного viewport на мобильных (динамический UI браузера) */
+  html {
+    height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
   body {
+    height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+    overflow-x: hidden;
+    max-width: 100%;
+    width: 100%;
+    min-width: 0;
     @apply bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary;
-    /* Prevent overscroll bounce on mac/ios to feel more native */
-    overscroll-behavior-y: none; 
+    overscroll-behavior: none;
+    position: fixed;
+    inset: 0;
+    touch-action: pan-x pan-y;
+  }
+  #root {
+    height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+    overflow-x: hidden;
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  /* На десктопе приложение всегда в мобильном формате — колонка 480px по центру */
+  @media (min-width: 481px) {
+    #root {
+      max-width: 480px;
+      box-shadow: 0 0 0 1px hsl(var(--border) / 0.2);
+    }
   }
 }
 
 @layer utilities {
+  /* Safe area: отступы под вырез/островок/статус-бар на iOS и Android */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pt-safe-offset-2 {
+    padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+  }
+  .pt-safe-offset-6 {
+    padding-top: calc(1.5rem + env(safe-area-inset-top, 0px));
+  }
+  .pb-safe-offset-4 {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Полноэкранный контейнер без наездов: ширина по viewport, учёт safe-area снизу под навбар */
+  .uix-screen {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
   /* Утилита для скрытия скроллбара, но сохранения возможности скроллинга */
   .hide-scrollbar {
     -ms-overflow-style: none !important;  /* IE and Edge */
@@ -187,4 +318,91 @@
 }
 .glass-panel {
   @apply bg-card/60 backdrop-blur-2xl border border-white/10 shadow-lg dark:border-white/5;
+}
+
+/* ========== Nav logo: пульсация, волны, переход в профиль (motion system) ========== */
+@keyframes nav-logo-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes nav-logo-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.92; }
+}
+@keyframes nav-logo-wave {
+  0% { transform: scale(0.85); opacity: 0.35; }
+  100% { transform: scale(2); opacity: 0; }
+}
+
+.nav-logo-btn {
+  animation: nav-logo-float 2.8s ease-in-out infinite;
+}
+.nav-logo-pulse {
+  animation: nav-logo-pulse 2s ease-in-out infinite;
+}
+.nav-logo-btn::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.2) 0%, transparent 70%);
+  animation: nav-logo-wave 2.2s ease-out infinite;
+  pointer-events: none;
+}
+.nav-logo-btn::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.15) 0%, transparent 70%);
+  animation: nav-logo-wave 2.2s ease-out infinite 0.6s;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-logo-btn {
+    animation: none;
+  }
+  .nav-logo-pulse {
+    animation: none;
+  }
+  .nav-logo-btn::before,
+  .nav-logo-btn::after {
+    animation: none;
+    display: none;
+  }
+}
+
+/* Логотип на экране входа: плавное появление + лёгкое плавание вверх-вниз */
+@keyframes login-logo-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes login-logo-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.login-logo-wrap {
+  animation:
+    login-logo-fade-in 0.7s ease-out forwards,
+    login-logo-float 2.6s ease-in-out 0.7s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-logo-wrap {
+    animation: login-logo-fade-in 0.5s ease-out forwards;
+  }
+}
+
+/* Закреплённый чат (AI OVER): акцентная полоска с лёгким шиммером */
+@keyframes pinned-accent-shine {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+.pinned-chat-accent {
+  animation: pinned-accent-shine 2.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pinned-chat-accent {
+    animation: none;
+  }
 }

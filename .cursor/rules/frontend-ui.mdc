@@ -1,0 +1,63 @@
+---
+description: Фронтенд и UIX — React, компоненты, анимации, доступность
+globs: client/src/**/*.tsx,client/src/**/*.ts
+alwaysApply: false
+---
+
+# Фронтенд и UIX (React, Vite, wouter)
+
+## Стек
+
+- React 19, TypeScript, Vite
+- Маршрутизация: wouter (не Next.js)
+- Стили: Tailwind CSS 4, классы из дизайн-системы (--uix-*)
+- UI-примитивы: Radix UI, shadcn-подобные компоненты в `client/src/components/ui/`
+- Анимации: Framer Motion; константы из `@/lib/motion`
+- Нативное: Capacitor (хаптик, камера, пуш) через `@/lib/capacitor-native`
+
+## Компоненты и паттерны
+
+### Списки и экраны
+- Список без данных: всегда `ListEmptyState` (иконка, title, description, опционально actionLabel + onAction). Не произвольный текст по центру.
+- Загрузка списка: скелетоны в том же формате, что и контент (как в Chats). Один компонент `Skeleton` из `@/components/ui/skeleton`.
+- Ошибка загрузки: блок с текстом и кнопкой «Повторить», либо тост при мутации.
+
+### Кнопки и отклик
+- Интерактивные элементы: минимум высота/область касания `min-h-[var(--uix-touch-min)]`.
+- Кнопки с иконкой без подписи: `aria-label` с осмысленным текстом.
+- Tap-отклик: использовать `TapScaleButton` / `TapScaleDiv` из `@/components/ui/tap-scale` где нужен scale + опционально haptic. Не дублировать свои whileTap если уже есть в TapScale.
+
+### Модалки и переходы
+- Появление/исчезновение: Framer Motion `AnimatePresence` + `motion` с `initial`/`animate`/`exit`. Длительности из `@/lib/motion` (DURATION_NORMAL_MS, EASING_OUT).
+- Модалки: overlay + панель; exit — вниз + fade, не резкое исчезновение.
+
+### Формы и ввод
+- Ошибки валидации: под полем или тост, единый стиль (например FormError, destructive toast).
+- Отправка: блокировать повторную отправку (disabled или loading), показывать тост при ошибке с текстом от сервера или «Не удалось сохранить».
+
+## Анимации
+
+- Микро (кнопка, строка списка): 100–200 ms, только transform/opacity.
+- Появление блока (тост, модалка): 200–300 ms, easing из motion.ts.
+- Перед добавлением анимации: проверять `usePrefersReducedMotion()` и при true — только короткий fade или без анимации.
+
+## Сеть и данные
+
+- API: `apiFetch` из `@/lib/api-base` (уже credentials, auth headers). Ошибки обрабатывать, не оставлять пустой catch в критичных местах.
+- React Query: для списков использовать queryKey и invalidateQueries при реальном обновлении (например ping:chat-list-update → invalidate ["chats"]).
+
+## Файловая структура
+
+- Страницы: `client/src/pages/` (PascalCase, default export).
+- Компоненты: `client/src/components/`, общие UI в `components/ui/`.
+- Хуки: `client/src/hooks/`, API/утилиты в `client/src/lib/`.
+- Константы движения и общие числа: выносить в `@/lib/motion` или в константы рядом с компонентом.
+
+## Чего избегать
+
+- Магических чисел для длительностей анимаций — только из motion.ts.
+- Разных паттернов пустого состояния на разных экранах — один ListEmptyState.
+- Кнопок без отклика на тап (хотя бы scale или визуальное состояние).
+- Ошибок API без обратной связи пользователю в критичных сценариях (логин, отправка сообщения, сохранение профиля).
+
+Референс по полировке: `docs/UIX_SPECIALIST_GUIDE.md`.

@@ -14,12 +14,21 @@ interface StoryViewerProps {
   stories: Story[];
   initialIndex?: number;
   onClose: () => void;
+  /** Вызывается при показе сториз (для записи просмотра). Передаётся id текущего сториз. */
+  onStoryView?: (storyId: string) => void;
 }
 
-export default function StoryViewer({ stories, initialIndex = 0, onClose }: StoryViewerProps) {
+export default function StoryViewer({ stories, initialIndex = 0, onClose, onStoryView }: StoryViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+
+  useEffect(() => {
+    const s = stories[currentIndex];
+    if (s && onStoryView && typeof s.id === "string" && s.id.length > 20) {
+      onStoryView(s.id);
+    }
+  }, [currentIndex, stories, onStoryView]);
 
   // Auto-advance stories
   useEffect(() => {
@@ -37,7 +46,7 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
             return 0;
           } else {
             clearInterval(timer);
-            onClose();
+            onClose?.();
             return 100;
           }
         }
@@ -54,7 +63,7 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
       setCurrentIndex((c) => c + 1);
       setProgress(0);
     } else {
-      onClose();
+      onClose?.();
     }
   };
 
@@ -115,10 +124,10 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <button className="p-1 hover:bg-white/20 rounded-full transition-colors">
+          <button type="button" className="p-1 hover:bg-white/20 rounded-full transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center" aria-label="Ещё">
             <MoreHorizontal className="w-6 h-6" />
           </button>
-          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-full transition-colors">
+          <button type="button" onClick={() => onClose?.()} className="p-1 hover:bg-white/20 rounded-full transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center" aria-label="Закрыть">
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -142,7 +151,7 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
       </div>
 
       {/* Footer Area */}
-      <div className="absolute bottom-0 inset-x-0 pb-safe-offset-4 pt-8 px-4 flex items-center gap-4 bg-gradient-to-t from-black/80 to-transparent z-50">
+      <div className="absolute bottom-0 inset-x-0 pt-8 px-4 pb-[max(var(--uix-space-4),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))] flex items-center gap-4 bg-gradient-to-t from-black/80 to-transparent z-50">
         <div className="flex-1 relative">
           <input 
             type="text" 
@@ -151,10 +160,10 @@ export default function StoryViewer({ stories, initialIndex = 0, onClose }: Stor
             onClick={(e) => e.stopPropagation()}
           />
         </div>
-        <button className="p-3 rounded-full hover:bg-white/20 transition-colors flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="p-3 rounded-full hover:bg-white/20 transition-colors flex-shrink-0 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center" onClick={(e) => e.stopPropagation()} aria-label="Нравится">
           <Heart className="w-7 h-7" />
         </button>
-        <button className="p-3 rounded-full hover:bg-white/20 transition-colors flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="p-3 rounded-full hover:bg-white/20 transition-colors flex-shrink-0 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center" onClick={(e) => e.stopPropagation()} aria-label="Отправить ответ">
           <Send className="w-7 h-7" />
         </button>
       </div>

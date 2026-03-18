@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PING</string>
+    <string name="title_activity_main">PING</string>
+    <string name="package_name">ru.pingmoot.app</string>
+    <string name="custom_url_scheme">ru.pingmoot.app</string>
+</resources>

@@ -1,27 +1,38 @@
 import { LayoutDashboard, Plus, Star, Clock, ChevronLeft } from "lucide-react";
 import { useLocation } from "wouter";
+import { TapScaleButton } from "@/components/ui/tap-scale";
 
 export default function Board() {
   const [, setLocation] = useLocation();
 
   return (
-    <div className="flex h-full w-full justify-center bg-secondary/30">
-      <div className="w-full h-full flex flex-col bg-background overflow-y-auto pb-24 sm:pb-28">
+    <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden justify-center bg-secondary/30">
+      <div className="w-full max-w-full min-w-0 h-full flex flex-col bg-background overflow-y-auto overflow-x-hidden pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
         
         {/* Header */}
-        <div className="px-4 pt-6 pb-4 glass z-10 sticky top-0 flex justify-between items-center">
+        <div className="uix-content-x pt-6 pb-4 glass z-10 sticky top-0 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <button 
+            <TapScaleButton
+              type="button"
               onClick={() => setLocation("/")}
-              className="p-2 -ml-2 rounded-full hover:bg-secondary transition-colors"
+              haptic
+              subtle
+              className="p-2 -ml-2 rounded-full hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+              aria-label="Назад"
             >
               <ChevronLeft className="w-6 h-6" />
-            </button>
-            <h1 className="text-2xl font-bold tracking-tight">Борд</h1>
+            </TapScaleButton>
+            <h1 className="uix-text-title">Борд</h1>
           </div>
-          <button className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+          <TapScaleButton
+            type="button"
+            haptic
+            subtle
+            className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+            aria-label="Добавить"
+          >
             <Plus className="w-5 h-5" />
-          </button>
+          </TapScaleButton>
         </div>
 
         {/* Content */}

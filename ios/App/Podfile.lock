@@ -1,0 +1,40 @@
+PODS:
+  - Capacitor (8.2.0):
+    - CapacitorCordova
+  - CapacitorCamera (8.0.2):
+    - Capacitor
+  - CapacitorCordova (8.2.0)
+  - CapacitorHaptics (7.0.4):
+    - Capacitor
+  - CapacitorPushNotifications (8.0.2):
+    - Capacitor
+
+DEPENDENCIES:
+  - "Capacitor (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
+  - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorHaptics (from `../../node_modules/@capacitor/haptics`)"
+  - "CapacitorPushNotifications (from `../../node_modules/@capacitor/push-notifications`)"
+
+EXTERNAL SOURCES:
+  Capacitor:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorCamera:
+    :path: "../../node_modules/@capacitor/camera"
+  CapacitorCordova:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorHaptics:
+    :path: "../../node_modules/@capacitor/haptics"
+  CapacitorPushNotifications:
+    :path: "../../node_modules/@capacitor/push-notifications"
+
+SPEC CHECKSUMS:
+  Capacitor: 49a454e1cdbd520bc106a220adca7913536a4933
+  CapacitorCamera: 66bb9c4ea1703a5acf2a328bac0e613d278c399c
+  CapacitorCordova: a9ac88d84a1f5280f33b349fe50fce1902683ac0
+  CapacitorHaptics: bf3f58fc5dc7975a7ad5b7c725e5bb5bd435ae81
+  CapacitorPushNotifications: 5a1de4191a9fdbeacc84907313eede0bd59d2eb0
+
+PODFILE CHECKSUM: 6df52a0ce8b46e804a461b5b88191eb1262b0788
+
+COCOAPODS: 1.16.2

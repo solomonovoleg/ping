@@ -6,6 +6,7 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
 
 export default defineConfig({
+  base: "/",
   plugins: [
     react(),
     runtimeErrorOverlay(),
@@ -36,9 +37,29 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
+  define: {
+    __BUILD_VERSION__: JSON.stringify(
+      process.env.BUILD_VERSION || "0"
+    ),
+  },
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (id.includes("node_modules")) {
+            if (id.includes("framer-motion")) return "framer-motion";
+            if (id.includes("recharts")) return "recharts";
+            if (id.includes("lucide-react")) return "lucide";
+          }
+        },
+        chunkFileNames: "assets/[name]-[hash].js",
+        entryFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
+      },
+    },
+    chunkSizeWarningLimit: 600,
   },
   server: {
     host: "0.0.0.0",

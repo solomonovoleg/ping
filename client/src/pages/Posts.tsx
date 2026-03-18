@@ -1,9 +1,23 @@
-import { useState } from "react";
-import { Heart, MessageSquare, Share2, MoreHorizontal, Bookmark, Plus, PenSquare, Eye } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2 } from "lucide-react";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
+import { useAuth } from "@/contexts/AuthContext";
+import { UserAvatar } from "@/components/UserAvatar";
+import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, type FeedPost, type ReactionUser } from "@/lib/posts";
+import { PostMedia } from "@/components/PostMedia";
+import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
+import { useToast } from "@/hooks/use-toast";
+import { resolveUrl } from "@/lib/api-base";
+import { fetchStoriesFeed, recordStoryView } from "@/lib/stories";
+import { LoadingProgress } from "@/components/ui/loading-progress";
+import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
+import { PageTitle } from "@/components/PageTitle";
+import { PullToRefresh } from "@/components/PullToRefresh";
+import { ShatterEffect } from "@/components/ShatterEffect";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -11,89 +25,206 @@ import avatarDesign from "@/assets/images/avatar-design.png";
 import avatarMom from "@/assets/images/avatar-mom.png";
 import avatarNews from "@/assets/images/avatar-news.png";
 
-// Mock Data
-const STORIES = [
-  { id: 'me', name: 'Моя история', avatar: avatarMain, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", views: 128 },
-  { id: 1, name: 'Алиса', avatar: avatarAlisa, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&h=1200&fit=crop", time: "1ч", isTrending: true },
-  { id: 2, name: 'Мама', avatar: avatarMom, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=800&h=1200&fit=crop", time: "3ч" },
-  { id: 3, name: 'Design', avatar: avatarDesign, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&h=1200&fit=crop", time: "5ч" },
-  { id: 4, name: 'Новости', avatar: avatarNews, isMe: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&h=1200&fit=crop", time: "8ч", isTrending: true },
+const OTHER_STORIES = [
+  { id: 1, name: "Алиса", avatar: avatarAlisa, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=800&h=1200&fit=crop", time: "1ч", isTrending: true },
+  { id: 2, name: "Мама", avatar: avatarMom, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1490818387583-1baba5e638ce?w=800&h=1200&fit=crop", time: "3ч" },
+  { id: 3, name: "Design", avatar: avatarDesign, isMe: false, hasUnseen: true, image: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=800&h=1200&fit=crop", time: "5ч" },
+  { id: 4, name: "Новости", avatar: avatarNews, isMe: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&h=1200&fit=crop", time: "8ч", isTrending: true },
 ];
 
-const POSTS = [
-  {
-    id: 1,
-    creatorId: "design_ux",
-    channelName: "Design & UX",
-    channelAvatar: "https://images.unsplash.com/photo-1561070791-2526d30994b5?w=150&h=150&fit=crop",
-    time: "2 часа назад",
-    text: "Новые тренды в UI дизайне 2024 года. Glassmorphism возвращается, но в более утонченном виде с акцентом на типографику и микро-взаимодействия.",
-    image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop",
-    reactions: [{ emoji: "❤️", count: 45 }, { emoji: "🔥", count: 23 }, { emoji: "👏", count: 12 }],
-    comments: 18,
-  },
-  {
-    id: 2,
-    creatorId: "tech_news",
-    channelName: "Tech News Daily",
-    channelAvatar: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=150&h=150&fit=crop",
-    time: "4 часа назад",
-    text: "Анонсирован новый фреймворк для создания невероятно быстрых веб-приложений. Скорость загрузки увеличена в 3 раза по сравнению с React.",
-    image: null,
-    reactions: [{ emoji: "👍", count: 120 }, { emoji: "💯", count: 34 }],
-    comments: 142,
-  },
-  {
-    id: 3,
-    creatorId: "nature",
-    channelName: "Nature Photography",
-    channelAvatar: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=150&h=150&fit=crop",
-    time: "Вчера",
-    text: "Закат в горах Швейцарии. Невероятная палитра цветов.",
-    image: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=1000&auto=format&fit=crop",
-    reactions: [{ emoji: "❤️", count: 850 }, { emoji: "😍", count: 120 }],
-    comments: 56,
-  }
-];
+const EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
 
 export default function Posts() {
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
-  const [activeCommentPostId, setActiveCommentPostId] = useState<number | null>(null);
-  const [userReactions, setUserReactions] = useState<Record<number, string>>({});
-  const [showReactionPicker, setShowReactionPicker] = useState<number | null>(null);
-  
-  const EMOJIS = ['👍', '❤️', '🔥', '👏', '😂', '🤔'];
-  
-  const storiesForViewer = STORIES.map(s => ({
-    id: s.id,
-    image: s.image,
-    userName: s.name,
-    userAvatar: s.avatar,
-    time: s.time
-  }));
+  const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
+  const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
+  const [sharePostId, setSharePostId] = useState<string | null>(null);
+  const [menuPostId, setMenuPostId] = useState<string | null>(null);
+  const [editPost, setEditPost] = useState<FeedPost | null>(null);
+  const [editText, setEditText] = useState("");
+  const [editImageUrl, setEditImageUrl] = useState("");
+  const [shatteringPostIds, setShatteringPostIds] = useState<Set<string>>(new Set());
+  const [hashtagFilter, setHashtagFilter] = useState<string | null>(null);
+  const [expandedPostIds, setExpandedPostIds] = useState<Set<string>>(new Set());
+  const feedScrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+
+  const POST_TEXT_PREVIEW_CHARS = 200;
+  const togglePostExpand = (postId: string) => {
+    setExpandedPostIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
+  };
+
+  const FEED_PAGE_SIZE = 20;
+  const feedOpts = hashtagFilter ? { hashtag: hashtagFilter } : undefined;
+  const {
+    data: feedData,
+    isLoading,
+    isError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["posts", "feed", hashtagFilter ?? ""],
+    queryFn: ({ pageParam }) => fetchFeed(FEED_PAGE_SIZE, pageParam as number, feedOpts),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (!Array.isArray(lastPage)) return undefined;
+      return lastPage.length < FEED_PAGE_SIZE ? undefined : allPages.length * FEED_PAGE_SIZE;
+    },
+  });
+  const feedPosts: FeedPost[] = Array.isArray(feedData?.pages) ? feedData.pages.flat() : [];
+
+  // Подгрузка следующей страницы при скролле до конца списка (после useInfiniteQuery)
+  useEffect(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) fetchNextPage();
+      },
+      { rootMargin: "200px", threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // Сохранение и восстановление позиции скролла ленты
+  useEffect(() => {
+    const key = "ping-feed-scroll-y";
+    const el = feedScrollRef.current;
+    if (el) {
+      const saved = Number(sessionStorage.getItem(key) ?? "0");
+      if (saved > 0) {
+        requestAnimationFrame(() => {
+          el.scrollTo({ top: saved });
+        });
+      }
+    }
+    return () => {
+      const current = feedScrollRef.current?.scrollTop ?? 0;
+      sessionStorage.setItem(key, String(current));
+    };
+  }, []);
+
+  const { data: contactsForShare = [] } = useQuery({
+    queryKey: ["contacts", "list"],
+    queryFn: listContactsWithProfiles,
+    enabled: sharePostId !== null,
+  });
+
+  const { data: storiesFeed = [], isLoading: storiesLoading, isError: storiesError, refetch: refetchStories } = useQuery({
+    queryKey: ["stories", "feed"],
+    queryFn: fetchStoriesFeed,
+    enabled: !!user,
+  });
+
+  const reactionMutation = useMutation({
+    mutationFn: async ({ postId, emoji }: { postId: string; emoji: string | null }) => {
+      if (emoji) await addReaction(postId, emoji);
+      else await removeReaction(postId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+    },
+  });
+
+  const updatePostMutation = useMutation({
+    mutationFn: ({ postId, text, imageUrl, mediaUrls }: { postId: string; text: string; imageUrl?: string | null; mediaUrls?: string[] | null }) =>
+      updatePost(postId, { text, imageUrl, mediaUrls }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      setEditPost(null);
+      toast({ title: "Пост обновлён" });
+    },
+    onError: (e) => toast({ title: e instanceof Error ? e.message : "Ошибка", variant: "destructive" }),
+  });
+
+  const deletePostMutation = useMutation({
+    mutationFn: (postId: string) => deletePost(postId),
+    onSuccess: () => { /* инвалидация и тост — после анимации рассыпания в onComplete */ },
+    onError: (e, postId) => {
+      setShatteringPostIds((s) => {
+        const n = new Set(s);
+        n.delete(postId);
+        return n;
+      });
+      toast({ title: e instanceof Error ? e.message : "Ошибка удаления", variant: "destructive" });
+    },
+  });
+
+  const currentUserName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль" : "Профиль";
+  const myStoryAvatar = user?.avatarUrl ? resolveUrl(user.avatarUrl) : avatarMain;
+
+  const storyCircles = !user || (storiesError && storiesFeed.length === 0)
+    ? []
+    : storiesFeed.length > 0
+    ? storiesFeed.map((a) => {
+        const author = a.author ?? { id: a.authorId, publicId: 0, displayName: null, avatarUrl: null };
+        const stories = Array.isArray(a.stories) ? a.stories : [];
+        return {
+          id: a.authorId,
+          name: author.displayName || `ID ${author.publicId}`,
+          avatar: author.avatarUrl ? resolveUrl(author.avatarUrl) : avatarMain,
+          isMe: user ? a.authorId === user.id : false,
+          hasUnseen: true,
+          image: stories[0]?.mediaUrl ? resolveUrl(stories[0].mediaUrl) : "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop",
+          time: stories[0]?.createdAt ? formatPostTime(stories[0].createdAt) : "",
+          stories,
+          author,
+        };
+      })
+    : [
+        { id: "me", name: "Моя история", avatar: myStoryAvatar, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", views: 128, stories: [], author: null },
+        ...OTHER_STORIES.map((s) => ({ ...s, stories: [], author: null })),
+      ];
+
+  const getViewerStoriesForIndex = (idx: number) => {
+    const item = storyCircles[idx];
+    if (!item || !("stories" in item) || !Array.isArray(item.stories) || item.stories.length === 0) {
+      return [{ id: item?.id ?? idx, image: (item as { image?: string })?.image ?? "", userName: (item as { name?: string })?.name ?? "", userAvatar: (item as { avatar?: string })?.avatar ?? "", time: (item as { time?: string })?.time ?? "" }];
+    }
+    const author = (item as { author?: { displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
+    const name = author?.displayName || (item as { name?: string }).name || `ID ${author?.publicId ?? ""}`;
+    const avatar = author?.avatarUrl ? resolveUrl(author.avatarUrl) : (item as { avatar?: string }).avatar ?? avatarMain;
+    return (item.stories as { id: string; mediaUrl: string; createdAt: string }[]).map((s) => ({
+      id: s.id,
+      image: resolveUrl(s.mediaUrl),
+      userName: name,
+      userAvatar: avatar,
+      time: formatPostTime(s.createdAt),
+    }));
+  };
 
   return (
-    <div className="flex h-full w-full justify-center bg-background">
-      <div className="w-full h-full flex flex-col bg-background">
+    <div className="flex flex-1 min-h-0 h-full w-full max-w-full min-w-0 overflow-x-hidden justify-center bg-background">
+      <PageTitle title="Лента" />
+      <div className="w-full max-w-full min-w-0 flex-1 min-h-0 flex flex-col bg-background">
         
         {/* Header */}
-        <div className="px-4 py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
-          <div className="w-1/3">
-            <h1 className="text-2xl font-bold tracking-tight">Лента</h1>
-          </div>
-          
-          <div className="w-1/3 flex justify-center">
-            <button 
+        <div className="uix-content-x-tight py-4 glass z-10 sticky top-0 relative flex items-center gap-2">
+          <span className="uix-text-title font-semibold flex-shrink-0">Лента</span>
+          <div className="flex-1 min-w-0 flex justify-center">
+            <button
               onClick={() => setLocation("/profile/me")}
-              className="font-semibold text-[17px] hover:text-primary transition-colors px-3 py-1 rounded-full hover:bg-primary/5 active:bg-primary/10 whitespace-nowrap"
+              title={currentUserName}
+              className="font-semibold text-[17px] hover:text-primary transition-colors px-3 py-1 rounded-full hover:bg-primary/5 active:bg-primary/10 truncate max-w-full"
             >
-              Алексей Иванов
+              {currentUserName}
             </button>
           </div>
-          
-          <div className="w-1/3 flex justify-end">
-            <button 
+          <div className="flex-shrink-0">
+            <button
               onClick={() => setLocation("/create-post")}
               className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
             >
@@ -103,41 +234,55 @@ export default function Posts() {
         </div>
 
         {/* Feed Content */}
-        <div className="flex-1 overflow-y-auto pb-24 sm:pb-28">
+        <PullToRefresh
+          onRefresh={() => { refetch(); refetchStories(); }}
+          showScrollToTop
+          className="min-w-0"
+          scrollRef={feedScrollRef}
+        >
           
           {/* Stories Section */}
           <div className="py-4 border-b border-border/50 bg-background/50">
-            <div className="flex gap-4 overflow-x-auto hide-scrollbar px-4">
-              {STORIES.map((story, idx) => (
+            <div className="flex gap-4 overflow-x-auto hide-scrollbar uix-content-x items-center">
+              {storiesError && storyCircles.length === 0 && user && (
+                <button
+                  type="button"
+                  onClick={() => refetchStories()}
+                  className="flex-shrink-0 px-3 py-2 rounded-xl bg-secondary text-sm font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Обновить сториз
+                </button>
+              )}
+              {storyCircles.map((story, idx) => (
                 <div 
-                  key={story.id} 
+                  key={String(story.id)} 
                   className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
                   onClick={() => setActiveStoryIndex(idx)}
                 >
                   <div className="relative">
                     <div className={cn(
                       "w-16 h-16 rounded-full p-[2px] transition-transform duration-200 group-active:scale-95",
-                      story.hasUnseen 
+                      (story as { hasUnseen?: boolean }).hasUnseen !== false
                         ? "bg-gradient-to-tr from-primary to-purple-500" 
                         : "bg-border"
                     )}>
                       <img 
-                        src={story.avatar} 
-                        alt={story.name} 
+                        src={(story as { avatar?: string }).avatar ?? avatarMain} 
+                        alt={(story as { name?: string }).name ?? ""} 
                         className="w-full h-full rounded-full object-cover border-2 border-background"
                       />
                     </div>
-                    {story.isMe && (
+                    {(story as { isMe?: boolean }).isMe && (
                       <div className="absolute bottom-0 right-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center border-2 border-background z-10">
                         <Plus className="w-3.5 h-3.5" />
                       </div>
                     )}
-                    {story.isTrending && (
+                    {"isTrending" in story && story.isTrending && (
                       <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-gradient-to-r from-orange-500 to-rose-500 text-white shadow-sm border-[1.5px] border-background px-1.5 py-0.5 rounded-md flex items-center gap-0.5 z-10 animate-[pulse_2s_ease-in-out_infinite]">
                         <span className="text-[9px] font-bold tracking-wide uppercase leading-none">HOT</span>
                       </div>
                     )}
-                    {story.views !== undefined && (
+                    {"views" in story && story.views !== undefined && (
                       <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-secondary text-secondary-foreground shadow-sm border border-background px-1.5 py-0.5 rounded-full flex items-center gap-1 z-10">
                         <Eye className="w-3 h-3 opacity-70" />
                         <span className="text-[10px] font-semibold leading-none">{story.views}</span>
@@ -146,112 +291,258 @@ export default function Posts() {
                   </div>
                   <span className={cn(
                     "text-[11px] font-medium text-foreground/80 max-w-[64px] truncate text-center",
-                    (story.isTrending || story.views !== undefined) ? "mt-1.5" : ""
+                    ("isTrending" in story && story.isTrending) || ("views" in story && story.views !== undefined) ? "mt-1.5" : ""
                   )}>
-                    {story.name}
+                    {(story as { name?: string }).name ?? ""}
                   </span>
                 </div>
               ))}
             </div>
           </div>
 
+          {hashtagFilter && (
+            <div className="uix-content-x-tight py-2 flex items-center gap-2 border-b border-border/50 bg-secondary/20">
+              <span className="text-sm text-muted-foreground">Хештег:</span>
+              <span className="font-medium text-primary">#{hashtagFilter}</span>
+              <button
+                type="button"
+                onClick={() => setHashtagFilter(null)}
+                className="ml-2 text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Сбросить
+              </button>
+            </div>
+          )}
+
           {/* Posts List */}
-          <div className="flex flex-col">
-            {POSTS.map((post) => (
+          <div className="flex flex-col min-h-[40vh]">
+            {isLoading ? (
+              <LoadingProgress loading minHeight="280px" className="rounded-lg">
+                <div className="min-h-[280px]" />
+              </LoadingProgress>
+            ) : isError ? (
+              <ErrorWithRetry
+                title="Не удалось загрузить ленту"
+                description="Проверьте интернет и попробуйте снова"
+                onRetry={() => refetch()}
+              />
+            ) : feedPosts.length === 0 ? (
+              <ListEmptyState
+                icon={PenSquare}
+                title="Пока нет постов"
+                description="Напишите первый пост — им поделятся в ленте"
+                actionLabel="Написать первый пост"
+                onAction={() => setLocation("/create-post")}
+              />
+            ) : (
+              feedPosts.map((post: FeedPost) => {
+                const isShattering = shatteringPostIds.has(post.id);
+                const safeText = post.text ?? "";
+                const authorPublicId = post.author?.publicId ?? post.authorId;
+                const latestComments = Array.isArray(post.latestComments) ? post.latestComments : [];
+                const latestTwoComments = latestComments
+                  .slice(0, 2)
+                  .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+                const article = (
               <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors">
-                
-                {/* Post Header */}
                 <div className="flex items-center justify-between mb-3">
-                  <div 
+                  <div
                     className="flex items-center gap-3 cursor-pointer group"
-                    onClick={() => setLocation(post.creatorId === "me" ? "/profile/me" : `/profile/${post.creatorId}`)}
+                    onClick={() => setLocation(post.authorId === user?.id ? "/profile/me" : `/profile/${authorPublicId}`)}
                   >
-                    <img 
-                      src={post.channelAvatar} 
-                      alt={post.channelName} 
-                      className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity"
+                    <UserAvatar
+                      avatarUrl={post.author?.avatarUrl ?? undefined}
+                      displayName={post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${authorPublicId}`}
+                      seed={String(post.authorId)}
+                      size={40}
+                      className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity flex-shrink-0"
                     />
-                    <div>
-                      <h3 className="font-semibold text-[15px] group-hover:text-primary transition-colors">{post.channelName}</h3>
-                      <p className="text-xs text-muted-foreground">{post.time}</p>
+                    <div className="min-w-0">
+                      <h3
+                        className="font-semibold text-[15px] group-hover:text-primary transition-colors truncate"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLocation(post.authorId === user?.id ? `/profile/me/post/${post.id}` : `/profile/${authorPublicId}/post/${post.id}`);
+                        }}
+                      >
+                        {post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${authorPublicId}`}
+                      </h3>
+                      <p
+                        className="text-xs text-muted-foreground cursor-pointer hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLocation(post.authorId === user?.id ? `/profile/me/post/${post.id}` : `/profile/${authorPublicId}/post/${post.id}`);
+                        }}
+                      >
+                        {formatPostTime(post.createdAt)}
+                      </p>
                     </div>
                   </div>
-                  <button className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary">
-                    <MoreHorizontal className="w-5 h-5" />
-                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuPostId(menuPostId === post.id ? null : post.id);
+                      }}
+                      aria-label="Меню поста"
+                    >
+                      <MoreHorizontal className="w-5 h-5" />
+                    </button>
+                    {post.authorId === user?.id && menuPostId === post.id && (
+                      <div className="absolute right-0 top-full mt-1 py-1 bg-background border border-border rounded-lg shadow-lg z-50 min-w-[160px]">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditPost(post);
+                            setEditText(post.text);
+                            setEditImageUrl(post.imageUrl ?? "");
+                            setMenuPostId(null);
+                          }}
+                        >
+                          <PenSquare className="w-4 h-4" />
+                          Редактировать
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-red-500/10 text-red-600 flex items-center gap-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm("Удалить пост?")) {
+                              setShatteringPostIds((s) => new Set(s).add(post.id));
+                              setMenuPostId(null);
+                              deletePostMutation.mutate(post.id);
+                            }
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Удалить пост
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Post Content */}
                 <div className="mb-3">
-                  <p className="text-[15px] leading-relaxed whitespace-pre-wrap">
-                    {post.text}
+                  <p
+                    className={cn(
+                      "text-[15px] leading-relaxed whitespace-pre-wrap",
+                      safeText.length > POST_TEXT_PREVIEW_CHARS && !expandedPostIds.has(post.id) && "line-clamp-4"
+                    )}
+                  >
+                    {safeText.split(/(#[a-zA-Zа-яёА-ЯЁ0-9_]+)/g).map((part, i) =>
+                      part.startsWith("#") ? (
+                        <button
+                          key={i}
+                          type="button"
+                          className="text-primary hover:underline font-medium"
+                          onClick={() => setHashtagFilter(part.slice(1).toLowerCase())}
+                        >
+                          {part}
+                        </button>
+                      ) : (
+                        part
+                      )
+                    )}
                   </p>
-                  
-                  {post.image && (
-                    <div className="mt-3 rounded-2xl overflow-hidden border border-border/50">
-                      <img 
-                        src={post.image} 
-                        alt="Post attachment" 
-                        className="w-full h-auto max-h-[400px] object-cover"
-                      />
-                    </div>
+                  {safeText.length > POST_TEXT_PREVIEW_CHARS && (
+                    <button
+                      type="button"
+                      className="text-[13px] text-primary font-medium mt-1 hover:underline"
+                      onClick={() => togglePostExpand(post.id)}
+                    >
+                      {expandedPostIds.has(post.id) ? "Свернуть" : "Ещё"}
+                    </button>
                   )}
+                  <div className="-mx-4">
+                    <PostMedia
+                      mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+                    />
+                  </div>
                 </div>
+
+                {latestTwoComments.length > 0 && (
+                  <div className="mb-2.5 flex flex-col gap-1.5">
+                    {latestTwoComments.map((comment) => (
+                      <button
+                        key={comment.id}
+                        type="button"
+                        onClick={() => setActiveCommentPostId(post.id)}
+                        className="w-full text-left rounded-xl border border-border/50 bg-secondary/35 px-2.5 py-1.5 hover:bg-secondary/50 transition-colors"
+                        aria-label={`Открыть комментарии к посту. Комментарий: ${comment.user}`}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[12px] font-medium text-foreground/90 truncate">{comment.user}</span>
+                          <span className="text-[11px] text-muted-foreground shrink-0">{formatPostTime(comment.createdAt)}</span>
+                        </div>
+                        <p className="text-[13px] leading-snug text-foreground/85 line-clamp-1 break-words">{comment.text}</p>
+                      </button>
+                    ))}
+                    {post.commentsCount > latestTwoComments.length && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveCommentPostId(post.id)}
+                        className="self-start text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        Ещё комментарии ({post.commentsCount})
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Post Actions */}
                 <div className="flex items-center justify-between pt-1">
                   <div className="flex items-center gap-2 relative">
                     {/* Reactions Pill */}
-                    <div 
+                    <div
+                      title={
+                        post.reactionUsers && Object.keys(post.reactionUsers).length > 0
+                          ? Object.entries(post.reactionUsers)
+                              .flatMap(([emoji, users]) =>
+                                (users as ReactionUser[]).map((u) =>
+                                  [emoji, [u.displayName, u.surname].filter(Boolean).join(" ") || "ID"].join(" ")
+                                )
+                              )
+                              .join("; ") || undefined
+                          : undefined
+                      }
                       className={cn(
                         "flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary transition-colors cursor-pointer border active:scale-95 select-none",
-                        userReactions[post.id]
-                          ? "bg-primary/10 border-primary/30 text-foreground" 
+                        (post.myReaction ?? null)
+                          ? "bg-primary/10 border-primary/30 text-foreground"
                           : "text-secondary-foreground hover:bg-secondary/80 border-border/30"
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (userReactions[post.id]) {
-                          // Remove reaction if already reacted
-                          const newReactions = {...userReactions};
-                          delete newReactions[post.id];
-                          setUserReactions(newReactions);
+                        if (post.myReaction) {
+                          reactionMutation.mutate({ postId: post.id, emoji: null });
                         } else {
-                          // Show picker if no reaction yet
                           setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
                         }
                       }}
                     >
-                      {/* Show existing reactions */}
-                      {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => {
-                        // If this is the emoji the user reacted with, don't show it here (it will be shown as the user's reaction)
-                        if (userReactions[post.id] === reaction.emoji) return null;
-                        
+                      {post.reactions?.map((reaction: { emoji: string; count: number }, i: number) => {
+                        if ((post.myReaction ?? null) === reaction.emoji) return null;
                         return (
                           <div key={i} className="flex items-center gap-1 pointer-events-none">
                             <span className="text-base leading-none">{reaction.emoji}</span>
                           </div>
                         );
                       })}
-                      
-                      {/* Show user's reaction if they have one */}
-                      {userReactions[post.id] && (
+                      {(post.myReaction ?? null) && (
                         <div className="flex items-center gap-1 pointer-events-none">
-                          <span className="text-base leading-none">{userReactions[post.id]}</span>
+                          <span className="text-base leading-none">{post.myReaction}</span>
                         </div>
                       )}
-                      
-                      {/* Total count */}
                       <span className="text-sm font-medium ml-1 pointer-events-none">
-                        {post.reactions.reduce((sum: number, r: {count: number, emoji: string}) => {
-                          // Don't double count if user reacted with an existing emoji
-                          if (userReactions[post.id] === r.emoji) return sum + r.count;
-                          return sum + r.count;
-                        }, 0) + (userReactions[post.id] && !post.reactions.find(r => r.emoji === userReactions[post.id]) ? 1 : 0)}
+                        {post.reactions?.reduce((sum: number, r: { count: number }) => sum + r.count, 0) ?? 0}
                       </span>
                     </div>
                     
-                    {/* Add Reaction Button */}
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
@@ -267,7 +558,6 @@ export default function Posts() {
                       <Plus className="w-4 h-4" />
                     </button>
                     
-                    {/* Reaction Picker Popup */}
                     {showReactionPicker === post.id && (
                       <div className="absolute bottom-full left-0 mb-2 bg-background/95 backdrop-blur-xl border border-border shadow-lg rounded-full px-3 py-2 flex items-center gap-2 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
                         {EMOJIS.map(emoji => (
@@ -275,10 +565,8 @@ export default function Posts() {
                             key={emoji}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setUserReactions(prev => ({
-                                ...prev,
-                                [post.id]: emoji
-                              }));
+                              import("@/lib/micro-feedback").then(({ triggerSuccessFeedback }) => triggerSuccessFeedback());
+                              reactionMutation.mutate({ postId: post.id, emoji });
                               setShowReactionPicker(null);
                             }}
                             className="text-2xl hover:scale-125 transition-transform active:scale-95"
@@ -289,35 +577,80 @@ export default function Posts() {
                       </div>
                     )}
                     
-                    <button 
+                    <button
                       onClick={() => setActiveCommentPostId(post.id)}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium border border-border/30 ml-auto"
                     >
                       <MessageSquare className="w-4 h-4" />
-                      {post.comments}
+                      {post.commentsCount}
                     </button>
+                    {(post.viewsCount ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Eye className="w-3.5 h-3.5" />
+                        {post.viewsCount}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1">
-                    <button className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                    <button
+                      type="button"
+                      className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      aria-label="Сохранить в избранное"
+                    >
                       <Bookmark className="w-5 h-5" />
                     </button>
-                    <button className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
+                    <button
+                      type="button"
+                      className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      onClick={(e) => { e.stopPropagation(); setMenuPostId(null); setSharePostId(post.id); }}
+                      aria-label="Поделиться"
+                    >
                       <Share2 className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
 
               </article>
-            ))}
+                );
+                if (isShattering) {
+                  return (
+                    <ShatterEffect
+                      key={post.id}
+                      onComplete={() => {
+                        setShatteringPostIds((s) => { const n = new Set(s); n.delete(post.id); return n; });
+                        queryClient.invalidateQueries({ queryKey: ["posts"] });
+                        toast({ title: "Пост удалён" });
+                      }}
+                      className="border-b border-border/50"
+                      shardClassName="bg-background"
+                    >
+                      {article}
+                    </ShatterEffect>
+                  );
+                }
+                return article;
+              })
+            )}
+            {feedPosts.length > 0 && (
+              <>
+                <div ref={loadMoreRef} className="h-2 flex-shrink-0" aria-hidden />
+                {isFetchingNextPage && (
+                  <div className="flex justify-center py-4">
+                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" aria-label="Загрузка" />
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        </div>
+        </PullToRefresh>
 
         {activeStoryIndex !== null && (
           <StoryViewer 
-            stories={storiesForViewer} 
-            initialIndex={activeStoryIndex} 
+            stories={getViewerStoriesForIndex(activeStoryIndex)} 
+            initialIndex={0} 
             onClose={() => setActiveStoryIndex(null)} 
+            onStoryView={recordStoryView}
           />
         )}
 
