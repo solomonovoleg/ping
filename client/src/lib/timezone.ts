@@ -1,8 +1,27 @@
 /**
- * Форматирование времени в локальной зоне устройства.
- * Используем getHours/getMinutes — они всегда возвращают локальное время,
+ * Утилиты времени: локальная зона клиента.
+ * Используем getHours/getMinutes/getDate — они всегда возвращают локальное время устройства,
  * в отличие от Intl в WebView/Capacitor, где timezone может быть UTC.
  */
+
+/** Текущее время клиента (локальная зона). */
+export function getClientNow(): Date {
+  return new Date();
+}
+
+/** Парсит ISO-строку от сервера. Сервер должен отправлять UTC (с Z или +offset). */
+export function parseServerTimestamp(iso: string): Date {
+  if (!iso || typeof iso !== "string") return new Date(NaN);
+  const value = iso.trim();
+  const hasExplicitTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
+  if (hasExplicitTz) return new Date(value);
+  const normalized = value.includes("T") ? value : value.replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(normalized)) {
+    return new Date(`${normalized}Z`);
+  }
+  return new Date(value);
+}
+
 export function formatTimeLocal(date: Date): string {
   const h = date.getHours();
   const m = date.getMinutes();
@@ -45,5 +64,21 @@ export function getDateFormatOptions(
 ): { day?: "numeric"; month?: "short" | "long"; year?: "numeric"; timeZone?: string } {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return { ...opts, ...(tz !== "UTC" && tz && { timeZone: tz }) };
+}
+
+/**
+ * Сравнивает время клиента с сервером (для отладки).
+ * Возвращает разницу в мс: положительная = клиент впереди.
+ */
+export async function getClientServerTimeDiff(): Promise<number> {
+  const { API } = await import("@/lib/api-base");
+  const clientBefore = Date.now();
+  const res = await fetch(`${API}/time`, { cache: "no-store", credentials: "include" });
+  const clientAfter = Date.now();
+  const data = (await res.json()) as { serverTimeMs: number };
+  const rtt = clientAfter - clientBefore;
+  const serverTime = data.serverTimeMs;
+  const clientMid = clientBefore + rtt / 2;
+  return clientMid - serverTime;
 }
 

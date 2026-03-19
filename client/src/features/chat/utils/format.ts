@@ -1,24 +1,12 @@
 /**
  * Форматирование времени и дат в чате.
- * Используем getHours/getMinutes/getDate — всегда локальное время устройства.
+ * Используем parseServerTimestamp и formatTimeLocal — всегда локальное время устройства.
  */
-import { formatTimeLocal, formatDateShortLocal, formatDateLongLocal } from "@/lib/timezone";
+import { formatTimeLocal, formatDateShortLocal, formatDateLongLocal, parseServerTimestamp } from "@/lib/timezone";
 
-/**
- * Нормализует дату от API:
- * - ISO с timezone (Z/+03:00) -> как есть;
- * - "YYYY-MM-DD HH:mm:ss(.sss)" или "YYYY-MM-DDTHH:mm:ss(.sss)" без timezone -> считаем UTC.
- */
+/** Парсит дату от API (сервер должен отправлять UTC в ISO). */
 export function parseMessageDate(raw: string): Date {
-  if (!raw) return new Date(NaN);
-  const value = String(raw).trim();
-  const hasExplicitTz = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
-  if (hasExplicitTz) return new Date(value);
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(normalized)) {
-    return new Date(`${normalized}Z`);
-  }
-  return new Date(value);
+  return parseServerTimestamp(raw);
 }
 
 export function formatMessageTime(iso: string): string {

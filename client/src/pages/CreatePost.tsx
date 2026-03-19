@@ -142,7 +142,10 @@ export default function CreatePost() {
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files?.length) return;
+    if (!files?.length) {
+      console.warn("[create-post] handleFileChange: no files selected");
+      return;
+    }
     e.target.value = "";
     const currentLen = mediaCountRef.current;
     const toAdd = Math.min(files.length, MAX_MEDIA - currentLen);
@@ -158,7 +161,10 @@ export default function CreatePost() {
     for (let i = 0; i < toAdd; i++) {
       const f = files[i];
       const kind = detectKindFromFile(f);
-      if (!kind) continue;
+      if (!kind) {
+        console.warn("[create-post] file rejected (unknown kind):", f.name, f.type);
+        continue;
+      }
       const aspectRatio = kind === "image" ? await getImageAspectFromFile(f) : null;
       acceptedFiles.push({ file: f, kind, aspectRatio });
     }
@@ -186,8 +192,11 @@ export default function CreatePost() {
         if (!payload) continue;
         const file = payload.file;
         try {
+          console.debug("[create-post] compressing…", file.name, file.type, file.size);
           const toUpload = file.type.startsWith("image/") ? await compressImage(file) : file;
+          console.debug("[create-post] uploading…", toUpload.name, toUpload.size);
           const url = await uploadPostMedia(toUpload);
+          console.debug("[create-post] uploaded:", url);
           setMediaItems((prev) =>
             prev.map((item) =>
               item.type === "uploading" && item.id === slot.id
@@ -196,6 +205,7 @@ export default function CreatePost() {
             )
           );
         } catch (err) {
+          console.error("[create-post] upload failed:", err);
           setMediaItems((prev) => prev.filter((item) => item.type !== "uploading" || item.id !== slot.id));
           toast({ title: err instanceof Error ? err.message : "Ошибка загрузки", variant: "destructive" });
         } finally {

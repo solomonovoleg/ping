@@ -5,7 +5,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { addMessageReaction, removeMessageReaction, saveMessage, unsaveMessage, isMessageSaved, sendMessage } from "@/lib/chat";
+import { triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { API, apiFetch } from "@/lib/api-base";
+import { playDeleteSound } from "@/lib/send-sound";
+import { parseMessageDate } from "../utils/format";
 import type { ApiMessage } from "../types";
 
 export type UseMessageActionsParams = {
@@ -30,6 +33,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressConsumedMessageIdRef = useRef<string | null>(null);
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDeleteRef = useRef<{ msg: ApiMessage; forEveryone: boolean } | null>(null);
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
@@ -44,6 +48,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const handleReaction = useCallback(
     async (msg: ApiMessage, emoji: string) => {
       if (reactionLockRef.current) return;
+      triggerLightHaptic();
       closeMenu();
       const previousMy = msg.myReaction ?? null;
       const isRemoving = previousMy === emoji;
@@ -89,13 +94,21 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
 
   const handleMessagePointerDown = useCallback((msg: ApiMessage, e: React.PointerEvent) => {
     if (msg.type === "system" || msg.type === "missed_call") return;
+    if (!msg?.id) return;
     clearLongPress();
     longPressConsumedMessageIdRef.current = null;
+    const x = typeof (e as { clientX?: number }).clientX === "number" ? (e as { clientX: number }).clientX : 0;
+    const y = typeof (e as { clientY?: number }).clientY === "number" ? (e as { clientY: number }).clientY : 0;
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
-      longPressConsumedMessageIdRef.current = msg.id;
-      setMessageMenu({ msg, x: e.clientX, y: e.clientY });
-    }, 800);
+      try {
+        longPressConsumedMessageIdRef.current = msg.id;
+        triggerLightHaptic();
+        setMessageMenu({ msg, x, y });
+      } catch (err) {
+        console.error("[useMessageActions] long-press menu open failed:", err);
+      }
+    }, 500);
   }, [clearLongPress]);
 
   const handleMessagePointerUp = useCallback(
@@ -108,7 +121,25 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     [clearLongPress]
   );
   const handleMessagePointerLeave = useCallback(() => clearLongPress(), [clearLongPress]);
-  const handleMessageContextMenu = useCallback((e: React.MouseEvent) => e.preventDefault(), []);
+  const handleMessageContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      try {
+        const row = (e.target as HTMLElement)?.closest?.("[data-message-id]");
+        if (!row) return;
+        const msgId = row.getAttribute("data-message-id");
+        if (!msgId) return;
+        const msg = messages.find((m) => m.id === msgId);
+        if (!msg || msg.type === "system" || msg.type === "missed_call") return;
+        triggerLightHaptic();
+        const rect = row.getBoundingClientRect();
+        setMessageMenu({ msg, x: rect.left, y: rect.bottom + 4 });
+      } catch (err) {
+        console.error("[useMessageActions] contextmenu menu open failed:", err);
+      }
+    },
+    [messages]
+  );
 
   const scrollToMessageAndHighlight = useCallback((messageId: string) => {
     const el = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -135,19 +166,26 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     closeMenu();
   }, [toast, closeMenu]);
 
-  const handleDelete = useCallback(async (msg: ApiMessage) => {
-    closeMenu();
-    try {
-      const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}`, { method: "DELETE" });
-      if (res.ok) setShatteringMessageId(msg.id);
-      else {
-        const data = await res.json().catch(() => ({}));
-        toast({ title: data.message ?? "Не удалось удалить", variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Ошибка", variant: "destructive" });
-    }
-  }, [chatId, closeMenu, toast]);
+  const restoreMessageInList = useCallback((removedMsg: ApiMessage) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((m) => parseMessageDate(m.createdAt).getTime() > parseMessageDate(removedMsg.createdAt).getTime());
+      next.splice(idx < 0 ? next.length : idx, 0, removedMsg);
+      return next;
+    });
+  }, []);
+
+  const handleDelete = useCallback(
+    async (msg: ApiMessage, forEveryone: boolean) => {
+      if (pendingDeleteRef.current) return;
+      triggerSelectionHaptic();
+      playDeleteSound();
+      closeMenu();
+      pendingDeleteRef.current = { msg, forEveryone };
+      setShatteringMessageId(msg.id);
+    },
+    [closeMenu]
+  );
 
   const handleEdit = useCallback((msg: ApiMessage) => {
     if (msg.type !== "text") return;
@@ -222,22 +260,35 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     closeMenu();
   }, [closeMenu]);
 
+  // Не вешаем listener сразу: на touch после long-press иногда приходит ещё один pointerdown
+  // или ref меню ещё не смонтирован — меню мгновенно закрывается или React/Framer ломаются.
   useEffect(() => {
     if (!messageMenu) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (messageMenuRef.current?.contains(e.target as Node)) return;
-      closeMenu();
+    let removed = false;
+    let handler: ((e: PointerEvent) => void) | null = null;
+    const attachDelayMs = 320;
+    const timer = window.setTimeout(() => {
+      if (removed) return;
+      handler = (e: PointerEvent) => {
+        if (messageMenuRef.current?.contains(e.target as Node)) return;
+        closeMenu();
+      };
+      document.addEventListener("pointerdown", handler, { capture: true });
+    }, attachDelayMs);
+    return () => {
+      removed = true;
+      window.clearTimeout(timer);
+      if (handler) document.removeEventListener("pointerdown", handler, { capture: true });
     };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [messageMenu, closeMenu]);
 
   useEffect(() => {
-    if (!messageMenu) return;
-    isMessageSaved(messageMenu.msg.id).then((saved) => {
-      setMessageSavedMap((prev) => ({ ...prev, [messageMenu.msg.id]: saved }));
-    });
-  }, [messageMenu?.msg.id]);
+    if (!messageMenu?.msg?.id) return;
+    const msgId = messageMenu.msg.id;
+    isMessageSaved(msgId).then((saved) => {
+      setMessageSavedMap((prev) => ({ ...prev, [msgId]: saved }));
+    }).catch(() => {});
+  }, [messageMenu?.msg?.id]);
 
   const { data: forwardChats = [] } = useQuery({
     queryKey: ["chats"],
@@ -266,10 +317,34 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const handleClearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   const handleShatterComplete = useCallback((messageId: string) => {
+    const pending = pendingDeleteRef.current;
+    if (!pending || pending.msg.id !== messageId) {
+      setShatteringMessageId(null);
+      return;
+    }
+    pendingDeleteRef.current = null;
+    const { msg, forEveryone } = pending;
     setMessages((prev) => prev.filter((m) => m.id !== messageId));
     setShatteringMessageId(null);
-    toast({ title: "Сообщение удалено" });
-  }, [setMessages, toast]);
+    const query = forEveryone ? "?for=everyone" : "?for=me";
+    void apiFetch(
+      `${API}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msg.id)}${query}`,
+      { method: "DELETE" }
+    )
+      .then(async (res) => {
+        if (res.ok) {
+          toast({ title: "Сообщение удалено" });
+          return;
+        }
+        restoreMessageInList(msg);
+        const data = await res.json().catch(() => ({}));
+        toast({ title: data.message ?? "Не удалось удалить", variant: "destructive" });
+      })
+      .catch(() => {
+        restoreMessageInList(msg);
+        toast({ title: "Ошибка", variant: "destructive" });
+      });
+  }, [setMessages, toast, chatId, restoreMessageInList]);
 
   return {
     messageMenu,

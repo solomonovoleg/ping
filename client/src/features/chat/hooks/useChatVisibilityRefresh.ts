@@ -1,5 +1,6 @@
 /**
- * При возврате на вкладку: отметить чат прочитанным и обновить данные чата.
+ * При возврате на вкладку: обновить данные чата.
+ * Прочитанность только через PUT /read с messageId (useMessageReadOnVisible) — иначе «две галочки» врут.
  */
 import { useEffect, useRef } from "react";
 import { API, apiFetch } from "@/lib/api-base";
@@ -19,15 +20,16 @@ export function useChatVisibilityRefresh(chatId: string, currentChatIdRef: { cur
         readAndRefreshRetryScheduledRef.current = true;
         readAndRefreshRetryRef.current = setTimeout(() => doReadAndRefresh(true), 2500);
       };
-      apiFetch(`${base}/read`, { method: "PUT" })
-        .then(() => {
-          setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
-        })
-        .catch(() => scheduleRetry());
+      const warnDev = (msg: string, err?: unknown) => {
+        if (import.meta.env.DEV) console.warn(`[chat] ${msg}`, err ?? "");
+      };
       apiFetch(base)
         .then((r) => r.ok ? r.json() : null)
         .then((data: ApiChat | null) => { if (data && data.id === currentChatIdRef.current) setChat(data); })
-        .catch(() => scheduleRetry());
+        .catch((err) => {
+          warnDev("chat refresh failed on visibilitychange, scheduling retry", err);
+          scheduleRetry();
+        });
     };
     const onVisible = () => {
       if (!chatId || document.visibilityState !== "visible") return;

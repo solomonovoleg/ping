@@ -1,6 +1,14 @@
 import { API, apiFetch } from "@/lib/api-base";
 
-export type MessageType = "text" | "system" | "voice" | "image" | "video" | "video_note";
+export type MessageType =
+  | "text"
+  | "system"
+  | "voice"
+  | "image"
+  | "video"
+  | "video_note"
+  | "post_share"
+  | "story_reply";
 
 export async function getChatMedia(
   chatId: string,

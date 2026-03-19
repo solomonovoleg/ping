@@ -51,6 +51,10 @@ export type ApiMessage = {
   myReaction?: string | null;
   createdAt: string;
   sendStatus?: "sending" | "sent" | "failed";
+  /** Server-provided translation (when per-chat translation is enabled). */
+  translatedText?: string | null;
+  /** Detected source language of the translation. */
+  detectedLang?: string | null;
 };
 
 export type MessageListItem =

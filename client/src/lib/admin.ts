@@ -175,6 +175,85 @@ export async function updateFeedAlgorithm(patch: Partial<FeedAlgoConfig>): Promi
   return res.json();
 }
 
+export type AdminParserUser = {
+  id: string;
+  publicId: number;
+  displayName: string | null;
+  surname: string | null;
+  phone: string;
+};
+
+export type ContentIngestConfig = {
+  enabled: boolean;
+  sourceName: string;
+  sourceUrl: string;
+  authorUserId: string | null;
+  intervalMinutes: number;
+  postsPerRun: number;
+  includeImage: boolean;
+  onlyWithImage: boolean;
+};
+
+export type ContentIngestStatus = {
+  isRunning: boolean;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastCreated: number;
+  lastSkipped: number;
+};
+
+export type ContentIngestState = {
+  config: ContentIngestConfig;
+  status: ContentIngestStatus;
+};
+
+export async function fetchContentIngestState(): Promise<ContentIngestState> {
+  const res = await adminFetch("/admin/content-ingest");
+  if (!res.ok) throw new Error("Ошибка загрузки настроек парсера");
+  return res.json();
+}
+
+export async function updateContentIngestConfig(patch: Partial<ContentIngestConfig>): Promise<ContentIngestState> {
+  const res = await adminFetch("/admin/content-ingest", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка сохранения настроек парсера");
+  }
+  return res.json();
+}
+
+export async function runContentIngestNow(): Promise<{
+  created: number;
+  skipped: number;
+  totalItems: number;
+  message: string;
+  state: ContentIngestState;
+}> {
+  const res = await adminFetch("/admin/content-ingest/run", {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка запуска парсера");
+  }
+  return res.json();
+}
+
+export async function fetchParserUsers(search?: string): Promise<AdminParserUser[]> {
+  const params = new URLSearchParams();
+  if (search?.trim()) params.set("search", search.trim());
+  params.set("limit", "80");
+  const res = await adminFetch(`/admin/content-ingest/users?${params.toString()}`);
+  if (!res.ok) throw new Error("Ошибка загрузки пользователей для автопостинга");
+  const data = await res.json().catch(() => ({ users: [] }));
+  return data.users ?? [];
+}
+
 export async function fetchAuditLog(opts: { limit?: number; offset?: number }): Promise<AuditLogEntry[]> {
   const params = new URLSearchParams();
   if (opts.limit != null) params.set("limit", String(opts.limit));

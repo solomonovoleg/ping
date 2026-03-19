@@ -21,10 +21,11 @@ import {
   Trash2,
   ExternalLink,
   Mail,
+  Users,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { logout, updateProfile, deleteAccount } from "@/lib/auth";
+import { logout, updateProfile, deleteAccount, patchVibeSettings } from "@/lib/auth";
 import { getPrivacyPolicyUrl, getSupportEmail } from "@/lib/legal";
 import {
   AlertDialog,
@@ -79,6 +80,19 @@ export default function Settings() {
     const handler = () => setMicroSoundsState(getMicroSoundsEnabled());
     window.addEventListener("ping:micro-sounds-change", handler);
     return () => window.removeEventListener("ping:micro-sounds-change", handler);
+  }, []);
+
+  useEffect(() => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const offset = -new Date().getTimezoneOffset() / 60;
+    const now = new Date();
+    console.log("[PING] Timezone check:", {
+      timeZone: tz,
+      offsetMinutes: new Date().getTimezoneOffset(),
+      offsetHours: offset,
+      iso: now.toISOString(),
+      local: `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
+    });
   }, []);
 
   const handleHideFromSearchChange = async (checked: boolean) => {
@@ -373,6 +387,59 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Chat Vibe / Atmosphere section */}
+          <div>
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
+              Атмосфера чата
+            </h3>
+            <div className="flex items-center justify-between gap-4 p-4 rounded-2xl border border-border/50 bg-card shadow-sm">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-medium text-foreground">Адаптивная атмосфера</p>
+                  <p className="text-xs text-muted-foreground">Фон чата подстраивается под настроение разговора</p>
+                </div>
+              </div>
+              <Switch
+                checked={user?.vibeEnabled ?? false}
+                onCheckedChange={async (checked) => {
+                  try {
+                    await patchVibeSettings({ vibeEnabled: checked });
+                    await refetch();
+                  } catch (e) {
+                    toast({ title: e instanceof Error ? e.message : "Не сохранено", variant: "destructive" });
+                  }
+                }}
+              />
+            </div>
+            {user?.vibeEnabled && (
+              <div className="flex items-center justify-between gap-4 p-4 rounded-2xl border border-border/50 bg-card shadow-sm mt-2">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                    <Users className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Делиться с собеседником</p>
+                    <p className="text-xs text-muted-foreground">Собеседник тоже увидит атмосферу</p>
+                  </div>
+                </div>
+                <Switch
+                  checked={user?.vibeShareWithPartner ?? false}
+                  onCheckedChange={async (checked) => {
+                    try {
+                      await patchVibeSettings({ vibeShareWithPartner: checked });
+                      await refetch();
+                    } catch (e) {
+                      toast({ title: e instanceof Error ? e.message : "Не сохранено", variant: "destructive" });
+                    }
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
           {/* Invite section */}
           <div>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
@@ -641,6 +708,12 @@ export default function Settings() {
                 <span className="text-sm tabular-nums">
                   {typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : "—"}
                 </span>
+              </div>
+              <div className="flex flex-col gap-1 p-3.5 pt-0 text-muted-foreground text-xs border-t border-border/30">
+                <span className="font-medium text-foreground/80">Часовой пояс (для проверки)</span>
+                <span>Зона: {Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
+                <span>Смещение: UTC{new Date().getTimezoneOffset() <= 0 ? "+" : ""}{-new Date().getTimezoneOffset() / 60}</span>
+                <span>Сейчас: {new Date().toISOString()} → локально {new Date().getHours().toString().padStart(2, "0")}:{new Date().getMinutes().toString().padStart(2, "0")}</span>
               </div>
             </div>
           </div>

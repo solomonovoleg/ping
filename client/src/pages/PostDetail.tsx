@@ -157,6 +157,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
           <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{post.text}</p>
           <PostMedia
             mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+            layout={post.mediaLayout ?? null}
           />
         </div>
 

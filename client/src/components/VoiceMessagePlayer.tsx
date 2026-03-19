@@ -102,10 +102,24 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
     if (!el) return;
     el.removeAttribute("src");
     el.load();
+    // Загружаем метаданные сразу, чтобы показать длительность до воспроизведения
+    if (src) {
+      el.src = src;
+      hasSetSrcRef.current = true;
+      // Safari/iOS иногда не подтягивает duration до явного load().
+      el.load();
+    }
     const onLoadedMetadata = () => {
       const d = el.duration;
       setDuration(Number.isFinite(d) && d >= 0 ? d : 0);
       setLoaded(true);
+    };
+    const onDurationChange = () => {
+      const d = el.duration;
+      if (Number.isFinite(d) && d > 0) {
+        setDuration(d);
+        setLoaded(true);
+      }
     };
     const onTimeUpdate = () => setCurrentTime(el.currentTime);
     const onEnded = () => {
@@ -146,11 +160,13 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
       void tryBlobFallback();
     };
     el.addEventListener("loadedmetadata", onLoadedMetadata);
+    el.addEventListener("durationchange", onDurationChange);
     el.addEventListener("timeupdate", onTimeUpdate);
     el.addEventListener("ended", onEnded);
     el.addEventListener("error", onError);
     return () => {
       el.removeEventListener("loadedmetadata", onLoadedMetadata);
+      el.removeEventListener("durationchange", onDurationChange);
       el.removeEventListener("timeupdate", onTimeUpdate);
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("error", onError);
@@ -257,7 +273,7 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
         className
       )}
     >
-      <audio ref={audioRef} preload="none" playsInline />
+      <audio ref={audioRef} preload="metadata" playsInline />
       <div
         className={cn(
           "flex items-center gap-2 rounded-xl px-2.5 py-2 min-h-[42px]",
@@ -328,7 +344,7 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
               title={`Скорость: ${speed}x. Тап — смена`}
               aria-label={`Скорость воспроизведения ${speed}x`}
             >
-              {loaded && Number.isFinite(duration) ? formatTime(duration) : "0:00"}
+              {Number.isFinite(duration) && duration > 0 ? formatTime(duration) : "0:00"}
               {speed !== 1 && <span className="ml-0.5 opacity-70 text-[10px]">·{speed}x</span>}
             </TapScaleButton>
           </div>

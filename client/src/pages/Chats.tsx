@@ -7,8 +7,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { GlobalSearch } from "@/components/GlobalSearch";
 import { UserAvatar } from "@/components/UserAvatar";
-import { useCallContext } from "@/contexts/CallContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useChatRealtime } from "@/features/chat/hooks/useChatRealtime";
 
 import { API, apiFetch } from "@/lib/api-base";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
@@ -36,7 +36,7 @@ import { searchMessages, type SearchMessageHit } from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER } from "@/lib/motion";
-import { formatTimeLocal, formatDateShortLocal } from "@/lib/timezone";
+import { formatTimeLocal, formatDateShortLocal, parseServerTimestamp } from "@/lib/timezone";
 
 type ApiChat = {
   id: string;
@@ -57,7 +57,7 @@ type ApiChat = {
 /** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM» (локальное время). */
 function formatLastSeen(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  const d = new Date(iso);
+  const d = parseServerTimestamp(iso);
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
   const diffMin = diffMs / 60000;
@@ -76,7 +76,7 @@ async function fetchChats(): Promise<ApiChat[]> {
 }
 
 function formatChatTime(createdAt: string): string {
-  const d = new Date(createdAt);
+  const d = parseServerTimestamp(createdAt);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
   if (diff < 86400000) return formatTimeLocal(d);
@@ -94,7 +94,7 @@ const DATE_SECTION_LABELS: Record<DateSectionKey, string> = {
 };
 
 function getDateSectionKey(iso: string): DateSectionKey {
-  const d = new Date(iso);
+  const d = parseServerTimestamp(iso);
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startOfYesterday = startOfToday - 86400000;
@@ -272,7 +272,7 @@ export default function Chats() {
   const typingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const voiceTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const { subscribeChat, subscribeTyping, subscribeVoiceRecording } = useCallContext();
+  const { subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate } = useChatRealtime();
 
   const { data: chats = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["chats"],
@@ -288,7 +288,7 @@ export default function Chats() {
       const chatId = chat.id;
       unsubs.push(
         subscribeChat(chatId, () => {
-          window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
+          notifyChatListUpdate();
         })
       );
       unsubs.push(
@@ -344,7 +344,7 @@ export default function Chats() {
       Object.values(voiceTimeoutsRef.current).forEach(clearTimeout);
       voiceTimeoutsRef.current = {};
     };
-  }, [chats, user?.id, subscribeChat, subscribeTyping, subscribeVoiceRecording]);
+  }, [chats, user?.id, subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate]);
 
   const { data: contactsList = [] } = useQuery({
     queryKey: ["contacts", "list"],

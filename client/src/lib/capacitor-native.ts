@@ -89,6 +89,26 @@ export function triggerSelectionHaptic(): void {
     .catch(() => {});
 }
 
+/**
+ * Сохранить медиа в галерею (нативно: iOS/Android).
+ * Принимает base64 data URL (data:image/jpeg;base64,... или data:video/mp4;base64,...).
+ * Возвращает true при успехе, false при ошибке или в вебе.
+ */
+export async function saveMediaToGallery(dataUrl: string, type: "image" | "video"): Promise<boolean> {
+  if (!isNative()) return false;
+  try {
+    const { Media } = await import("@capacitor-community/media");
+    if (type === "image") {
+      await Media.savePhoto({ path: dataUrl });
+    } else {
+      await Media.saveVideo({ path: dataUrl });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Открыть набор номера / звонок (нативно — intent DIAL). */
 export async function openDialer(phoneNumber: string): Promise<void> {
   const digits = phoneNumber.replace(/\D/g, "");

@@ -16,9 +16,12 @@ export type SpellError = {
 
 export type SpellCheckResult = { errors: SpellError[] };
 
+const CYRILLIC_RE = /[\u0400-\u04FF]/;
+
 /** Вызов API. При ошибке возвращает пустой массив — не бросает исключение. */
 export async function checkSpelling(text: string): Promise<SpellError[]> {
   if (!text || text.trim().length < 2) return [];
+  if (!CYRILLIC_RE.test(text)) return [];
   try {
     const res = await apiFetch(`${API}/spellcheck`, {
       method: "POST",

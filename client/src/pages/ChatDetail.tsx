@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { motion } from "framer-motion";
-import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Sparkles, Lock, ArrowUp, Check, Users, ImagePlus, List, FolderPlus, RotateCcw, Type, Clock, Link2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Sparkles, Lock, ArrowUp, Check, Users, ImagePlus, List, FolderPlus, RotateCcw, Type, Clock, Link2, Languages, Code } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
@@ -18,19 +18,23 @@ import { playSendSound } from "@/lib/send-sound";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { NAME_MAX_LENGTH } from "@shared/schema";
-import type { ApiChat, ApiMessage } from "@/features/chat";
+import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
+import type { ApiChat, ApiMessage, MessageListItem } from "@/features/chat";
 import { EMOJIS, formatLastSeen, buildMessageListItems } from "@/features/chat";
 import { ChatMessageRow } from "@/features/chat/components/ChatMessageRow";
 import { useChatMessages } from "@/features/chat/hooks/useChatMessages";
+import { useMessageReadOnVisible } from "@/features/chat/hooks/useMessageReadOnVisible";
 import { useSendMessage } from "@/features/chat/hooks/useSendMessage";
 import { useMessageActions } from "@/features/chat/hooks/useMessageActions";
 import { useSpellCheck } from "@/features/chat/hooks/useSpellCheck";
 import { SpellSuggestions } from "@/features/chat/components/SpellSuggestions";
 import type { SpellError } from "@/lib/spellcheck";
 import { getSpellCheckEnabled, getChatSpellCheckEnabled, setChatSpellCheckEnabled } from "@/lib/spellcheck-prefs";
+import { getTranslateEnabled, setTranslateEnabled, getTranslateLang, setTranslateLang, syncPrefsOnChatOpen, TRANSLATE_LANGUAGES, type TranslateLangCode } from "@/lib/translate-prefs";
+import { useMessageTranslation } from "@/features/chat/hooks/useMessageTranslation";
 import { AI_CHAT_ID } from "@/features/chat/constants";
 import { useAiChat } from "@/features/chat/hooks/useAiChat";
-import { formatMessageTime } from "@/features/chat/utils/format";
+import { formatMessageTime, parseMessageDate } from "@/features/chat/utils/format";
 import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { buildProfilePath } from "@/lib/profile-route";
@@ -38,9 +42,14 @@ import { resolveUrl } from "@/lib/api-base";
 import { GroupChatParticipantsSheet } from "@/features/chat/components/GroupChatParticipantsSheet";
 import { ChatMediaLinksSheet } from "@/features/chat/components/ChatMediaLinksSheet";
 import { MentionPicker } from "@/features/chat/components/MentionPicker";
+import { MediaViewer } from "@/components/MediaViewer";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AddToTrackModal } from "@/features/board/tracks";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useChatVibe } from "@/features/chat/hooks/useChatVibe";
+import { ChatVibeBackground } from "@/features/chat/components/ChatVibeBackground";
+import { ChatVibeOverlay } from "@/features/chat/components/ChatVibeOverlay";
 
 type ChatPlatformKind = "ios" | "android" | "web";
 type ChatBackgroundPreset = "matte_black" | "velvet_gradient" | "obsidian_black";
@@ -405,6 +414,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const { user } = useAuth();
   const { toast } = useToast();
   const spacing = useChatSpacingPreset();
+  const reducedMotion = usePrefersReducedMotion();
   if (chatIdParam === AI_CHAT_ID) return <AIChatView />;
 
   const sendDraftRef = useRef<{ setMessage: (v: string | ((p: string) => string)) => void } | null>(null);
@@ -438,6 +448,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     },
   });
 
+  useMessageReadOnVisible(scrollContainerRef, chatId, messages, user?.id ?? null);
+  const vibe = useChatVibe(chat?.type === "dm" ? chatId : undefined);
+
   const send = useSendMessage({ chatId, folderId: currentFolderId, setMessages, user });
   sendDraftRef.current = send;
 
@@ -455,6 +468,29 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const effectiveSpellCheck = spellCheckEnabled && chatSpellCheck;
   const spellErrors = useSpellCheck(send.message, effectiveSpellCheck);
   const [spellUndo, setSpellUndo] = useState<{ from: string; to: string } | null>(null);
+
+  const [chatTranslateEnabled, setChatTranslateEnabledState] = useState(() => getTranslateEnabled(chatId));
+  const [translateLang, setTranslateLangState] = useState<TranslateLangCode>(getTranslateLang);
+  useEffect(() => {
+    setChatTranslateEnabledState(getTranslateEnabled(chatId));
+    syncPrefsOnChatOpen(chatId);
+  }, [chatId]);
+  useEffect(() => {
+    const handler = () => {
+      setChatTranslateEnabledState(getTranslateEnabled(chatId));
+      setTranslateLangState(getTranslateLang());
+    };
+    window.addEventListener("ping:translate-change", handler);
+    return () => window.removeEventListener("ping:translate-change", handler);
+  }, [chatId]);
+
+  const { translations, showOriginalIds, toggleOriginal } = useMessageTranslation(
+    messages,
+    chatTranslateEnabled,
+    translateLang,
+    user?.id ?? "",
+    chatId,
+  );
 
   const lastAppliedTextRef = useRef<string | null>(null);
   const lastProcessedErrorsRef = useRef<string>("");
@@ -546,6 +582,24 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     },
   });
 
+  // Скролл к сообщению из поиска (?messageId=...)
+  const scrollToMessageIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !chatId) return;
+    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+    const messageId = params?.get("messageId") ?? null;
+    if (!messageId || scrollToMessageIdRef.current === messageId) return;
+    const hasMessage = messages.some((m) => m.id === messageId);
+    if (hasMessage) {
+      scrollToMessageIdRef.current = messageId;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => actions.scrollToMessageAndHighlight(messageId));
+      });
+      setLocation(`/chat/${chatId}`, { replace: true } as { replace?: boolean });
+    }
+  }, [loading, chatId, messages, actions.scrollToMessageAndHighlight, setLocation]);
+  useEffect(() => () => { scrollToMessageIdRef.current = null; }, [chatId]);
+
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -564,6 +618,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const [showMediaLinksSheet, setShowMediaLinksSheet] = useState(false);
   const [showGroupParticipants, setShowGroupParticipants] = useState(false);
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+  const [mediaViewer, setMediaViewer] = useState<{ src: string; type: "image" | "video" | "video_note" } | null>(null);
   useEffect(() => {
     setActiveVoiceId(null);
   }, [chatId]);
@@ -770,6 +825,10 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
       ? (displayName.length > 10 ? displayName.slice(0, 10) + "…" : displayName)
       : null;
   const callerDisplayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || user.phone || "Абонент" : "Абонент";
+  const trimmedComposerText = send.message.trim();
+  const isCanvasPrefix = trimmedComposerText.startsWith("!");
+  const showCanvasCommandOption = trimmedComposerText === "!";
+  const isCanvasMode = isCanvasPrefix && trimmedComposerText.length > 1;
 
   const isDm = chat?.type === "dm";
   const senderNamesMap = useMemo(() => {
@@ -788,7 +847,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const messageListItems = useMemo(() => buildMessageListItems(messages), [messages]);
   const nextVoiceByMessageId = useMemo(() => {
     const map = new Map<string, string>();
-    const items = messageListItems.filter((i): i is { type: "message"; msg: ApiMessage } => i.type === "message");
+    const items = messageListItems.filter(
+      (i): i is Extract<MessageListItem, { type: "message" }> => i.type === "message"
+    );
     for (let i = 0; i < items.length; i++) {
       if (items[i].msg.type !== "voice") continue;
       const next = items.slice(i + 1).find((it) => it.msg.type === "voice");
@@ -944,7 +1005,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               <button
                 type="button"
                 className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, false)}
+                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, false, chat.otherMember?.avatarUrl)}
                 aria-label="Аудиозвонок"
               >
                 <Phone className="w-5 h-5" />
@@ -952,7 +1013,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               <button
                 type="button"
                 className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, true)}
+                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, true, chat.otherMember?.avatarUrl)}
                 aria-label="Видеозвонок"
               >
                 <Video className="w-5 h-5" />
@@ -1111,6 +1172,44 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                   />
                 </div>
               </div>
+              <div className="border-t border-border/60 mt-2 pt-2">
+                <div className="flex items-center justify-between gap-3 px-2 py-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Languages className="h-5 w-5 shrink-0 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Переводить входящие</p>
+                      <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={chatTranslateEnabled}
+                    onCheckedChange={(checked) => {
+                      setTranslateEnabled(chatId, checked);
+                      setChatTranslateEnabledState(checked);
+                    }}
+                    aria-label="Переводить входящие сообщения"
+                  />
+                </div>
+                {chatTranslateEnabled && (
+                  <div className="px-2 pb-1">
+                    <select
+                      value={translateLang}
+                      onChange={(e) => {
+                        const lang = e.target.value as TranslateLangCode;
+                        setTranslateLang(lang);
+                        setTranslateLangState(lang);
+                        setTranslateEnabled(chatId, true);
+                      }}
+                      className="w-full rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      aria-label="Язык перевода"
+                    >
+                      {TRANSLATE_LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1212,6 +1311,44 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                   />
                 </div>
               </div>
+              <div className="border-t border-border/60 mt-2 pt-2">
+                <div className="flex items-center justify-between gap-3 px-2 py-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Languages className="h-5 w-5 shrink-0 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Переводить входящие</p>
+                      <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={chatTranslateEnabled}
+                    onCheckedChange={(checked) => {
+                      setTranslateEnabled(chatId, checked);
+                      setChatTranslateEnabledState(checked);
+                    }}
+                    aria-label="Переводить входящие сообщения"
+                  />
+                </div>
+                {chatTranslateEnabled && (
+                  <div className="px-2 pb-1">
+                    <select
+                      value={translateLang}
+                      onChange={(e) => {
+                        const lang = e.target.value as TranslateLangCode;
+                        setTranslateLang(lang);
+                        setTranslateLangState(lang);
+                        setTranslateEnabled(chatId, true);
+                      }}
+                      className="w-full rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      aria-label="Язык перевода"
+                    >
+                      {TRANSLATE_LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1282,6 +1419,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               ? (folders.find((f) => f.id === currentFolderId)?.isMain ? null : currentFolderId)
               : null
           }
+          onOpenMedia={(src, type) => setMediaViewer({ src, type })}
         />
       )}
 
@@ -1306,9 +1444,12 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
       )}
 
       {/* Messages: min-h-0 чтобы flex дал высоту; -webkit-overflow-scrolling: touch для инерции на iOS; overscroll для предсказуемого скролла */}
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+        {vibe.isActive && <ChatVibeBackground tokens={vibe.tokens} isActive={vibe.isActive} />}
+        {vibe.isActive && <ChatVibeOverlay tokens={vibe.tokens} isActive={vibe.isActive} />}
       <div
         ref={scrollContainerRef}
-        className={cn("uix-content-x-tight flex flex-1 min-h-0 flex-col gap-0 overflow-y-auto overflow-x-hidden overscroll-y-auto touch-pan-y", spacing.messageTopPaddingClass)}
+        className={cn("uix-content-x-tight relative z-[1] flex flex-1 min-h-0 flex-col gap-0 overflow-y-auto overflow-x-hidden overscroll-y-auto touch-pan-y", spacing.messageTopPaddingClass)}
         style={{
           overflowAnchor: "auto",
           WebkitOverflowScrolling: "touch",
@@ -1370,7 +1511,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
             const video = payload.video ?? false;
             const iAmCallee = user?.id === calleeId;
             return (
-              <div key={msg.id} className="flex justify-center my-2">
+              <div key={msg.id} data-message-id={msg.id} data-created-at={msg.createdAt} className="flex justify-center my-2">
                 <div className="bg-secondary/50 text-muted-foreground text-[12px] px-4 py-2 rounded-xl flex flex-col items-center gap-2">
                   <span>{iAmCallee ? "Пропущенный звонок" : "Звонок не принят"}</span>
                   {iAmCallee && callerId && (
@@ -1388,7 +1529,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
           }
           if (msg.type === "system") {
             return (
-              <div key={msg.id} className="flex justify-center my-2">
+              <div key={msg.id} data-message-id={msg.id} data-created-at={msg.createdAt} className="flex justify-center my-2">
                 <span className="bg-secondary/50 text-muted-foreground text-[11px] px-3 py-1 rounded-full text-center">
                   {msg.content}
                 </span>
@@ -1396,8 +1537,8 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
             );
           }
           return (
+            <div key={msg.id} data-message-id={msg.id} data-created-at={msg.createdAt}>
             <ChatMessageRow
-              key={msg.id}
               msg={msg}
               isFirstInGroup={isFirstInGroup}
               isLastInGroup={isLastInGroup}
@@ -1441,11 +1582,21 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               nextVoiceMessageId={msg.type === "voice" ? (nextVoiceByMessageId.get(msg.id) ?? null) : undefined}
               activeVoiceId={activeVoiceId}
               onVoiceEnded={(nextId) => setActiveVoiceId(nextId)}
+              onOpenMedia={(src, type) => setMediaViewer({ src, type })}
+              translatedText={translations.has(msg.id) && !showOriginalIds.has(msg.id) ? translations.get(msg.id)!.translatedText : undefined}
+              translatedFromLang={
+                translations.has(msg.id) && translations.get(msg.id)!.detectedLang !== "auto"
+                  ? translations.get(msg.id)!.detectedLang
+                  : undefined
+              }
+              onToggleOriginal={() => toggleOriginal(msg.id)}
             />
+            </div>
           );
         })}
         <div ref={messagesEndRef} />
       </div>
+      </div>{/* /vibe wrapper */}
 
       {!isNearBottom && (
         <div className="pointer-events-none absolute inset-x-0 z-[108]" style={{ bottom: "calc(var(--uix-nav-bottom) + 4.25rem)" }}>
@@ -1464,32 +1615,46 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
         </div>
       )}
 
-      {/* Контекстное меню сообщения — в портале поверх всего, с умным позиционированием и мягкой анимацией */}
-      {actions.messageMenu && (() => {
-        const menu = actions.messageMenu;
-        const left = Math.min(Math.max(menu.x - 8, 12), window.innerWidth - 212);
-        const menuHeightEstimate = 280;
-        const bottomSpace = 160;
-        const openAbove = menu.y + menuHeightEstimate > window.innerHeight - bottomSpace;
-        const top = openAbove ? undefined : menu.y - 10;
-        const bottom = openAbove ? window.innerHeight - menu.y + 10 : undefined;
-        const menuContent = (
-          <div
-            ref={actions.messageMenuRef}
-            className="fixed min-w-[200px] max-h-[min(280px,60vh)] overflow-y-auto py-1 bg-background/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl"
-            style={{
-              left,
-              ...(openAbove ? { bottom } : { top }),
-              zIndex: 9999,
-              animation: "messageMenuIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both",
-            }}
-          >
-            <style>{`
-              @keyframes messageMenuIn {
-                from { opacity: 0; transform: scale(0.96) translateY(4px); }
-                to { opacity: 1; transform: scale(1) translateY(0); }
-              }
-            `}</style>
+      {/* Контекстное меню сообщения — портал без Framer (motion+AnimatePresence в портале давали сбои на touch). */}
+      {typeof document !== "undefined" && document.body
+        ? createPortal(
+        <ErrorBoundary
+          fallback={(reset) => (
+            <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/30 p-4" onClick={() => { actions.closeMenu(); reset(); }}>
+              <div className="rounded-xl bg-background p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <p className="text-sm text-muted-foreground">Не удалось открыть меню</p>
+                <button type="button" onClick={() => { actions.closeMenu(); reset(); }} className="mt-3 text-sm text-primary font-medium">
+                  Закрыть
+                </button>
+              </div>
+            </div>
+          )}
+        >
+          {actions.messageMenu && (() => {
+            const menu = actions.messageMenu;
+            if (!menu?.msg?.id) return null;
+            const left = Math.min(Math.max(menu.x - 8, 12), window.innerWidth - 212);
+            const menuHeightEstimate = 280;
+            const bottomSpace = 160;
+            const openAbove = menu.y + menuHeightEstimate > window.innerHeight - bottomSpace;
+            const top = openAbove ? undefined : menu.y - 10;
+            const bottom = openAbove ? window.innerHeight - menu.y + 10 : undefined;
+            return (
+              <div
+                key="message-menu"
+                ref={actions.messageMenuRef}
+                role="menu"
+                aria-label="Действия с сообщением"
+                className={cn(
+                  "fixed min-w-[200px] max-h-[min(280px,60vh)] overflow-y-auto py-1 bg-background/95 backdrop-blur-xl border border-border/80 shadow-2xl rounded-xl",
+                  !reducedMotion && "animate-in fade-in zoom-in-95 duration-200"
+                )}
+                style={{
+                  left,
+                  ...(openAbove ? { bottom } : { top }),
+                  zIndex: 9999,
+                }}
+              >
             <div className="divide-y divide-border/40 [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl">
               <button
                 type="button"
@@ -1513,6 +1678,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                       className="min-w-[var(--uix-touch-min,44px)] min-h-[var(--uix-touch-min,44px)] flex items-center justify-center rounded-xl hover:bg-secondary/80 active:bg-secondary/60 text-xl transition-colors"
                       onClick={() => actions.handleReaction(menu.msg, emoji)}
                       title={`Реакция ${emoji}`}
+                      aria-label={`Реакция ${emoji}`}
                     >
                       {emoji}
                     </button>
@@ -1527,6 +1693,19 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                 <Copy className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 Скопировать
               </button>
+              {translations.has(menu.msg.id) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleOriginal(menu.msg.id);
+                    actions.closeMenu();
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors rounded-none"
+                >
+                  <Languages className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  {showOriginalIds.has(menu.msg.id) ? "Показать перевод" : "Показать оригинал"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => actions.handleForward(menu.msg)}
@@ -1582,21 +1761,36 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                       Редактировать
                     </button>
                   )}
+                  {(Date.now() - parseMessageDate(menu.msg.createdAt).getTime()) / 60_000 <= DELETE_FOR_EVERYONE_MINUTES && (
+                    <button
+                      type="button"
+                      onClick={() => actions.handleDelete(menu.msg, true)}
+                      className="w-full flex items-center gap-3 px-4 min-h-[var(--uix-touch-min)] py-2.5 text-left text-sm text-destructive hover:bg-destructive/10 active:bg-destructive/15 transition-colors rounded-none"
+                      aria-label="Удалить сообщение для всех"
+                    >
+                      <Trash2 className="w-4 h-4 flex-shrink-0" />
+                      Удалить для всех
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => actions.handleDelete(menu.msg)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-destructive hover:bg-destructive/10 transition-colors rounded-none"
+                    onClick={() => actions.handleDelete(menu.msg, false)}
+                    className="w-full flex items-center gap-3 px-4 min-h-[var(--uix-touch-min)] py-2.5 text-left text-sm text-destructive hover:bg-destructive/10 active:bg-destructive/15 transition-colors rounded-none"
+                    aria-label="Удалить сообщение для себя"
                   >
                     <Trash2 className="w-4 h-4 flex-shrink-0" />
-                    Удалить у всех
+                    Удалить для себя
                   </button>
                 </>
               )}
             </div>
-          </div>
-        );
-        return createPortal(menuContent, document.body);
-      })()}
+              </div>
+            );
+          })()}
+        </ErrorBoundary>,
+        document.body
+      )
+        : null}
 
       {/* Модалка выбора трека для добавления сообщения */}
       <AddToTrackModal
@@ -1796,6 +1990,26 @@ onClick={() => actions.setForwardingMessage(null)}
             <Paperclip className="w-5 h-5 pointer-events-none" />
           </TapScaleButton>
           <div className="relative flex flex-1 min-w-0 items-end overflow-hidden rounded-2xl border border-border/40 bg-secondary/70 dark:bg-slate-800/60">
+            {showCanvasCommandOption && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 z-[121]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerLightHaptic();
+                    toast({ title: "Режим «Холст» включён. Добавь текст после ! и отправь" });
+                    requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
+                  }}
+                  className="flex w-full items-center justify-between rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-left text-sm hover:bg-amber-500/15"
+                  aria-label="Команда холст"
+                >
+                  <span className="inline-flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                    <Code className="h-4 w-4" />
+                    Холст
+                  </span>
+                  <span className="text-xs text-amber-700/80 dark:text-amber-300/80">добавь текст после !</span>
+                </button>
+              </div>
+            )}
             {mentionOpen && chat?.type === "group" && chat.members && chat.members.length > 0 && (
               <div ref={mentionPickerRef} className="absolute bottom-full left-0 right-0 mb-1 z-[120]">
                 <MentionPicker
@@ -1824,7 +2038,7 @@ onClick={() => actions.setForwardingMessage(null)}
                 const pos = e.target.selectionStart ?? value.length;
                 send.setMessage(value);
                 setDraftRestoredHint(false);
-                if (!send?.editingId) scheduleSendTyping();
+                if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
                 requestAnimationFrame(syncComposerHeight);
                 if (chat?.type === "group" && chat.members?.length) {
                   const beforeCursor = value.slice(0, pos);
@@ -1847,6 +2061,11 @@ onClick={() => actions.setForwardingMessage(null)}
               }}
               onFocus={() => setDraftRestoredHint(false)}
               onKeyDown={(e) => {
+                if (showCanvasCommandOption && e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  toast({ title: "Добавь текст после !, чтобы отправить «Холст»" });
+                  return;
+                }
                 if (mentionOpen) {
                   if (e.key === "Escape") {
                     setMentionOpen(false);
@@ -1913,7 +2132,19 @@ onClick={() => actions.setForwardingMessage(null)}
             </TapScaleButton>
           </div>
           {send.message.trim() ? (
-            <>
+            (() => {
+            const handleCanvasSend = () => {
+              const raw = send.message.slice(1);
+              send.setMessage("```\n" + raw + "\n```");
+              requestAnimationFrame(() => send.handleSend());
+            };
+            return <>
+              {isCanvasMode && (
+                <div className="flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-600 dark:text-amber-400">
+                  <Code className="w-3.5 h-3.5" />
+                  <span className="text-[11px] font-semibold">Холст</span>
+                </div>
+              )}
               <Popover>
                 <PopoverTrigger asChild>
                   <TapScaleButton
@@ -1972,15 +2203,31 @@ onClick={() => actions.setForwardingMessage(null)}
               </Popover>
               <TapScaleButton
                 type="button"
-                onClick={() => send.handleSend()}
+                onClick={() => {
+                  if (showCanvasCommandOption) {
+                    toast({ title: "Добавь текст после !, чтобы отправить «Холст»" });
+                    return;
+                  }
+                  if (isCanvasMode) {
+                    handleCanvasSend();
+                    return;
+                  }
+                  send.handleSend();
+                }}
                 disabled={send.sending}
                 haptic
-                className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-indigo-400 text-white shadow-lg shadow-indigo-500/20 transition-all duration-150 animate-in zoom-in-95 hover:brightness-110 active:scale-95 disabled:opacity-50"
-                title={send?.editingId ? "Сохранить изменения" : send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отправить"}
+                className={cn(
+                  "flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full shadow-lg transition-all duration-150 animate-in zoom-in-95 hover:brightness-110 active:scale-95 disabled:opacity-50",
+                  isCanvasMode
+                    ? "bg-gradient-to-br from-amber-600 to-amber-400 text-white shadow-amber-500/20"
+                    : "bg-gradient-to-br from-indigo-600 to-indigo-400 text-white shadow-indigo-500/20"
+                )}
+                title={isCanvasMode ? "Отправить холст" : send?.editingId ? "Сохранить изменения" : send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отправить"}
               >
-                <Send className="w-4 h-4 translate-x-[-1px] translate-y-[1px]" />
+                {isCanvasMode ? <Code className="w-4 h-4" /> : <Send className="w-4 h-4 translate-x-[-1px] translate-y-[1px]" />}
               </TapScaleButton>
-            </>
+            </>;
+            })()
           ) : send.voiceState === "recording" ? (
             <TapScaleButton
               type="button"
@@ -2020,6 +2267,7 @@ onClick={() => actions.setForwardingMessage(null)}
                 haptic
                 className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex-shrink-0 items-center justify-center rounded-full bg-secondary text-foreground transition-all duration-150 active:scale-95 hover:bg-secondary/80 disabled:opacity-50"
                 title={!send.voiceSupported ? "Запись голоса недоступна в этом браузере" : "Удерживайте для записи голосового"}
+                aria-label={!send.voiceSupported ? "Запись голоса недоступна" : "Удерживайте для записи голосового"}
               >
                 {send.sendingVoice ? <span className="text-[10px]">...</span> : <Mic className="w-4 h-4" />}
               </TapScaleButton>
@@ -2163,6 +2411,13 @@ onClick={() => actions.setForwardingMessage(null)}
           </div>
         </div>
       )}
+
+      <MediaViewer
+        open={!!mediaViewer}
+        onClose={() => setMediaViewer(null)}
+        src={mediaViewer?.src ?? ""}
+        type={mediaViewer?.type ?? "image"}
+      />
     </div>
   );
 }

@@ -3,7 +3,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
-import { useCallContext } from "@/contexts/CallContext";
+import { useRealtimeContext } from "@/contexts/RealtimeContext";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { uploadVoice, uploadChatMedia, sendMessage } from "@/lib/chat";
@@ -51,7 +51,7 @@ function mapMediaAccessError(err: unknown): string {
 
 export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendMessageParams) {
   const { toast } = useToast();
-  const { sendVoiceRecording } = useCallContext();
+  const { sendVoiceRecording } = useRealtimeContext();
   const { state: voiceState, error: voiceRecorderError, durationSec, start: startVoice, stop: stopVoice, isSupported: voiceSupported } = useVoiceRecorder();
 
   const [message, setMessage] = useState("");
@@ -182,8 +182,14 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     if (editingId) {
       setSending(true);
       const idToEdit = editingId;
+      let prevContent = "";
       setEditingId(null);
       setMessage("");
+      setMessages((prev) => {
+        const msg = prev.find((m) => m.id === idToEdit);
+        prevContent = msg?.content ?? "";
+        return prev.map((m) => (m.id === idToEdit ? { ...m, content: text } : m));
+      });
       try {
         const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(idToEdit)}`, {
           method: "PATCH",
@@ -192,15 +198,17 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         });
         if (res.ok) {
           const data = await res.json();
-          setMessages((prev) => prev.map((m) => (m.id === idToEdit ? { ...m, content: data.content } : m)));
+          setMessages((prev) => prev.map((m) => (m.id === idToEdit ? { ...m, content: data.content ?? text } : m)));
           toast({ title: "Изменения сохранены" });
         } else {
+          setMessages((prev) => prev.map((m) => (m.id === idToEdit ? { ...m, content: prevContent } : m)));
           const data = await res.json().catch(() => ({}));
           toast({ title: data.message ?? "Не удалось сохранить", variant: "destructive" });
           setMessage(text);
           setEditingId(idToEdit);
         }
       } catch {
+        setMessages((prev) => prev.map((m) => (m.id === idToEdit ? { ...m, content: prevContent } : m)));
         toast({ title: "Ошибка", variant: "destructive" });
         setMessage(text);
         setEditingId(idToEdit);

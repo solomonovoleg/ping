@@ -63,6 +63,13 @@
   --uix-easing-out: cubic-bezier(0.33, 1, 0.68, 1);
   --uix-easing-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
+  /* Chat Vibe — adaptive atmosphere tokens (default = invisible) */
+  --chat-vibe-bg-tint: transparent;
+  --chat-vibe-bubble-in: transparent;
+  --chat-vibe-bubble-out: transparent;
+  --chat-vibe-accent: transparent;
+  --chat-vibe-overlay-opacity: 0;
+
   /* Apple/Native Inspired Light Theme */
   --background: 0 0% 98%; /* Very light grey */
   --foreground: 240 10% 3.9%;

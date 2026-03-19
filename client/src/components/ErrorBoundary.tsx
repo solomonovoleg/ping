@@ -1,6 +1,10 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-type Props = { children: ReactNode };
+type Props = {
+  children: ReactNode;
+  /** Кастомный fallback вместо дефолтного (для модалок, просмотрщиков). */
+  fallback?: ReactNode | ((reset: () => void) => ReactNode);
+};
 type State = { hasError: boolean; error: Error | null };
 
 const TRANSIENT_ERROR_RE =
@@ -43,6 +47,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.hasError) {
+      const { fallback } = this.props;
+      if (fallback) {
+        const node = typeof fallback === "function" ? fallback(this.resetBoundary) : fallback;
+        return node;
+      }
       const transient = isTransientError(this.state.error);
       return (
         <div className="min-h-[100dvh] w-full flex flex-col items-center justify-center gap-4 bg-background p-6 text-center">

@@ -8,9 +8,13 @@ import { resolveUrl } from "@/lib/api-base";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { formatMessageTime, parseMessageDate } from "../utils/format";
 import { buildProfilePath } from "@/lib/profile-route";
+import { extractFirstUrl } from "@/lib/link-preview";
+import { LinkPreviewCard } from "./LinkPreviewCard";
 import { UserAvatar } from "@/components/UserAvatar";
 import { VoiceMessagePlayer } from "@/components/VoiceMessagePlayer";
 import { ShatterEffect } from "@/components/ShatterEffect";
+import { CodeBlock } from "./CodeBlock";
+import { parseCodeSegments } from "../utils/code-detect";
 import type { ApiMessage } from "../types";
 
 /** Разбивает текст на фрагменты: URL — ссылки, @[Name](id) — ссылки на профиль */
@@ -150,6 +154,14 @@ export type ChatMessageRowProps = {
   activeVoiceId?: string | null;
   /** Вызывается при завершении воспроизведения голосового (передаётся ID следующего для автозапуска) */
   onVoiceEnded?: (nextVoiceMessageId: string | null) => void;
+  /** Открыть медиа (фото/видео) во встроенном просмотрщике */
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
+  /** Переведённый текст (если есть перевод) */
+  translatedText?: string | null;
+  /** Исходный язык переведённого сообщения (отображается как бейдж) */
+  translatedFromLang?: string | null;
+  /** Колбэк нажатия на бейдж — переключить оригинал/перевод */
+  onToggleOriginal?: () => void;
 };
 
 function formatVideoNoteDuration(seconds: number | null): string {
@@ -160,8 +172,8 @@ function formatVideoNoteDuration(seconds: number | null): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-const VIDEO_NOTE_PREVIEW_SEC = 5;
-const VIDEO_NOTE_PLAY_START_SEC = 1;
+const VIDEO_NOTE_PREVIEW_SEC = 1.2;
+const VIDEO_NOTE_PLAY_START_SEC = 0.15;
 
 function VideoNoteBubble({
   src,
@@ -175,6 +187,7 @@ function VideoNoteBubble({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [durationSec, setDurationSec] = useState<number | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
   const borderClass = isMe ? MSG_BUBBLE_CLASSES[bubbleColorPreset].videoNoteBorder : "border-border/55";
 
   const togglePlayback = () => {
@@ -210,8 +223,10 @@ function VideoNoteBubble({
         src={src}
         className="h-full w-full object-cover"
         playsInline
-        preload="metadata"
+        muted
+        preload="auto"
         controls={false}
+        onLoadedData={() => setPreviewReady(true)}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={() => setIsPlaying(false)}
@@ -219,11 +234,23 @@ function VideoNoteBubble({
           const target = e.currentTarget;
           const dur = Number.isFinite(target.duration) ? target.duration : null;
           setDurationSec(dur);
-          if (dur != null && dur >= VIDEO_NOTE_PREVIEW_SEC && target.paused) {
-            target.currentTime = VIDEO_NOTE_PREVIEW_SEC;
+          // Берём ранний кадр (в районе 1с), чтобы превью стабильно появлялось на разных кодеках.
+          if (dur != null && dur > 0.35 && target.paused) {
+            const maxSeek = Math.max(0.2, dur - 0.12);
+            const previewAt = Math.min(VIDEO_NOTE_PREVIEW_SEC, maxSeek);
+            try {
+              target.currentTime = previewAt;
+            } catch {
+              // Если seek не удался, оставляем первый доступный кадр.
+            }
           }
         }}
+        onSeeked={() => setPreviewReady(true)}
+        onError={() => setPreviewReady(true)}
       />
+      {!previewReady && (
+        <div className="pointer-events-none absolute inset-0 bg-muted/70" />
+      )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
       <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white/95">
         {formatVideoNoteDuration(durationSec)}
@@ -255,6 +282,7 @@ function ChatMessageRowInner({
   onPointerUp,
   onPointerLeave,
   onContextMenu,
+  onOpenMenu,
   onRetry,
   onQuickReply,
   onScrollToReply,
@@ -263,6 +291,10 @@ function ChatMessageRowInner({
   nextVoiceMessageId,
   activeVoiceId,
   onVoiceEnded,
+  onOpenMedia,
+  translatedText,
+  translatedFromLang,
+  onToggleOriginal,
 }: ChatMessageRowProps) {
   const bubbleStyles = MSG_BUBBLE_CLASSES[messageBubbleColor];
   const bubbleRef = useRef<HTMLDivElement | null>(null);
@@ -337,13 +369,17 @@ function ChatMessageRowInner({
               swipeTriggeredRef.current = false;
               swipeHapticTriggeredRef.current = false;
               if (bubbleRef.current) bubbleRef.current.style.transition = "";
-              onPointerDown(msg, e);
+              try {
+                onPointerDown(msg, e);
+              } catch (err) {
+                console.error("[ChatMessageRow] pointerdown failed:", err);
+              }
             }}
             onPointerMove={(e) => {
               if (!swipeStartedRef.current || swipeStartXRef.current == null || !bubbleRef.current) return;
               const deltaX = e.clientX - swipeStartXRef.current;
               if (deltaX <= 0 || msg.type === "system" || msg.type === "missed_call") return;
-              if (Math.abs(deltaX) > 8) onPointerLeave();
+              if (Math.abs(deltaX) > 24) onPointerLeave();
               bubbleRef.current.style.transform = `translateX(${Math.min(deltaX, 28)}px)`;
               if (replyHintRef.current) {
                 const p = Math.max(0, Math.min(deltaX / 56, 1));
@@ -418,7 +454,11 @@ function ChatMessageRowInner({
                 swipeStartedRef.current = true;
                 swipeTriggeredRef.current = false;
                 swipeHapticTriggeredRef.current = false;
-                onPointerDown(msg, { clientX: touch.clientX, clientY: touch.clientY } as React.PointerEvent);
+                try {
+                  onPointerDown(msg, { clientX: touch.clientX, clientY: touch.clientY } as React.PointerEvent);
+                } catch (err) {
+                  console.error("[ChatMessageRow] touchstart->pointerdown failed:", err);
+                }
               }
             }}
             onTouchMove={(e) => {
@@ -426,7 +466,7 @@ function ChatMessageRowInner({
               if (!touch || !swipeStartedRef.current || swipeStartXRef.current == null || !bubbleRef.current) return;
               const deltaX = touch.clientX - swipeStartXRef.current;
               if (deltaX <= 0 || msg.type === "system" || msg.type === "missed_call") return;
-              if (Math.abs(deltaX) > 8) onPointerLeave();
+              if (Math.abs(deltaX) > 24) onPointerLeave();
               bubbleRef.current.style.transform = `translateX(${Math.min(deltaX, 28)}px)`;
               if (replyHintRef.current) {
                 const p = Math.max(0, Math.min(deltaX / 56, 1));
@@ -464,7 +504,16 @@ function ChatMessageRowInner({
               swipeHapticTriggeredRef.current = false;
               onPointerUp(msg.id);
             }}
-            onContextMenu={onContextMenu}
+            onContextMenu={(e) => {
+              try {
+                onContextMenu(e);
+                if (msg.type !== "system" && msg.type !== "missed_call" && bubbleRef.current && onOpenMenu) {
+                  onOpenMenu(msg, bubbleRef.current.getBoundingClientRect());
+                }
+              } catch (err) {
+                console.error("[ChatMessageRow] contextmenu failed:", err);
+              }
+            }}
           >
             {msg.forwardedFromSenderName && <p className="text-[12px] text-muted-foreground mb-1">Переслано от {msg.forwardedFromSenderName}</p>}
             {(msg.replyTo || msg.replyToId) && (() => {
@@ -516,11 +565,31 @@ function ChatMessageRowInner({
                 );
               })()
             ) : msg.type === "image" ? (
-              <a href={resolveUrl(msg.content)} target="_blank" rel="noopener noreferrer" className="block rounded-[10px] overflow-hidden max-w-[260px]">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const url = resolveUrl(msg.content);
+                  if (url && onOpenMedia) onOpenMedia(url, "image");
+                }}
+                className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
                 <img src={resolveUrl(msg.content)} alt="Фото" className="max-h-[280px] w-full object-cover" loading="lazy" decoding="async" />
-              </a>
+              </button>
             ) : msg.type === "video" ? (
-              <video src={resolveUrl(msg.content)} controls className="max-h-[280px] max-w-[260px] rounded-[10px] object-cover" playsInline />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const url = resolveUrl(msg.content);
+                  if (url && onOpenMedia) onOpenMedia(url, "video");
+                }}
+                className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <video src={resolveUrl(msg.content)} className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]" playsInline muted />
+              </button>
             ) : msg.type === "video_note" ? (
               <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
             ) : msg.type === "post_share" ? (
@@ -540,14 +609,95 @@ function ChatMessageRowInner({
                   </div>
                 );
               })()
+            ) : msg.type === "story_reply" ? (
+              (() => {
+                let payload: {
+                  storyId?: string;
+                  mediaUrl?: string;
+                  authorId?: string;
+                  authorName?: string;
+                  authorAvatar?: string;
+                  storyTimeLabel?: string;
+                  replyText?: string;
+                } = {};
+                try {
+                  payload = JSON.parse(msg.content);
+                } catch {
+                  payload = { replyText: msg.content };
+                }
+                const previewImage = payload.mediaUrl ? resolveUrl(payload.mediaUrl) : "";
+                const authorName = payload.authorName || "История";
+                return (
+                  <div className="max-w-[240px] rounded-[10px] overflow-hidden border border-border/50 bg-muted/30 dark:bg-white/5">
+                    {previewImage && (
+                      <img src={previewImage} alt="" className="w-full max-h-[200px] object-cover" loading="lazy" decoding="async" />
+                    )}
+                    <div className="p-2">
+                      <p className="text-[11px] text-muted-foreground">Ответ на сториз</p>
+                      <p className="text-[13px] font-medium mt-0.5">{authorName}</p>
+                      {payload.replyText && (
+                        <p className="text-[13px] line-clamp-3 text-foreground/90 mt-1">{payload.replyText}</p>
+                      )}
+                      {payload.authorId && (
+                        <button
+                          type="button"
+                          className="mt-2 text-xs text-primary font-medium hover:underline"
+                          onClick={() => onOpenProfile(payload.authorId!)}
+                        >
+                          Открыть профиль автора
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
             ) : (
-              <p className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap max-w-[min(240px,72vw)]">
-                {linkifyTextWithMentions(msg.content, onOpenProfile)}
-              </p>
+              <>
+                {(() => {
+                  const displayText = translatedText || msg.content;
+                  const segments = parseCodeSegments(displayText);
+                  const hasCode = segments.some((s) => s.type === "code");
+                  if (hasCode) {
+                    return (
+                      <div className="max-w-[min(280px,80vw)]">
+                        {segments.map((seg, i) =>
+                          seg.type === "code" ? (
+                            <CodeBlock key={i} code={seg.content} lang={seg.lang} className="my-1" />
+                          ) : (
+                            <p key={i} className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap">
+                              {linkifyTextWithMentions(seg.content, onOpenProfile)}
+                            </p>
+                          ),
+                        )}
+                      </div>
+                    );
+                  }
+                  return (
+                    <p className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap max-w-[min(240px,72vw)]">
+                      {linkifyTextWithMentions(displayText, onOpenProfile)}
+                    </p>
+                  );
+                })()}
+                {msg.type === "text" && (() => {
+                  const url = extractFirstUrl(msg.content);
+                  return url ? <LinkPreviewCard url={url} /> : null;
+                })()}
+              </>
             )}
             {showFooter && (
               <div className={cn("text-[11px] flex justify-end items-center gap-0.5", isMedia ? "mt-1 px-0.5" : "mt-0.5", isMe && !isMedia ? bubbleStyles.footer : "text-muted-foreground")}>
                 {formatMessageTime(msg.createdAt)}
+                {translatedFromLang && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onToggleOriginal?.(); }}
+                    className="ml-0.5 inline-flex items-center rounded px-1 py-px text-[10px] font-semibold uppercase leading-none opacity-70 hover:opacity-100 bg-primary/10 text-primary transition-opacity"
+                    title={translatedText ? "Показать оригинал" : "Показать перевод"}
+                    aria-label={translatedText ? "Показать оригинал" : "Показать перевод"}
+                  >
+                    {translatedFromLang.toUpperCase()}
+                  </button>
+                )}
                 {isMe && (() => {
                   if (msg.sendStatus === "sending") return <span className="inline-flex items-center gap-0.5" title="Отправляется"><Clock className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" aria-hidden /></span>;
                   if (msg.sendStatus === "failed") return (

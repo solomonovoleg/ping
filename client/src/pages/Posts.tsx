@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2, Camera, ImageIcon, User, Pencil } from "lucide-react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
@@ -7,14 +8,27 @@ import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
-import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, type FeedPost, type ReactionUser } from "@/lib/posts";
+import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, uploadPostMedia, type FeedPost, type ReactionUser } from "@/lib/posts";
 import { PostMedia } from "@/components/PostMedia";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { startDm } from "@/lib/search";
 import { sendMessage } from "@/lib/chat";
 import { useToast } from "@/hooks/use-toast";
 import { resolveUrl } from "@/lib/api-base";
-import { fetchStoriesFeed, recordStoryView } from "@/lib/stories";
+import {
+  archiveStory,
+  createStory,
+  deleteStory,
+  fetchStoriesFeed,
+  fetchStoryViewers,
+  likeStory,
+  recordStoryView,
+  unlikeStory,
+  type StoryViewerUser,
+} from "@/lib/stories";
+import { compressImage } from "@/lib/compress-image";
+import { isNative, takePhotoFromCamera, pickPhotoFromGallery } from "@/lib/capacitor-native";
+import { useLongPress } from "@/hooks/useLongPress";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { PageTitle } from "@/components/PageTitle";
@@ -22,6 +36,7 @@ import { PullToRefresh } from "@/components/PullToRefresh";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 import { FeedHeader } from "@/features/feed/components/FeedHeader";
+import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -54,9 +69,17 @@ export default function Posts() {
   const [hashtagFilter, setHashtagFilter] = useState<string | null>(null);
   const [expandedPostIds, setExpandedPostIds] = useState<Set<string>>(new Set());
   const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(new Set());
+  const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
+  const [likedStoryIds, setLikedStoryIds] = useState<Record<string, boolean>>({});
+  const [likesCountByStoryId, setLikesCountByStoryId] = useState<Record<string, number>>({});
+  const [myAvatarMenu, setMyAvatarMenu] = useState(false);
+  const [storyUploading, setStoryUploading] = useState(false);
+  const storyFileRef = useRef<HTMLInputElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const isNativePlatform = isNative();
 
   const POST_TEXT_PREVIEW_CHARS = 200;
   const togglePostExpand = (postId: string) => {
@@ -138,6 +161,24 @@ export default function Posts() {
     queryFn: fetchStoriesFeed,
     enabled: !!user,
   });
+  const { data: activeStoryViewers = [], isLoading: activeStoryViewersLoading } = useQuery({
+    queryKey: ["stories", "viewers", activeViewersStoryId],
+    queryFn: () => fetchStoryViewers(activeViewersStoryId!),
+    enabled: !!activeViewersStoryId,
+  });
+
+  useEffect(() => {
+    const nextLiked: Record<string, boolean> = {};
+    const nextLikesCount: Record<string, number> = {};
+    for (const author of storiesFeed) {
+      for (const story of author.stories ?? []) {
+        nextLiked[story.id] = story.isLiked === true;
+        nextLikesCount[story.id] = Number(story.likesCount ?? 0);
+      }
+    }
+    setLikedStoryIds(nextLiked);
+    setLikesCountByStoryId(nextLikesCount);
+  }, [storiesFeed]);
 
   const handleFeedRefresh = useCallback(async () => {
     await Promise.allSettled([
@@ -243,17 +284,32 @@ export default function Posts() {
     const author = (item as { author?: { id?: string; displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
     const name = author?.displayName || (item as { name?: string }).name || `ID ${author?.publicId ?? ""}`;
     const avatar = author?.avatarUrl ? resolveUrl(author.avatarUrl) : (item as { avatar?: string }).avatar ?? avatarMain;
-    return (item.stories as { id: string; mediaUrl: string; createdAt: string }[]).map((s) => ({
+    return (item.stories as {
+      id: string;
+      mediaUrl: string;
+      createdAt: string;
+      expiresAt?: string;
+      likesCount?: number;
+      isLiked?: boolean;
+    }[]).map((s) => ({
       id: s.id,
       image: resolveUrl(s.mediaUrl),
       userName: name,
       userAvatar: avatar,
       time: formatPostTime(s.createdAt),
       authorId: author?.id ?? (item as { authorId?: string }).authorId,
+      expiresAt: s.expiresAt,
+      likesCount: Number(s.likesCount ?? 0),
+      isLiked: s.isLiked === true,
     }));
   };
 
-  const handleStoryReply = async (payload: { storyId: string; authorId: string; text: string }) => {
+  const handleStoryReply = async (payload: {
+    storyId: string;
+    authorId: string;
+    text: string;
+    story: { id: string; image: string; userName: string; userAvatar: string; time: string };
+  }) => {
     if (!user?.id) {
       toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
       return;
@@ -263,8 +319,154 @@ export default function Posts() {
       return;
     }
     const chat = await startDm(payload.authorId);
-    await sendMessage(chat.id, { type: "text", content: payload.text.trim() });
+    const storyPayload = {
+      storyId: payload.story.id,
+      mediaUrl: payload.story.image,
+      authorId: payload.authorId,
+      authorName: payload.story.userName,
+      authorAvatar: payload.story.userAvatar,
+      storyTimeLabel: payload.story.time,
+      replyText: payload.text.trim(),
+    };
+    await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
     toast({ title: "Ответ на сториз отправлен" });
+  };
+
+  const handleStoryLikeToggle = async (storyId: string, liked: boolean) => {
+    const prevLiked = likedStoryIds[storyId] ?? false;
+    const prevCount = likesCountByStoryId[storyId] ?? 0;
+    const optimisticLiked = !liked;
+    const optimisticCount = Math.max(0, prevCount + (liked ? -1 : 1));
+    setLikedStoryIds((prev) => ({ ...prev, [storyId]: optimisticLiked }));
+    setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: optimisticCount }));
+    try {
+      const result = liked ? await unlikeStory(storyId) : await likeStory(storyId);
+      setLikedStoryIds((prev) => ({ ...prev, [storyId]: !!result.isLiked }));
+      setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: Number(result.likesCount ?? optimisticCount) }));
+    } catch (err) {
+      setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
+      setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
+      toast({ title: err instanceof Error ? err.message : "Не удалось обновить лайк", variant: "destructive" });
+    }
+  };
+
+  const handleStoryShare = async (story: { id: string; image: string; userName: string; time: string }) => {
+    const shareText = `Сториз ${story.userName}`;
+    if (navigator.share) {
+      await navigator.share({ title: shareText, text: shareText, url: story.image });
+      return;
+    }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(story.image);
+      toast({ title: "Ссылка на сториз скопирована" });
+      return;
+    }
+    throw new Error("Поделиться не удалось");
+  };
+
+  const handleStoryArchive = async (storyId: string) => {
+    await archiveStory(storyId);
+    toast({ title: "Сториз перемещена в архив" });
+    setActiveStoryIndex(null);
+    await refetchStories();
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    await deleteStory(storyId);
+    toast({ title: "Сториз удалена" });
+    setActiveStoryIndex(null);
+    await refetchStories();
+  };
+
+  /* ---------- Story upload (Instagram-like) ---------- */
+  const triggerStoryFilePicker = () => {
+    if (isNativePlatform) {
+      setMyAvatarMenu(false);
+      void pickPhotoFromGallery()
+        .then(async (dataUrl) => {
+          if (!dataUrl) return;
+          const res = await fetch(dataUrl);
+          const blob = await res.blob();
+          const file = new File([blob], "story.jpg", { type: blob.type || "image/jpeg" });
+          await handleStoryFileUpload(file);
+        })
+        .catch(() => toast({ title: "Не удалось открыть галерею", variant: "destructive" }));
+      return;
+    }
+    storyFileRef.current?.click();
+    setMyAvatarMenu(false);
+  };
+
+  const triggerStoryCamera = async () => {
+    setMyAvatarMenu(false);
+    try {
+      const dataUrl = await takePhotoFromCamera();
+      if (!dataUrl) return;
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const file = new File([blob], "story-cam.jpg", { type: blob.type || "image/jpeg" });
+      await handleStoryFileUpload(file);
+    } catch {
+      toast({ title: "Не удалось открыть камеру", variant: "destructive" });
+    }
+  };
+
+  const handleStoryFileUpload = async (file: File) => {
+    if (storyUploading) return;
+    setStoryUploading(true);
+    try {
+      const isImage = file.type.startsWith("image/");
+      const toUpload = isImage ? await compressImage(file) : file;
+      const mediaUrl = await uploadPostMedia(toUpload);
+      await createStory(mediaUrl);
+      toast({ title: "Сториз опубликована" });
+      await refetchStories();
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : "Ошибка загрузки сториз", variant: "destructive" });
+    } finally {
+      setStoryUploading(false);
+    }
+  };
+
+  const onStoryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await handleStoryFileUpload(file);
+  };
+
+  const longPressActiveRef = useRef(false);
+  const myCircleLongPress = useLongPress({
+    durationMs: 600,
+    onLongPress: () => {
+      longPressActiveRef.current = true;
+      setMyAvatarMenu(true);
+    },
+  });
+  const wrappedMyCircleLongPress = {
+    onPointerDown: (e: React.PointerEvent) => {
+      longPressActiveRef.current = false;
+      myCircleLongPress.onPointerDown();
+    },
+    onPointerUp: () => {
+      myCircleLongPress.onPointerUp();
+    },
+    onPointerLeave: () => myCircleLongPress.onPointerLeave(),
+    onPointerCancel: () => myCircleLongPress.onPointerCancel(),
+  };
+
+  const handleMyCircleTap = () => {
+    if (longPressActiveRef.current) {
+      longPressActiveRef.current = false;
+      return;
+    }
+    if (myAvatarMenu) return;
+    const myCircle = storyCircles[0];
+    if (myCircle && (myCircle as { hasActive?: boolean }).hasActive) {
+      setActiveStoryIndex(0);
+    } else {
+      triggerStoryFilePicker();
+    }
   };
 
   return (
@@ -298,15 +500,33 @@ export default function Posts() {
                   Обновить сториз
                 </button>
               )}
-              {storyCircles.map((story, idx) => (
+              {/* Hidden file input for story upload */}
+              <input
+                ref={storyFileRef}
+                type="file"
+                accept="image/*,video/mp4,video/webm,video/quicktime"
+                className="hidden"
+                onChange={(e) => void onStoryFileChange(e)}
+              />
+              {storyCircles.map((story, idx) => {
+                const isMe = (story as { isMe?: boolean }).isMe === true;
+                return (
                 <div 
                   key={String(story.id)} 
                   className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
-                  onClick={() => setActiveStoryIndex(idx)}
+                  onClick={() => {
+                    if (isMe) {
+                      handleMyCircleTap();
+                    } else {
+                      setActiveStoryIndex(idx);
+                    }
+                  }}
+                  {...(isMe ? wrappedMyCircleLongPress : {})}
                 >
                   <div className="relative">
                     <div className={cn(
                       "w-16 h-16 rounded-full p-[2px] transition-transform duration-200 group-active:scale-95",
+                      isMe && storyUploading && "animate-pulse",
                       (story as { hasUnseen?: boolean }).hasUnseen
                         ? "bg-gradient-to-tr from-primary via-fuchsia-500 to-purple-500 animate-story-ring"
                         : (story as { hasActive?: boolean }).hasActive
@@ -319,10 +539,27 @@ export default function Posts() {
                         className="w-full h-full rounded-full object-cover border-2 border-background"
                       />
                     </div>
-                    {(story as { isMe?: boolean }).isMe && (
-                      <div className="absolute bottom-0 right-0 w-5 h-5 bg-primary text-white rounded-full flex items-center justify-center border-2 border-background z-10">
-                        <Plus className="w-3.5 h-3.5" />
-                      </div>
+                    {isMe && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (storyUploading) return;
+                          setMyAvatarMenu(true);
+                        }}
+                        className={cn(
+                          "absolute bottom-0 right-0 z-10 flex h-6 w-6 items-center justify-center rounded-full border-2 border-background text-white transition-colors",
+                          storyUploading ? "bg-amber-500" : "bg-primary hover:bg-primary/90 active:bg-primary/80"
+                        )}
+                        aria-label="Открыть меню моей истории"
+                        disabled={storyUploading}
+                      >
+                        {storyUploading ? (
+                          <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" />
+                        )}
+                      </button>
                     )}
                     {"isTrending" in story && story.isTrending && (
                       <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-gradient-to-r from-orange-500 to-rose-500 text-white shadow-sm border-[1.5px] border-background px-1.5 py-0.5 rounded-md flex items-center gap-0.5 z-10 animate-[pulse_2s_ease-in-out_infinite]">
@@ -343,7 +580,8 @@ export default function Posts() {
                     {(story as { name?: string }).name ?? ""}
                   </span>
                 </div>
-              ))}
+                );
+              })}
               {storiesLoading && storyCircles.length === 0 && (
                 <div className="flex-shrink-0 text-xs text-muted-foreground">Загрузка сториз...</div>
               )}
@@ -523,6 +761,7 @@ export default function Posts() {
                   <div className="-mx-4">
                     <PostMedia
                       mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+                      layout={post.mediaLayout ?? null}
                     />
                   </div>
                 </div>
@@ -580,6 +819,7 @@ export default function Posts() {
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
+                        import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
                         if (post.myReaction) {
                           reactionMutation.mutate({ postId: post.id, emoji: null });
                         } else {
@@ -608,6 +848,7 @@ export default function Posts() {
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
+                        import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
                         setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
                       }}
                       className={cn(
@@ -616,6 +857,7 @@ export default function Posts() {
                           ? "text-primary border-primary/50 bg-primary/10" 
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
                       )}
+                      aria-label="Добавить реакцию"
                     >
                       <Plus className="w-4 h-4" />
                     </button>
@@ -632,6 +874,7 @@ export default function Posts() {
                               setShowReactionPicker(null);
                             }}
                             className="text-2xl hover:scale-125 transition-transform active:scale-95"
+                            aria-label={`Реакция ${emoji}`}
                           >
                             {emoji}
                           </button>
@@ -728,18 +971,92 @@ export default function Posts() {
             onClose={() => {
               setActiveStoryIndex(null);
               void refetchStories();
-            }} 
+            }}
+            viewerUserId={user?.id}
             onStoryView={(storyId) => {
               setViewedStoryIds((prev) => {
                 const next = new Set(prev);
                 next.add(storyId);
                 return next;
               });
-              void recordStoryView(storyId);
+              if (storyCircles[activeStoryIndex]?.isMe !== true) {
+                void recordStoryView(storyId);
+              }
             }}
+            canSeeViewers={storyCircles[activeStoryIndex]?.isMe === true}
+            onOpenViewers={(storyId) => setActiveViewersStoryId(storyId)}
+            viewersCountByStoryId={(storiesFeed ?? []).reduce<Record<string, number>>((acc, author) => {
+              for (const story of author.stories ?? []) acc[story.id] = Number(story.viewsCount ?? 0);
+              return acc;
+            }, {})}
             onReply={handleStoryReply}
-            canReply
+            canReply={storyCircles[activeStoryIndex]?.isMe !== true}
+            onToggleLike={handleStoryLikeToggle}
+            canLike={storyCircles[activeStoryIndex]?.isMe !== true}
+            likedByStoryId={likedStoryIds}
+            likesCountByStoryId={likesCountByStoryId}
+            canManage={storyCircles[activeStoryIndex]?.isMe === true}
+            onShareStory={handleStoryShare}
+            onArchiveStory={storyCircles[activeStoryIndex]?.isMe === true ? handleStoryArchive : undefined}
+            onDeleteStory={storyCircles[activeStoryIndex]?.isMe === true ? handleStoryDelete : undefined}
           />
+        )}
+
+        {activeViewersStoryId && (
+          <div
+            className="fixed inset-0 z-[380] flex items-end bg-black/45 px-3 pt-3 pb-[max(var(--uix-space-3),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))]"
+            onClick={() => setActiveViewersStoryId(null)}
+          >
+            <div
+              className="mx-auto w-full max-w-[480px] rounded-2xl border border-border bg-background shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm font-semibold">Кто посмотрел сториз</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveViewersStoryId(null)}
+                  className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
+                  aria-label="Закрыть список просмотров"
+                >
+                  <MoreHorizontal className="h-4 w-4 rotate-90" />
+                </button>
+              </div>
+              <div className="max-h-[52vh] overflow-y-auto p-2">
+                {activeStoryViewersLoading ? (
+                  <div className="px-3 py-4 text-sm text-muted-foreground">Загрузка...</div>
+                ) : activeStoryViewers.length === 0 ? (
+                  <ListEmptyState
+                    icon={Eye}
+                    title="Пока нет просмотров"
+                    description="Когда пользователи посмотрят сториз, они появятся здесь."
+                    className="border-none"
+                  />
+                ) : (
+                  (activeStoryViewers as StoryViewerUser[]).map((viewer) => (
+                    <div key={viewer.id} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-secondary/60">
+                      <UserAvatar
+                        avatarUrl={viewer.avatarUrl ?? undefined}
+                        displayName={[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
+                        seed={viewer.id}
+                        size={36}
+                        className="h-9 w-9"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{formatPostTime(viewer.viewedAt)}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         <CommentsModal 
@@ -747,6 +1064,97 @@ export default function Posts() {
           onClose={() => setActiveCommentPostId(null)} 
           postId={activeCommentPostId} 
         />
+
+        {/* Avatar long-press menu (Instagram-like bottom sheet) */}
+        <AnimatePresence>
+          {myAvatarMenu && (
+            <motion.div
+              className="fixed inset-0 z-[380] flex items-end bg-black/45"
+              initial={prefersReducedMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: DURATION_NORMAL_S * 0.6 }}
+              onClick={() => setMyAvatarMenu(false)}
+            >
+              <motion.div
+                className="mx-auto w-full max-w-[480px] rounded-t-2xl border-t border-border/30 bg-background shadow-2xl px-1 pt-2 pb-[max(12px,calc(env(safe-area-inset-bottom,0px)+8px))]"
+                initial={prefersReducedMotion ? false : { y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border" />
+
+                <button
+                  type="button"
+                  className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium hover:bg-secondary active:bg-secondary/80"
+                  onClick={() => {
+                    setMyAvatarMenu(false);
+                    triggerStoryFilePicker();
+                  }}
+                >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-500 to-primary text-white">
+                    <Plus className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Загрузить сториз</p>
+                    <p className="text-xs text-muted-foreground">Фото или видео, исчезает через 24 ч</p>
+                  </div>
+                </button>
+
+                {isNativePlatform && (
+                  <button
+                    type="button"
+                    className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium hover:bg-secondary active:bg-secondary/80"
+                    onClick={() => void triggerStoryCamera()}
+                  >
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-500/15 text-sky-600">
+                      <Camera className="h-5 w-5" />
+                    </div>
+                    <p className="font-semibold">Снять на камеру</p>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium hover:bg-secondary active:bg-secondary/80"
+                  onClick={() => {
+                    setMyAvatarMenu(false);
+                    setLocation("/profile/me");
+                  }}
+                >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-foreground">
+                    <User className="h-5 w-5" />
+                  </div>
+                  <p className="font-semibold">Посмотреть аватар</p>
+                </button>
+
+                <button
+                  type="button"
+                  className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium hover:bg-secondary active:bg-secondary/80"
+                  onClick={() => {
+                    setMyAvatarMenu(false);
+                    setLocation("/profile/edit");
+                  }}
+                >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary text-foreground">
+                    <Pencil className="h-5 w-5" />
+                  </div>
+                  <p className="font-semibold">Редактировать аватар</p>
+                </button>
+
+                <button
+                  type="button"
+                  className="mt-1 flex w-full min-h-[var(--uix-touch-min)] items-center justify-center rounded-xl px-4 py-3 text-sm text-muted-foreground hover:bg-secondary"
+                  onClick={() => setMyAvatarMenu(false)}
+                >
+                  Отмена
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

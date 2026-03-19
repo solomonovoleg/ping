@@ -33,6 +33,9 @@ export const EASING_OUT_EXPO = "cubic-bezier(0.16, 1, 0.3, 1)";
 /** Задержка между осколками (stagger), мс */
 export const SHARD_STAGGER_MS = 12;
 
+/** Таймаут автоскрытия всплывающих подсказок (например панель заголовков) */
+export const DURATION_TOAST_AUTO_DISMISS_MS = 2800;
+
 /**
  * Использование в компонентах:
  *   import { DURATION_NORMAL_MS, EASING_OUT } from "@/lib/motion";

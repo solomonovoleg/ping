@@ -27,12 +27,15 @@ export function ChatMediaLinksSheet({
   chatId,
   chatName,
   folderId,
+  onOpenMedia,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chatId: string;
   chatName: string;
   folderId?: string | null;
+  /** Открыть медиа во встроенном просмотрщике (вместо внешнего окна) */
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
 }) {
   const [tab, setTab] = useState<Tab>("media");
   const [media, setMedia] = useState<MediaItem[]>([]);
@@ -146,37 +149,48 @@ export function ChatMediaLinksSheet({
               />
             ) : (
               <div className="grid grid-cols-3 gap-1.5">
-                {media.map((item) => (
-                  <a
-                    key={item.id}
-                    href={resolveUrl(item.content)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="aspect-square rounded-lg overflow-hidden bg-muted/50 block focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  >
-                    {item.type === "image" ? (
-                      <img
-                        src={resolveUrl(item.content)}
-                        alt=""
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : item.type === "video" || item.type === "video_note" ? (
-                      <div className="relative w-full h-full bg-black/20">
-                        <video
-                          src={resolveUrl(item.content)}
+                {media.map((item) => {
+                  const url = resolveUrl(item.content);
+                  const mediaType = item.type === "image" ? "image" : item.type === "video" || item.type === "video_note" ? (item.type as "video" | "video_note") : null;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        if (!url) return;
+                        if (mediaType && onOpenMedia) {
+                          onOpenMedia(url, mediaType);
+                          onOpenChange(false);
+                        } else {
+                          window.open(url, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      className="aspect-square rounded-lg overflow-hidden bg-muted/50 block focus:outline-none focus:ring-2 focus:ring-primary/50 w-full text-left"
+                    >
+                      {item.type === "image" ? (
+                        <img
+                          src={url}
+                          alt=""
                           className="w-full h-full object-cover"
-                          preload="metadata"
+                          loading="lazy"
                         />
-                        <Video className="absolute right-1 bottom-1 w-4 h-4 text-white drop-shadow" />
-                      </div>
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-muted">
-                        <Mic className="w-6 h-6 text-muted-foreground" />
-                      </div>
-                    )}
-                  </a>
-                ))}
+                      ) : item.type === "video" || item.type === "video_note" ? (
+                        <div className="relative w-full h-full bg-black/20">
+                          <video
+                            src={url}
+                            className="w-full h-full object-cover"
+                            preload="metadata"
+                          />
+                          <Video className="absolute right-1 bottom-1 w-4 h-4 text-white drop-shadow" />
+                        </div>
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-muted">
+                          <Mic className="w-6 h-6 text-muted-foreground" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )
           ) : links.length === 0 ? (

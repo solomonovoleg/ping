@@ -8,7 +8,9 @@ export type StoryItem = {
   createdAt: string;
   expiresAt: string;
   viewsCount?: number;
+  likesCount?: number;
   isViewed?: boolean;
+  isLiked?: boolean;
 };
 
 export type StoryViewerUser = {
@@ -24,6 +26,13 @@ export async function fetchStoriesByUser(userId: string): Promise<StoryItem[]> {
   const res = await apiFetch(`${API}/users/${encodeURIComponent(userId)}/stories`, {
     cache: "no-store",
   });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function fetchStoriesArchive(): Promise<StoryItem[]> {
+  const res = await apiFetch(`${API}/stories/archive`, { cache: "no-store" });
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -76,6 +85,18 @@ export async function deleteStory(storyId: string): Promise<void> {
   }
 }
 
+export async function archiveStory(storyId: string): Promise<void> {
+  const res = await apiFetch(`${API}/stories/${encodeURIComponent(storyId)}/archive`, {
+    method: "PATCH",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      (data && typeof data.message === "string" ? data.message : null) ?? "Не удалось архивировать сториз"
+    );
+  }
+}
+
 /** Лента сториз: все доступные авторы (с учётом приватности/блокировок) */
 export type StoriesFeedAuthor = {
   authorId: string;
@@ -114,4 +135,30 @@ export async function fetchStoryViewers(storyId: string): Promise<StoryViewerUse
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : [];
+}
+
+export async function likeStory(storyId: string): Promise<{ likesCount: number; isLiked: boolean }> {
+  const res = await apiFetch(`${API}/stories/${encodeURIComponent(storyId)}/likes`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const msg = data && typeof data.message === "string" ? data.message : "Не удалось поставить лайк";
+    throw new Error(msg);
+  }
+  const data = (await res.json().catch(() => ({}))) as { likesCount?: number; isLiked?: boolean };
+  return { likesCount: Number(data.likesCount ?? 0), isLiked: true };
+}
+
+export async function unlikeStory(storyId: string): Promise<{ likesCount: number; isLiked: boolean }> {
+  const res = await apiFetch(`${API}/stories/${encodeURIComponent(storyId)}/likes`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const msg = data && typeof data.message === "string" ? data.message : "Не удалось убрать лайк";
+    throw new Error(msg);
+  }
+  const data = (await res.json().catch(() => ({}))) as { likesCount?: number; isLiked?: boolean };
+  return { likesCount: Number(data.likesCount ?? 0), isLiked: false };
 }

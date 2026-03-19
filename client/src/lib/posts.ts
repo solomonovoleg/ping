@@ -1,4 +1,5 @@
-import { API, apiFetch } from "@/lib/api-base";
+import { API, apiFetch, getAuthHeaders, setAuthToken } from "@/lib/api-base";
+import type { PostMediaLayout } from "@shared/post-media-layout";
 
 export type ReactionUser = { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null };
 
@@ -9,6 +10,7 @@ export type FeedPost = {
   imageUrl: string | null;
   /** Несколько фото/видео (как ВК). Если пусто — смотри imageUrl. */
   mediaUrls?: string[] | null;
+  mediaLayout?: PostMediaLayout | null;
   /** Хештеги из текста поста */
   hashtags?: string[];
   reactions: { emoji: string; count: number }[];
@@ -34,18 +36,41 @@ export type FeedPost = {
 export async function uploadPostMedia(file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
-  const res = await apiFetch(`${API}/upload/post-media`, {
+  const res = await fetch(`${API}/upload/post-media`, {
     method: "POST",
     credentials: "include",
+    headers: getAuthHeaders(),
     body: form,
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data.message as string) || "Не удалось загрузить файл");
-  return data.url as string;
+  if (res.status === 401) {
+    setAuthToken(null);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("auth:session-expired"));
+    }
+  }
+  const text = await res.text();
+  let data: { message?: unknown; url?: unknown } = {};
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text) as { message?: unknown; url?: unknown };
+    } catch {
+      /* non-JSON body */
+    }
+  }
+  if (!res.ok) {
+    if (res.status === 413) {
+      throw new Error("Файл слишком большой");
+    }
+    const serverMsg = typeof data.message === "string" ? data.message : null;
+    throw new Error(serverMsg || `Не удалось загрузить файл (${res.status})`);
+  }
+  const url = typeof data.url === "string" ? data.url.trim() : "";
+  if (!url) throw new Error("Сервер не вернул URL файла");
+  return url;
 }
 
-export async function createPost(data: { text: string; imageUrl?: string | null; mediaUrls?: string[] }): Promise<{ id: string; createdAt: string }> {
-  const payload: { text: string; imageUrl?: string | null; mediaUrls?: string[] } = {
+export async function createPost(data: { text: string; imageUrl?: string | null; mediaUrls?: string[]; mediaLayout?: PostMediaLayout | null }): Promise<{ id: string; createdAt: string }> {
+  const payload: { text: string; imageUrl?: string | null; mediaUrls?: string[]; mediaLayout?: PostMediaLayout | null } = {
     text: data.text.trim(),
   };
   if (data.mediaUrls?.length) {
@@ -53,6 +78,7 @@ export async function createPost(data: { text: string; imageUrl?: string | null;
   } else if (data.imageUrl !== undefined) {
     payload.imageUrl = data.imageUrl ?? null;
   }
+  if (data.mediaLayout !== undefined) payload.mediaLayout = data.mediaLayout;
   const res = await apiFetch(`${API}/posts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -81,6 +107,7 @@ export function normalizeFeedPost(raw: unknown): FeedPost | null {
     text: typeof o.text === "string" ? o.text : "",
     imageUrl: o.imageUrl != null && o.imageUrl !== "" ? String(o.imageUrl) : null,
     mediaUrls: Array.isArray(o.mediaUrls) ? (o.mediaUrls as string[]) : null,
+    mediaLayout: o.mediaLayout && typeof o.mediaLayout === "object" ? (o.mediaLayout as PostMediaLayout) : null,
     hashtags: Array.isArray(o.hashtags) ? (o.hashtags as string[]) : undefined,
     reactions: Array.isArray(o.reactions) ? (o.reactions as FeedPost["reactions"]) : [],
     reactionUsers: o.reactionUsers && typeof o.reactionUsers === "object" ? (o.reactionUsers as FeedPost["reactionUsers"]) : undefined,
@@ -194,8 +221,8 @@ export async function deletePost(postId: string): Promise<void> {
 
 export async function updatePost(
   postId: string,
-  data: { text?: string; imageUrl?: string | null; mediaUrls?: string[] | null }
-): Promise<{ id: string; text: string; imageUrl: string | null; mediaUrls?: string[]; createdAt: string }> {
+  data: { text?: string; imageUrl?: string | null; mediaUrls?: string[] | null; mediaLayout?: PostMediaLayout | null }
+): Promise<{ id: string; text: string; imageUrl: string | null; mediaUrls?: string[]; mediaLayout?: PostMediaLayout | null; createdAt: string }> {
   const res = await apiFetch(`${API}/posts/${encodeURIComponent(postId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

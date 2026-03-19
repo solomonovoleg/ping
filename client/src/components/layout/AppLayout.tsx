@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { MessageCircle, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { onChatListUpdate } from "@/features/chat/realtime-events";
 import { cn } from "@/lib/utils";
 import { DURATION_FAST_MS, DURATION_NORMAL_MS, EASING_OUT } from "@/lib/motion";
 import { usePrefersReducedMotion } from "@/lib/motion";
@@ -125,8 +126,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       queryClient.invalidateQueries({ queryKey: ["chats"] });
       queryClient.refetchQueries({ queryKey: ["chats"] });
     };
-    window.addEventListener("ping:chat-list-update", handler);
-    return () => window.removeEventListener("ping:chat-list-update", handler);
+    return onChatListUpdate(handler);
   }, [queryClient]);
 
   const renderNavButton = (item: (typeof navItemsLeft)[number]) => {

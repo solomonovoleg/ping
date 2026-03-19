@@ -14,10 +14,22 @@ import { fetchPostsByAuthor, formatPostTime, addReaction, removeReaction, delete
 import { PostMedia } from "@/components/PostMedia";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
-import { fetchStoriesByUser, createStory, fetchStoryViewers, type StoryItem, type StoryViewerUser, type StoryExpiresHours } from "@/lib/stories";
+import {
+  archiveStory,
+  deleteStory,
+  fetchStoriesByUser,
+  createStory,
+  fetchStoryViewers,
+  likeStory,
+  recordStoryView,
+  unlikeStory,
+  type StoryItem,
+  type StoryViewerUser,
+  type StoryExpiresHours,
+} from "@/lib/stories";
 import { sendMessage, uploadChatMedia } from "@/lib/chat";
 import { UserAvatar } from "@/components/UserAvatar";
-import { TapScaleButton } from "@/components/ui/tap-scale";
+import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 import { resolveUrl } from "@/lib/api-base";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { buildProfilePath } from "@/lib/profile-route";
@@ -49,6 +61,8 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const [pendingStoryFile, setPendingStoryFile] = useState<File | null>(null);
   const [showStoryDurationPicker, setShowStoryDurationPicker] = useState(false);
   const [storyExpiresInHours, setStoryExpiresInHours] = useState<StoryExpiresHours>(24);
+  const [likedStoryIds, setLikedStoryIds] = useState<Record<string, boolean>>({});
+  const [likesCountByStoryId, setLikesCountByStoryId] = useState<Record<string, number>>({});
   const avatarLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarLongPressHandledRef = useRef(false);
   const storyFileInputRef = useRef<HTMLInputElement>(null);
@@ -100,9 +114,20 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const apiStories = isMe ? queryStories : pageStories;
   const hasStories = (apiStories ?? []).length > 0;
   const storyViewersCountById = (apiStories ?? []).reduce<Record<string, number>>((acc, s) => {
-    acc[s.id] = 0;
+    acc[s.id] = Number((s as { viewsCount?: number }).viewsCount ?? 0);
     return acc;
   }, {});
+
+  useEffect(() => {
+    const nextLiked: Record<string, boolean> = {};
+    const nextLikesCount: Record<string, number> = {};
+    for (const story of apiStories ?? []) {
+      nextLiked[story.id] = story.isLiked === true;
+      nextLikesCount[story.id] = Number(story.likesCount ?? 0);
+    }
+    setLikedStoryIds(nextLiked);
+    setLikesCountByStoryId(nextLikesCount);
+  }, [apiStories]);
 
   const { data: activeStoryViewers = [], isLoading: activeStoryViewersLoading } = useQuery({
     queryKey: ["stories", "viewers", activeViewersStoryId],
@@ -214,7 +239,12 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
     }
   };
 
-  const handleStoryReply = async (payload: { storyId: string; authorId: string; text: string }) => {
+  const handleStoryReply = async (payload: {
+    storyId: string;
+    authorId: string;
+    text: string;
+    story: { id: string; image: string; userName: string; userAvatar: string; time: string };
+  }) => {
     if (!user?.id) {
       toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
       return;
@@ -224,8 +254,63 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       return;
     }
     const chat = await startDm(payload.authorId);
-    await sendMessage(chat.id, { type: "text", content: payload.text.trim() });
+    const storyPayload = {
+      storyId: payload.story.id,
+      mediaUrl: payload.story.image,
+      authorId: payload.authorId,
+      authorName: payload.story.userName,
+      authorAvatar: payload.story.userAvatar,
+      storyTimeLabel: payload.story.time,
+      replyText: payload.text.trim(),
+    };
+    await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
     toast({ title: "Ответ на сториз отправлен" });
+  };
+
+  const handleStoryLikeToggle = async (storyId: string, liked: boolean) => {
+    const prevLiked = likedStoryIds[storyId] ?? false;
+    const prevCount = likesCountByStoryId[storyId] ?? 0;
+    const optimisticLiked = !liked;
+    const optimisticCount = Math.max(0, prevCount + (liked ? -1 : 1));
+    setLikedStoryIds((prev) => ({ ...prev, [storyId]: optimisticLiked }));
+    setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: optimisticCount }));
+    try {
+      const result = liked ? await unlikeStory(storyId) : await likeStory(storyId);
+      setLikedStoryIds((prev) => ({ ...prev, [storyId]: !!result.isLiked }));
+      setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: Number(result.likesCount ?? optimisticCount) }));
+    } catch (err) {
+      setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
+      setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
+      toast({ title: err instanceof Error ? err.message : "Не удалось обновить лайк", variant: "destructive" });
+    }
+  };
+
+  const handleStoryShare = async (story: { id: string; image: string; userName: string; time: string }) => {
+    const shareText = `Сториз ${story.userName}`;
+    if (navigator.share) {
+      await navigator.share({ title: shareText, text: shareText, url: story.image });
+      return;
+    }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(story.image);
+      toast({ title: "Ссылка на сториз скопирована" });
+      return;
+    }
+    throw new Error("Поделиться не удалось");
+  };
+
+  const handleStoryArchive = async (storyId: string) => {
+    await archiveStory(storyId);
+    toast({ title: "Сториз перемещена в архив" });
+    setActiveStoryIndex(null);
+    await refetchStories();
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    await deleteStory(storyId);
+    toast({ title: "Сториз удалена" });
+    setActiveStoryIndex(null);
+    await refetchStories();
   };
 
   const handleStoryFileSelect = useCallback((file: File | null) => {
@@ -517,14 +602,22 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.postsCount ?? profilePosts.length) : (apiProfile?.postsCount ?? 0)}</p>
               <p className="text-[12px] text-muted-foreground">Посты</p>
             </div>
-            <div className="min-w-[58px]">
+            <TapScaleDiv
+              className="min-w-[58px] cursor-pointer rounded-lg py-1 -my-1 active:bg-secondary/50"
+              onClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/followers`)}
+              aria-label="Подписчики"
+            >
               <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followersCount ?? 0) : (apiProfile?.followersCount ?? 0)}</p>
               <p className="text-[12px] text-muted-foreground">Подписчики</p>
-            </div>
-            <div className="min-w-[58px]">
+            </TapScaleDiv>
+            <TapScaleDiv
+              className="min-w-[58px] cursor-pointer rounded-lg py-1 -my-1 active:bg-secondary/50"
+              onClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/following`)}
+              aria-label="Подписки"
+            >
               <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followingCount ?? 0) : (apiProfile?.followingCount ?? 0)}</p>
               <p className="text-[12px] text-muted-foreground">Подписки</p>
-            </div>
+            </TapScaleDiv>
           </div>
         </div>
 
@@ -827,6 +920,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 </p>
                 <PostMedia
                   mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+                  layout={post.mediaLayout ?? null}
                 />
               </div>
 
@@ -938,14 +1032,29 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
             userAvatar: resolveUrl(avatarUrl ?? "") || resolveUrl((apiStories?.[0] as { thumbnailUrl?: string; mediaUrl?: string })?.thumbnailUrl ?? (apiStories?.[0] as { mediaUrl?: string })?.mediaUrl ?? ""),
             time: formatPostTime((s as { createdAt?: string }).createdAt ?? ""),
             authorId: (s as { authorId?: string }).authorId ?? (authorId ?? undefined),
+            expiresAt: (s as { expiresAt?: string }).expiresAt,
+            likesCount: Number((s as { likesCount?: number }).likesCount ?? 0),
+            isLiked: (s as { isLiked?: boolean }).isLiked === true,
           }))} 
           initialIndex={Math.min(activeStoryIndex, (apiStories ?? []).length - 1)} 
-          onClose={() => setActiveStoryIndex(null)} 
+          onClose={() => setActiveStoryIndex(null)}
+          viewerUserId={user?.id}
           canSeeViewers={isMe}
           onOpenViewers={(storyId) => setActiveViewersStoryId(storyId)}
           viewersCountByStoryId={storyViewersCountById}
+          onStoryView={(storyId) => {
+            if (!isMe) void recordStoryView(storyId);
+          }}
           onReply={isMe ? undefined : handleStoryReply}
           canReply={!isMe}
+          onToggleLike={handleStoryLikeToggle}
+          canLike={!isMe}
+          likedByStoryId={likedStoryIds}
+          likesCountByStoryId={likesCountByStoryId}
+          canManage={isMe}
+          onShareStory={handleStoryShare}
+          onArchiveStory={isMe ? handleStoryArchive : undefined}
+          onDeleteStory={isMe ? handleStoryDelete : undefined}
         />
       )}
 
@@ -1010,7 +1119,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
 
       {activeViewersStoryId && (
         <div
-          className="fixed inset-0 z-[220] flex items-end bg-black/45 px-3 pt-3 pb-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+12px)]"
+          className="fixed inset-0 z-[380] flex items-end bg-black/45 px-3 pt-3 pb-[max(var(--uix-space-3),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))]"
           onClick={() => setActiveViewersStoryId(null)}
         >
           <div

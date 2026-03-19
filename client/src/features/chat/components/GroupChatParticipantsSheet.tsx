@@ -10,6 +10,7 @@ import { UserPlus, UserMinus } from "lucide-react";
 import { addGroupMember, removeGroupMember } from "@/lib/chat";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
+import { emitChatListUpdate } from "@/features/chat/realtime-events";
 import type { ApiChat, ApiChatMember } from "../types";
 
 export function GroupChatParticipantsSheet({
@@ -56,7 +57,7 @@ export function GroupChatParticipantsSheet({
       const updated = await addGroupMember(chatId, userId);
       onMembersChange(updated as ApiChat);
       setContacts((prev) => prev.filter((c) => c.id !== userId));
-      window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
+      emitChatListUpdate();
       toast({ title: "Участник добавлен" });
     } catch (err) {
       toast({ title: err instanceof Error ? err.message : "Не удалось добавить", variant: "destructive" });
@@ -70,7 +71,7 @@ export function GroupChatParticipantsSheet({
     try {
       const updated = await removeGroupMember(chatId, userId);
       onMembersChange(updated as ApiChat);
-      window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
+      emitChatListUpdate();
       toast({ title: "Участник исключён" });
     } catch (err) {
       toast({ title: err instanceof Error ? err.message : "Не удалось исключить", variant: "destructive" });

@@ -5,7 +5,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { useCallContext } from "@/contexts/CallContext";
 import { getMessages, listChatFolders } from "@/lib/chat";
 import { getDraft } from "@/lib/chat-drafts";
 import { API, apiFetch } from "@/lib/api-base";
@@ -14,6 +13,7 @@ import { parseMessageDate } from "../utils/format";
 import { MESSAGES_PAGE, CHAT_LOAD_TIMEOUT_MS } from "../constants";
 import type { ApiChat, ApiMessage } from "../types";
 import { useChatVisibilityRefresh } from "./useChatVisibilityRefresh";
+import { useChatRealtime } from "./useChatRealtime";
 
 /** Не чаще одного "typing" в 2.5 с; индикатор сбрасывается, если нет ввода 3 с */
 const TYPING_THROTTLE_MS = 2500;
@@ -26,7 +26,18 @@ export type UseChatMessagesParams = {
 
 export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessagesParams) {
   const { user } = useAuth();
-  const { subscribeChat, sendTyping, subscribeTyping, sendVoiceRecording, subscribeVoiceRecording } = useCallContext();
+  const {
+    subscribeChat,
+    subscribeMessageDeleted,
+    sendTyping,
+    subscribeTyping,
+    sendVoiceRecording,
+    subscribeVoiceRecording,
+    notifyChatListUpdate,
+    onChatRead,
+    onMessageReaction,
+    onMessageEdited,
+  } = useChatRealtime();
   const onDraftRestoreRef = useRef(onDraftRestore);
   onDraftRestoreRef.current = onDraftRestore;
 
@@ -131,11 +142,6 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
           const draft = getDraft(cId) ?? "";
           onDraftRestoreRef.current?.(cId, draft);
-          apiFetch(`${API}/chats/${encodeURIComponent(cId)}/read`, { method: "PUT" })
-            .then(() => {
-              setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
-            })
-            .catch(() => {});
         })
         .catch((e) => {
           if (currentChatIdRef.current === id) {
@@ -178,11 +184,9 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         const mainFolder = foldersList.find((f) => f.isMain) ?? foldersList[0];
         const folderId = mainFolder?.id ?? null;
         setCurrentFolderId(folderId);
-        apiFetch(`${base}/read`, { method: "PUT" })
-          .then(async () => {
-            setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
-            if (chatData.type === "group") {
-              const foldersRes2 = await apiFetch(`${base}/folders`, { cache: "no-store" });
+        if (chatData.type === "group") {
+          apiFetch(`${base}/folders`, { cache: "no-store" })
+            .then(async (foldersRes2) => {
               if (foldersRes2.ok && currentChatIdRef.current === id) {
                 const list2 = await foldersRes2.json();
                 const foldersList2 = Array.isArray(list2)
@@ -190,9 +194,9 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
                   : [];
                 setFolders(foldersList2);
               }
-            }
-          })
-          .catch(() => {});
+            })
+            .catch(() => {});
+        }
         const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
         if (folderId) msgParams.set("folderId", folderId);
         const messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
@@ -277,6 +281,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     loadChatAndMessages();
   }, [loadChatAndMessages]);
 
+  // При выходе из чата: обновить список чатов (без PUT /read без messageId — иначе ложные «прочитано»).
+  useEffect(() => {
+    return () => {
+      if (!chatId) return;
+      setTimeout(() => notifyChatListUpdate(), 250);
+    };
+  }, [chatId, notifyChatListUpdate]);
+
   useEffect(() => {
     if (!scrollRestoreAfterPrependRef.current) return;
     const c = scrollContainerRef.current;
@@ -359,13 +371,27 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
 
   useEffect(() => {
     if (!chatId) return;
+    const unsub = subscribeMessageDeleted(chatId, (messageId) => {
+      if (currentChatIdRef.current !== chatId) return;
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    });
+    return unsub;
+  }, [chatId, subscribeMessageDeleted]);
+
+  useEffect(() => {
+    if (!chatId) return;
     const unsub = subscribeTyping(chatId, (userId, displayName) => {
       if (userId === user?.id) return;
       flushSync(() => setTypingDisplay(displayName?.trim() || "Кто-то"));
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => setTypingDisplay(null), 5000);
     });
-    return () => { unsub(); if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); };
+    return () => {
+      unsub();
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+      setTypingDisplay(null);
+    };
   }, [chatId, user?.id, subscribeTyping]);
 
   useEffect(() => {
@@ -382,7 +408,12 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         voiceRecordingTimeoutRef.current = null;
       }
     });
-    return () => { unsub(); if (voiceRecordingTimeoutRef.current) clearTimeout(voiceRecordingTimeoutRef.current); };
+    return () => {
+      unsub();
+      if (voiceRecordingTimeoutRef.current) clearTimeout(voiceRecordingTimeoutRef.current);
+      voiceRecordingTimeoutRef.current = null;
+      setVoiceRecordingDisplay(null);
+    };
   }, [chatId, user?.id, subscribeVoiceRecording]);
 
   const scheduleSendTyping = useCallback(() => {
@@ -416,8 +447,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
    * Refetch чата с сервера, чтобы гарантированно получить актуальный lastReadAt
    * независимо от подписки/закрытия вкладки. */
   useEffect(() => {
-    const handler = (e: Event) => {
-      const { chatId: evChatId } = (e as CustomEvent<{ chatId: string; lastReadAt?: string }>).detail ?? {};
+    const off = onChatRead(({ chatId: evChatId }) => {
       if (!evChatId || evChatId !== chatId) return;
       const base = `${API}/chats/${encodeURIComponent(chatId)}`;
       apiFetch(base)
@@ -426,9 +456,38 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           if (data?.id === currentChatIdRef.current) setChat(data);
         })
         .catch(() => {});
-    };
-    window.addEventListener("ping:chat-read", handler);
-    return () => window.removeEventListener("ping:chat-read", handler);
+    });
+    return off;
+  }, [chatId]);
+
+  /** Синхронизация реакций с собеседником по WebSocket (сервер шлёт после POST/DELETE реакции). */
+  useEffect(() => {
+    const uid = user?.id;
+    const off = onMessageReaction((d) => {
+      if (!d?.chatId || d.chatId !== chatId || !d.messageId) return;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== d.messageId) return m;
+          const next: ApiMessage = { ...m, reactions: d.reactions };
+          if (uid && d.userId === uid) {
+            next.myReaction = d.emoji;
+          }
+          return next;
+        })
+      );
+    });
+    return off;
+  }, [chatId, user?.id]);
+
+  /** Синхронизация редактирования сообщений с собеседником по WebSocket. */
+  useEffect(() => {
+    const off = onMessageEdited((d) => {
+      if (!d?.chatId || d.chatId !== chatId || !d.messageId) return;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === d.messageId && m.type === "text" ? { ...m, content: d.content } : m))
+      );
+    });
+    return off;
   }, [chatId]);
 
   useChatVisibilityRefresh(chatId, currentChatIdRef, setChat);

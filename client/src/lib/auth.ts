@@ -17,6 +17,9 @@ export type AuthUser = {
   bio?: string | null;
   /** Включены ли пуш-уведомления о новых сообщениях */
   pushEnabled?: boolean;
+  /** Адаптивная атмосфера в личных чатах */
+  vibeEnabled?: boolean;
+  vibeShareWithPartner?: boolean;
 };
 
 export async function fetchMe(): Promise<AuthUser | null> {
@@ -46,6 +49,8 @@ export async function fetchMe(): Promise<AuthUser | null> {
     hideFromSearch: data.hideFromSearch ?? false,
     bio: data.bio ?? null,
     pushEnabled: data.pushEnabled !== false,
+    vibeEnabled: data.vibeEnabled === true,
+    vibeShareWithPartner: data.vibeShareWithPartner === true,
   };
 }
 
@@ -195,6 +200,36 @@ export async function uploadCover(file: File): Promise<string> {
     return data.url;
   } catch {
     throw new Error("Неверный ответ сервера при загрузке шапки");
+  }
+}
+
+/** Только настройки атмосферы чата — без валидации имени/пола (PATCH /users/me/vibe-settings). */
+export async function patchVibeSettings(partial: {
+  vibeEnabled?: boolean;
+  vibeShareWithPartner?: boolean;
+}): Promise<{ vibeEnabled: boolean; vibeShareWithPartner: boolean }> {
+  const res = await fetch(`${API}/users/me/vibe-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    credentials: "include",
+    body: JSON.stringify(partial),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let message = "Не удалось сохранить";
+    try {
+      const err = JSON.parse(text) as { message?: string; error?: string };
+      if (typeof err?.message === "string") message = err.message;
+      else if (typeof err?.error === "string") message = err.error;
+    } catch {
+      if (text) message = text.slice(0, 200);
+    }
+    throw new Error(message);
+  }
+  try {
+    return JSON.parse(text) as { vibeEnabled: boolean; vibeShareWithPartner: boolean };
+  } catch {
+    throw new Error("Неверный ответ сервера");
   }
 }
 

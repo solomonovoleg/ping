@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
 import { getMediaDisplayFormat, type MediaDisplayFormat } from "@/lib/media-format";
 import { getExifOrientation, shouldSwapDimensionsForOrientation } from "@/lib/exif-orientation";
+import type { PostMediaLayout } from "@shared/post-media-layout";
 
 function isVideoUrl(url: string): boolean {
   return /\.(mp4|webm|mov)(\?|$)/i.test(url);
@@ -16,11 +17,13 @@ function isAudioUrl(url: string): boolean {
 function SinglePostMedia({
   url,
   isVideo,
+  forcedFormat,
   maxHeight = "min(400px, 70vh)",
   className,
 }: {
   url: string;
   isVideo: boolean;
+  forcedFormat?: MediaDisplayFormat | null;
   maxHeight?: string;
   className?: string;
 }) {
@@ -64,7 +67,7 @@ function SinglePostMedia({
     };
   }, [url, isVideo, applyFormat]);
 
-  const effectiveFormat = format ?? "square";
+  const effectiveFormat = forcedFormat ?? format ?? "square";
 
   const onImageLoad = useCallback(
     (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -135,6 +138,8 @@ function SinglePostMedia({
 type PostMediaProps = {
   /** Список URL фото/видео (1–10). Как во ВКонтакте: разная сетка по количеству. */
   mediaUrls: string[];
+  /** Зафиксированный layout из БД, чтобы одинаково отображалось у всех клиентов. */
+  layout?: PostMediaLayout | null;
   /** Максимальная высота контейнера (одно медиа) */
   maxHeight?: string;
   className?: string;
@@ -148,7 +153,7 @@ type PostMediaProps = {
  * 4 — сетка 2×2;
  * 5+ — сетка 2×2 + оставшиеся, у последней ячейки оверлей «+N».
  */
-export function PostMedia({ mediaUrls, maxHeight = "min(400px, 70vh)", className }: PostMediaProps) {
+export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", className }: PostMediaProps) {
   if (!mediaUrls.length) return null;
 
   const resolved = mediaUrls.map((u) => resolveUrl(u));
@@ -175,11 +180,20 @@ export function PostMedia({ mediaUrls, maxHeight = "min(400px, 70vh)", className
 
   // Один медиа — формат по соотношению сторон (horizontal / square / story)
   if (n === 1) {
+    const singleFormat =
+      layout?.mode === "single"
+        ? layout.format === "horizontal"
+          ? "horizontal"
+          : layout.format === "story"
+            ? "story"
+            : "square"
+        : null;
     return (
       <>
         <SinglePostMedia
           url={visual[0]}
           isVideo={isVideoUrl(visual[0])}
+          forcedFormat={singleFormat}
           maxHeight={maxHeight}
           className={className}
         />
@@ -188,8 +202,10 @@ export function PostMedia({ mediaUrls, maxHeight = "min(400px, 70vh)", className
     );
   }
 
+  const collageVariant = layout?.mode === "collage" ? layout.variant : null;
+
   // Два — в ряд
-  if (n === 2) {
+  if (n === 2 || collageVariant === "grid_2") {
     return (
       <>
         <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 flex gap-px", className)}>
@@ -209,7 +225,7 @@ export function PostMedia({ mediaUrls, maxHeight = "min(400px, 70vh)", className
   }
 
   // Три — как ВК: большое слева, два справа
-  if (n === 3) {
+  if (n === 3 || collageVariant === "mosaic_3") {
     return (
       <>
         <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 flex gap-px", className)}>
@@ -238,7 +254,7 @@ export function PostMedia({ mediaUrls, maxHeight = "min(400px, 70vh)", className
   }
 
   // 4 — сетка 2×2
-  if (n === 4) {
+  if (n === 4 || collageVariant === "grid_4") {
     return (
       <>
         <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 grid grid-cols-2 gap-px", className)}>

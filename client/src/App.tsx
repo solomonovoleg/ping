@@ -11,6 +11,7 @@ import { AddToHomeScreenHint } from "@/components/AddToHomeScreenHint";
 
 import AppLayout from "@/components/layout/AppLayout";
 import { CallProvider } from "@/contexts/CallContext";
+import { RealtimeProvider } from "@/contexts/RealtimeContext";
 import Login from "@/pages/Login";
 import Onboarding from "@/pages/Onboarding";
 import Privacy from "@/pages/Privacy";
@@ -91,6 +92,7 @@ const BoardTracksDetail = lazyWithRetry(() => import("@/pages/BoardTracksDetail"
 const Settings = lazyWithRetry(() => import("@/pages/Settings"), "settings");
 const SavedMessages = lazyWithRetry(() => import("@/pages/SavedMessages"), "saved-messages");
 const Subscribers = lazyWithRetry(() => import("@/pages/Subscribers"), "subscribers");
+const FollowersList = lazyWithRetry(() => import("@/pages/FollowersList"), "followers-list");
 const Notifications = lazyWithRetry(() => import("@/pages/Notifications"), "notifications");
 const AdminApp = lazyWithRetry(() => import("@/admin/AdminApp").then((m) => ({ default: m.AdminApp })), "admin-app");
 
@@ -128,6 +130,8 @@ function Router() {
           <Route path="/create-post" component={CreatePost} />
           <Route path="/profile/edit" component={EditProfile} />
           <Route path="/profile/:id/post/:postId" component={PostDetail} />
+          <Route path="/profile/:id/followers" component={FollowersList} />
+          <Route path="/profile/:id/following" component={FollowersList} />
           <Route path="/profile/:id" component={UserProfile} />
           <Route path="/id/:id" component={LegacyProfileRedirect} />
           <Route path="/subscribers" component={Subscribers} />
@@ -183,9 +187,11 @@ function AppBody() {
   }
 
   return (
-    <CallProvider>
-      <Router />
-    </CallProvider>
+    <RealtimeProvider>
+      <CallProvider>
+        <Router />
+      </CallProvider>
+    </RealtimeProvider>
   );
 }
 
