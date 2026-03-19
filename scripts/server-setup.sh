@@ -80,7 +80,10 @@ if grep -q '^DATABASE_URL=.\+' .env 2>/dev/null; then
   sed -i.bak 's/@base/@localhost/g; s/:base:5432/:localhost:5432/g' .env 2>/dev/null || true
   DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
   export DATABASE_URL=$(echo "$DB_URL_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
-  echo "Миграции БД..."
+  echo "Схема Drizzle (push, пустая БД)..."
+  # npx: на сервере часто npm install --omit=dev — локального drizzle-kit нет
+  DATABASE_URL="$DATABASE_URL" npx --yes drizzle-kit push --force || true
+  echo "Дополнительные миграции (скрипты)..."
   [ -f scripts/run-migrations.cjs ] && DATABASE_URL="$DATABASE_URL" node scripts/run-migrations.cjs || true
 else
   echo "DATABASE_URL не задан в .env — миграции пропущены (приложение будет без БД)."
