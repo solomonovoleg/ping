@@ -6,7 +6,7 @@ function Read-EnvFile {
   param([string]$Path)
   $map = @{}
   Get-Content $Path | ForEach-Object {
-    $line = $_.Trim()
+    $line = $_.Trim().TrimStart([char]0xFEFF)
     if (-not $line) { return }
     if ($line.StartsWith("#")) { return }
     if ($line.StartsWith("export ")) { $line = $line.Substring(7) }
@@ -72,7 +72,14 @@ Write-Host "== Prepare server .env payload =="
 $lines = @()
 function Add-Kv([string]$k) {
   if ($envMap.ContainsKey($k) -and -not [string]::IsNullOrWhiteSpace($envMap[$k])) {
-    $escaped = $envMap[$k].Replace("\", "\\").Replace('"', '\"')
+    # Trim + strip accidental surrounding quotes (иначе в URL БД попадает лишняя " → ping_moot_staging"")
+    $v = $envMap[$k].Trim().Trim([char]0xFEFF)
+    while ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) {
+      $v = $v.Substring(1, $v.Length - 2).Trim()
+    }
+    $v = $v.TrimEnd("`r", "`n", " ", "`t")
+    if ($k -eq "DATABASE_URL") { $v = $v.TrimEnd('"') }
+    $escaped = $v.Replace("\", "\\").Replace('"', '\"')
     $script:lines += "$k=""$escaped"""
   }
 }
@@ -94,7 +101,9 @@ Add-Kv "S3_REGION"
 Add-Kv "S3_ACCESS_KEY"
 Add-Kv "S3_SECRET_KEY"
 Add-Kv "S3_PUBLIC_ACL"
-Set-Content -Path $tmpServerEnv -Value $lines -NoNewline:$false -Encoding UTF8
+# UTF-8 без BOM — иначе на Linux в первой строке .env может остаться BOM и ломать парсинг
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllLines($tmpServerEnv, $lines, $utf8NoBom)
 
 Write-Host "== Upload + remote setup (non-interactive, password from deploy.staging.env) =="
 node scripts/deploy-staging-upload.mjs $tmpTar $tmpServerEnv
