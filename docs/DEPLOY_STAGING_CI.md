@@ -2,6 +2,8 @@
 
 После настройки **каждый push в ветку `feature/dev`** собирает проект и заливает его на твой staging (тот же `scripts/deploy.sh`, что и при локальном `npm run deploy`). **Мерж в `main` не нужен.**
 
+**Короткая инструкция по секрету (проще):** [`docs/STAGING_SECRET_SIMPLE.md`](./STAGING_SECRET_SIMPLE.md)
+
 ## Что сделать один раз
 
 ### 1. Секрет `STAGING_DEPLOY_ENV`
