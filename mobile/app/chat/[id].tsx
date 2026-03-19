@@ -50,7 +50,10 @@ export default function ChatScreen() {
       const [c, m] = await Promise.all([getChat(id), getMessages(id)]);
       setChat(c);
       setMessages(m);
-      await markChatRead(id);
+      const last = m.length > 0 ? m[m.length - 1] : null;
+      if (last?.id && !String(last.id).startsWith("temp-")) {
+        await markChatRead(id, last.id);
+      }
     } catch {
       setChat(null);
       setMessages([]);

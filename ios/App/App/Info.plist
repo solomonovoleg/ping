@@ -51,5 +51,7 @@
 	<string>PING использует микрофон для голосовых сообщений и звонков.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>PING использует галерею для выбора фото и видео.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PING сохраняет фото и видео в галерею по вашему запросу.</string>
 </dict>
 </plist>

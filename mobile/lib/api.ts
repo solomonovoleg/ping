@@ -156,8 +156,14 @@ export async function sendMessage(chatId: string, content: string, type = "text"
   return res.json();
 }
 
-export async function markChatRead(chatId: string): Promise<void> {
-  await apiFetch(`/chats/${chatId}/read`, { method: "PUT" });
+/** Передавай messageId последнего видимого сообщения — иначе сервер не двигает lastReadAt (корректные галочки). */
+export async function markChatRead(chatId: string, messageId?: string): Promise<void> {
+  if (!messageId) return;
+  await apiFetch(`/chats/${chatId}/read`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId }),
+  });
 }
 
 export async function registerPushToken(token: string): Promise<void> {
