@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Mic, Video, X, Heading1, Heading2, Heading3, Sparkles, Eye, Plus, Files } from "lucide-react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,74 +15,29 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { proofreadText } from "@/lib/ai-chat";
 import { PostMedia } from "@/components/PostMedia";
 import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  DURATION_FAST_S,
+  DURATION_NORMAL_S,
+  DURATION_TOAST_AUTO_DISMISS_MS,
+  EASING_OUT_BEZIER,
+  usePrefersReducedMotion,
+} from "@/lib/motion";
+import { getTextareaCaretCoordinates } from "@/lib/textarea-caret";
+import { useCreatePostDraft } from "@/hooks/useCreatePostDraft";
+import { buildPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
 
 type MediaKind = "image" | "video" | "audio";
 
 type MediaSlot =
-  | { type: "done"; url: string; kind: MediaKind }
-  | { type: "uploading"; preview: string; id: number; kind: MediaKind };
+  | { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null }
+  | { type: "uploading"; preview: string; id: number; kind: MediaKind; aspectRatio?: number | null };
 
-const MAX_MEDIA = 20;
+const MAX_MEDIA = 10;
+const MAX_MEDIA_PUBLISHED = 10; // Сервер принимает до 10 медиа в посте
 const MAX_CHARS = 8000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function getTextareaCaretCoordinates(textarea: HTMLTextAreaElement, position: number): { left: number; top: number } {
-  const div = document.createElement("div");
-  const style = window.getComputedStyle(textarea);
-  const properties = [
-    "boxSizing",
-    "width",
-    "height",
-    "overflowX",
-    "overflowY",
-    "borderTopWidth",
-    "borderRightWidth",
-    "borderBottomWidth",
-    "borderLeftWidth",
-    "paddingTop",
-    "paddingRight",
-    "paddingBottom",
-    "paddingLeft",
-    "fontStyle",
-    "fontVariant",
-    "fontWeight",
-    "fontStretch",
-    "fontSize",
-    "fontSizeAdjust",
-    "lineHeight",
-    "fontFamily",
-    "textAlign",
-    "textTransform",
-    "textIndent",
-    "textDecoration",
-    "letterSpacing",
-    "wordSpacing",
-    "tabSize",
-    "MozTabSize",
-  ] as const;
-  properties.forEach((prop) => {
-    // @ts-expect-error dynamic style copy
-    div.style[prop] = style[prop];
-  });
-  div.style.position = "absolute";
-  div.style.visibility = "hidden";
-  div.style.whiteSpace = "pre-wrap";
-  div.style.wordWrap = "break-word";
-  div.style.overflow = "hidden";
-
-  div.textContent = textarea.value.slice(0, position);
-  const span = document.createElement("span");
-  span.textContent = textarea.value.slice(position) || ".";
-  div.appendChild(span);
-  document.body.appendChild(div);
-
-  const left = span.offsetLeft + parseFloat(style.borderLeftWidth);
-  const top = span.offsetTop + parseFloat(style.borderTopWidth);
-  document.body.removeChild(div);
-  return { left, top };
 }
 
 function detectKindFromFile(file: File): MediaKind | null {
@@ -96,18 +52,51 @@ function detectKindFromFile(file: File): MediaKind | null {
   return null;
 }
 
+async function getImageAspectFromFile(file: File): Promise<number | null> {
+  if (!file.type.startsWith("image/")) return null;
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = objectUrl;
+    });
+    if (!img.naturalWidth || !img.naturalHeight) return null;
+    return img.naturalWidth / img.naturalHeight;
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function getImageAspectFromDataUrl(dataUrl: string): Promise<number | null> {
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = dataUrl;
+    });
+    if (!img.naturalWidth || !img.naturalHeight) return null;
+    return img.naturalWidth / img.naturalHeight;
+  } catch {
+    return null;
+  }
+}
+
 export default function CreatePost() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const uploadIdRef = useRef(0);
+  const mediaCountRef = useRef(0);
   const [text, setText] = useState("");
   const [mediaItems, setMediaItems] = useState<MediaSlot[]>([]);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
-  const [fileAccept, setFileAccept] = useState<"image/*" | "video/*" | "audio/*" | "image/*,video/*">("image/*,video/*");
   const [showPreview, setShowPreview] = useState(false);
   const [isProofreading, setIsProofreading] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -116,44 +105,46 @@ export default function CreatePost() {
   const isMobile = useIsMobile();
   const isNativePlatform = isNative();
   const useBottomSelectionBar = isNativePlatform || isMobile;
+  const prefersReducedMotion = usePrefersReducedMotion();
   const displayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") : "";
   const textLeft = MAX_CHARS - text.length;
   const hasUploading = mediaItems.some((s) => s.type === "uploading");
   const mediaCount = mediaItems.length;
+  mediaCountRef.current = mediaCount;
   const availableMediaSlots = Math.max(0, MAX_MEDIA - mediaCount);
   const mediaUrls = mediaItems
     .filter((s): s is { type: "done"; url: string; kind: MediaKind } => s.type === "done")
     .map((s) => s.url);
+  const previewLayout = (() => {
+    const doneItems = mediaItems.filter((s): s is { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null } => s.type === "done");
+    const imageItems = doneItems.filter((s) => s.kind === "image");
+    if (!imageItems.length || imageItems.length !== doneItems.length) return null;
+    const aspects = imageItems.map((s) => (typeof s.aspectRatio === "number" && Number.isFinite(s.aspectRatio) ? s.aspectRatio : 1));
+    return buildPostMediaLayout(aspects);
+  })();
   const canPublish = (text.trim().length > 0 || mediaUrls.length > 0) && !isPublishing && !hasUploading;
+
+  const { clearDraft } = useCreatePostDraft(
+    MAX_CHARS,
+    MAX_MEDIA,
+    text,
+    setText,
+    mediaItems,
+    setMediaItems,
+    toast
+  );
 
   useEffect(() => {
     if (!selectionToast) return;
-    const t = setTimeout(() => setSelectionToast(null), 2800);
+    const t = setTimeout(() => setSelectionToast(null), DURATION_TOAST_AUTO_DISMISS_MS);
     return () => clearTimeout(t);
   }, [selectionToast]);
-  const openFilePicker = (accept: "image/*" | "video/*" | "audio/*" | "image/*,video/*") => {
-    const slotsLeft = Math.max(0, MAX_MEDIA - mediaCount);
-    if (slotsLeft <= 0) {
-      toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
-      return;
-    }
-    const input = fileInputRef.current;
-    if (!input) {
-      toast({ title: "Не удалось открыть выбор файла", variant: "destructive" });
-      return;
-    }
-    setFileAccept(accept);
-    setShowMediaPicker(false);
-    // В некоторых мобильных браузерах click через rAF теряет "user gesture"
-    // и системный пикер не открывается.
-    input.click();
-  };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
     e.target.value = "";
-    const currentLen = mediaItems.length;
+    const currentLen = mediaCountRef.current;
     const toAdd = Math.min(files.length, MAX_MEDIA - currentLen);
     if (toAdd <= 0) {
       toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
@@ -163,12 +154,13 @@ export default function CreatePost() {
       toast({ title: `Можно добавить ещё только ${toAdd} медиа` });
     }
     setError("");
-    const acceptedFiles: Array<{ file: File; kind: MediaKind }> = [];
+    const acceptedFiles: Array<{ file: File; kind: MediaKind; aspectRatio: number | null }> = [];
     for (let i = 0; i < toAdd; i++) {
       const f = files[i];
       const kind = detectKindFromFile(f);
       if (!kind) continue;
-      acceptedFiles.push({ file: f, kind });
+      const aspectRatio = kind === "image" ? await getImageAspectFromFile(f) : null;
+      acceptedFiles.push({ file: f, kind, aspectRatio });
     }
     if (acceptedFiles.length === 0) {
       toast({ title: "Поддерживаются только фото, видео и аудио", variant: "destructive" });
@@ -181,9 +173,10 @@ export default function CreatePost() {
       if (!item) continue;
       const id = ++uploadIdRef.current;
       const preview = URL.createObjectURL(item.file);
-      newSlots.push({ type: "uploading", preview, id, kind: item.kind });
+      newSlots.push({ type: "uploading", preview, id, kind: item.kind, aspectRatio: item.aspectRatio });
     }
     setMediaItems((prev) => [...prev, ...newSlots].slice(0, MAX_MEDIA));
+    setShowPreview(true);
 
     (async () => {
       for (let i = 0; i < newSlots.length; i++) {
@@ -197,7 +190,9 @@ export default function CreatePost() {
           const url = await uploadPostMedia(toUpload);
           setMediaItems((prev) =>
             prev.map((item) =>
-              item.type === "uploading" && item.id === slot.id ? { type: "done" as const, url, kind: payload.kind } : item
+              item.type === "uploading" && item.id === slot.id
+                ? { type: "done" as const, url, kind: payload.kind, aspectRatio: payload.aspectRatio }
+                : item
             )
           );
         } catch (err) {
@@ -224,7 +219,7 @@ export default function CreatePost() {
 
   const handleAddFromNative = async (source: "camera" | "gallery") => {
     setShowMediaPicker(false);
-    const slotsLeft = Math.max(0, MAX_MEDIA - mediaCount);
+    const slotsLeft = Math.max(0, MAX_MEDIA - mediaItems.length);
     if (slotsLeft <= 0) {
       toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
       return;
@@ -234,19 +229,26 @@ export default function CreatePost() {
       if (source === "camera") dataUrl = await takePhotoFromCamera();
       else dataUrl = await pickPhotoFromGallery();
     } catch {
-      toast({ title: "Не удалось открыть камеру или галерею", variant: "destructive" });
+      toast({ title: "Не удалось открыть камеру или галерею. Выберите фото через Файлы.", variant: "destructive" });
+      setShowMediaPicker(true);
       return;
     }
-    if (!dataUrl) return;
+    if (!dataUrl) {
+      toast({ title: "Фото не выбрано. Выберите через Файлы.", variant: "destructive" });
+      setShowMediaPicker(true);
+      return;
+    }
+    const aspectRatio = await getImageAspectFromDataUrl(dataUrl);
     const id = ++uploadIdRef.current;
-    setMediaItems((prev) => [...prev, { type: "uploading" as const, preview: dataUrl, id, kind: "image" as const }].slice(0, MAX_MEDIA));
+    setMediaItems((prev) => [...prev, { type: "uploading" as const, preview: dataUrl, id, kind: "image" as const, aspectRatio }].slice(0, MAX_MEDIA));
+    setShowPreview(true);
     try {
       const file = await dataUrlToFile(dataUrl);
       const toUpload = await compressImage(file);
       const url = await uploadPostMedia(toUpload);
       setMediaItems((prev) =>
         prev.map((item) =>
-          item.type === "uploading" && item.id === id ? { type: "done" as const, url, kind: "image" as const } : item
+          item.type === "uploading" && item.id === id ? { type: "done" as const, url, kind: "image" as const, aspectRatio } : item
         )
       );
     } catch (err) {
@@ -326,12 +328,20 @@ export default function CreatePost() {
   const handlePublish = async () => {
     const trimmed = text.trim();
     if (!trimmed && mediaUrls.length === 0) return;
+    const doneItems = mediaItems.filter((s): s is { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null } => s.type === "done");
+    const imageItems = doneItems.filter((s) => s.kind === "image");
+    let mediaLayout: PostMediaLayout | null = null;
+    if (imageItems.length > 0 && imageItems.length === doneItems.length) {
+      const aspects = imageItems.map((s) => (typeof s.aspectRatio === "number" && Number.isFinite(s.aspectRatio) ? s.aspectRatio : 1));
+      mediaLayout = buildPostMediaLayout(aspects);
+    }
     setError("");
     setIsPublishing(true);
     try {
       const created = await createPost({
         text: trimmed,
         mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        mediaLayout,
       });
       if (user?.id) {
         const channelName = [user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль";
@@ -341,6 +351,7 @@ export default function CreatePost() {
           text: trimmed || "",
           imageUrl: mediaUrls[0] ?? null,
           mediaUrls: mediaUrls.length ? mediaUrls : null,
+          mediaLayout,
           reactions: [],
           myReaction: null,
           viewsCount: 0,
@@ -364,6 +375,7 @@ export default function CreatePost() {
         await queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
       }
       await queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
+      clearDraft();
       toast({ title: "Пост опубликован" });
       setLocation("/profile/me");
     } catch (e) {
@@ -375,9 +387,27 @@ export default function CreatePost() {
     }
   };
 
+  const handlePublishRef = useRef(handlePublish);
+  handlePublishRef.current = handlePublish;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        handlePublishRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <div className="flex flex-col h-full bg-background absolute inset-0 z-[100] animate-in slide-in-from-bottom-full duration-300 w-full max-w-full min-w-0 overflow-x-hidden uix-screen">
-      
+    <motion.div
+      className="flex flex-col h-full bg-background absolute inset-0 z-[100] w-full max-w-full min-w-0 overflow-x-hidden uix-screen"
+      initial={prefersReducedMotion ? false : { y: "100%" }}
+      animate={{ y: 0 }}
+      exit={{ y: "100%" }}
+      transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+    >
       {/* Header */}
       <div className="glass uix-content-x py-3 flex items-center justify-between border-b border-border/50 pt-safe-offset-2 z-10 sticky top-0">
         <TapScaleButton
@@ -438,7 +468,7 @@ export default function CreatePost() {
           >
             <Eye className="mr-1 h-3.5 w-3.5" /> {showPreview ? "Редактор" : "Предпросмотр"}
           </TapScaleButton>
-          <span className={cn("ml-auto text-xs", textLeft < 120 ? "text-amber-600" : "text-muted-foreground")}>
+          <span className={cn("ml-auto text-xs", textLeft < 120 ? "text-amber-600" : "text-muted-foreground")} title="Cmd+Enter — опубликовать">
             {text.length}/{MAX_CHARS}
           </span>
         </div>
@@ -448,13 +478,16 @@ export default function CreatePost() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Слотов: {mediaCount}/{MAX_MEDIA} • Осталось: {availableMediaSlots}
+            {mediaUrls.length > MAX_MEDIA_PUBLISHED && (
+              <span className="ml-1 text-amber-600">• В пост попадёт {MAX_MEDIA_PUBLISHED}</span>
+            )}
           </p>
         </div>
 
         {selectionToast && !showPreview && (
-          <div
+          <motion.div
             className={cn(
-              "fixed z-[160] animate-in fade-in zoom-in-95 duration-150 rounded-2xl border border-border/70 bg-background/95 px-3 py-2 shadow-lg backdrop-blur",
+              "fixed z-[160] rounded-2xl border border-border/70 bg-background/95 px-3 py-2 shadow-lg backdrop-blur",
               useBottomSelectionBar
                 ? "left-2 right-2 bottom-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+8px)]"
                 : "w-[min(320px,calc(100vw-16px))] -translate-x-1/2"
@@ -464,6 +497,9 @@ export default function CreatePost() {
                 ? undefined
                 : { left: `${selectionToast.x ?? window.innerWidth / 2}px`, top: `${selectionToast.y ?? 96}px` }
             }
+            initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: DURATION_FAST_S, ease: EASING_OUT_BEZIER }}
           >
             <p className="mb-2 text-[11px] font-medium text-muted-foreground">Сделать выделенное заголовком?</p>
             <div className="flex flex-wrap gap-2">
@@ -512,7 +548,7 @@ export default function CreatePost() {
                 Не сейчас
               </TapScaleButton>
             </div>
-          </div>
+          </motion.div>
         )}
 
         <div className="flex gap-3">
@@ -537,6 +573,7 @@ export default function CreatePost() {
                   onKeyUp={handleTextSelection}
                   onPointerUp={handleTextSelection}
                   placeholder="Что у вас нового?"
+                  aria-label="Текст поста"
                   className="w-full bg-transparent border-none focus:ring-0 resize-none min-h-[180px] text-[16px] outline-none placeholder:text-muted-foreground"
                   autoFocus
                 />
@@ -577,9 +614,9 @@ export default function CreatePost() {
                         <audio src={src} controls preload="metadata" className="w-full" />
                       </div>
                     ) : isVideo ? (
-                      <video src={src} className="w-full h-full object-cover" />
+                      <video src={src} className="w-full h-full object-cover" playsInline muted controls preload="metadata" />
                     ) : (
-                      <img src={src} alt="" className="w-full h-full object-cover" />
+                      <img src={src} alt={`Медиа ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
                     )}
                     {uploading && (
                       <div className="absolute inset-0 flex items-center justify-center bg-black/40">
@@ -589,9 +626,8 @@ export default function CreatePost() {
                     <button
                       type="button"
                       onClick={() => removeMedia(i)}
-                      disabled={uploading}
-                      className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white hover:bg-black/70 disabled:opacity-50"
-                      aria-label="Удалить"
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white hover:bg-black/70 disabled:opacity-50 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]"
+                      aria-label={uploading ? "Удалить (загрузка отменится)" : "Удалить"}
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -599,52 +635,106 @@ export default function CreatePost() {
                 );
               })}
             </div>
-            <p className="text-xs text-muted-foreground px-2 pb-1">{mediaItems.filter((s) => s.type === "done").length} / {MAX_MEDIA}</p>
+            <p className="text-xs text-muted-foreground px-2 pb-1">
+              {hasUploading
+                ? `Загружено: ${mediaItems.filter((s) => s.type === "done").length} из ${mediaCount} • загрузка…`
+                : `${mediaItems.filter((s) => s.type === "done").length} / ${MAX_MEDIA}`}
+            </p>
           </div>
         )}
 
         {showPreview && mediaUrls.length > 0 && (
           <div className="rounded-xl border border-border/60 bg-background px-3 py-2">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Предпросмотр медиа</p>
-            <PostMedia mediaUrls={mediaUrls} />
+            <PostMedia mediaUrls={mediaUrls} layout={previewLayout} />
           </div>
         )}
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={fileAccept}
-          multiple
-          className="hidden"
-          onChange={handleFileChange}
-        />
-
         {/* Media Picker */}
         <div className="sticky bottom-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px))] mt-auto pt-3 pb-2 border-t border-border/50 bg-background/95 backdrop-blur grid grid-cols-3 gap-2 relative">
-          <button
-            type="button"
-            onClick={() => setShowMediaPicker(true)}
-            disabled={availableMediaSlots <= 0}
-            className="col-span-3 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary disabled:opacity-60"
-          >
-            <Plus className="h-4 w-4" />
-            Добавить медиа
-          </button>
+          <div className="col-span-3 flex gap-2">
+            {isNativePlatform ? (
+              <TapScaleButton
+                type="button"
+                haptic
+                onClick={() => {
+                  if (availableMediaSlots <= 0) {
+                    toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
+                    return;
+                  }
+                  setShowMediaPicker(true);
+                }}
+                disabled={availableMediaSlots <= 0}
+                className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary disabled:opacity-60"
+              >
+                <Plus className="h-4 w-4" />
+                Добавить медиа
+              </TapScaleButton>
+            ) : availableMediaSlots <= 0 ? (
+              <TapScaleButton
+                type="button"
+                haptic
+                onClick={() => toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" })}
+                disabled
+                className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary disabled:opacity-60"
+              >
+                <Plus className="h-4 w-4" />
+                Добавить медиа
+              </TapScaleButton>
+            ) : (
+              <label className="relative flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary min-h-[var(--uix-touch-min)] cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/*,video/*"
+                  multiple
+                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                  onChange={(e) => void handleFileChange(e)}
+                  aria-label="Выбрать фото или видео"
+                />
+                <Plus className="h-4 w-4" />
+                Добавить медиа
+              </label>
+            )}
+            <TapScaleButton
+              type="button"
+              haptic
+              subtle
+              onClick={() => setShowMediaPicker(true)}
+              disabled={availableMediaSlots <= 0}
+              className="rounded-2xl border border-border/40 bg-secondary/55 px-3 py-3 text-sm font-semibold disabled:opacity-60"
+              aria-label="Выбрать тип медиа"
+            >
+              <Files className="h-4 w-4" />
+            </TapScaleButton>
+          </div>
           <div className="col-span-3 px-1 pt-0.5 text-[11px] text-muted-foreground text-center">
             Можно добавить ещё: {availableMediaSlots}
           </div>
         </div>
       </div>
 
-      {showMediaPicker && (
-        <div className="fixed inset-0 z-[180]">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/45"
-            onClick={() => setShowMediaPicker(false)}
-            aria-label="Закрыть выбор медиа"
-          />
-          <div className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-background p-3 pb-[calc(var(--uix-space-3)+env(safe-area-inset-bottom,0px))] shadow-2xl">
+      <AnimatePresence>
+        {showMediaPicker && (
+          <motion.div
+            className="fixed inset-0 z-[180]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0.05 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/45"
+              onClick={() => setShowMediaPicker(false)}
+              aria-label="Закрыть выбор медиа"
+            />
+            <motion.div
+              className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-background p-3 pb-[calc(var(--uix-space-3)+env(safe-area-inset-bottom,0px))] shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ duration: prefersReducedMotion ? 0.05 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+            >
             <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">Выберите источник медиа</p>
 
             {isNativePlatform && (
@@ -660,57 +750,92 @@ export default function CreatePost() {
               </TapScaleButton>
             )}
 
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
-              onClick={() => (isNativePlatform ? handleAddFromNative("gallery") : openFilePicker("image/*"))}
-            >
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
-                <ImageIcon className="h-4 w-4" />
-              </span>
-              Фото
-            </TapScaleButton>
+            {isNativePlatform ? (
+              <TapScaleButton
+                type="button"
+                haptic
+                subtle
+                className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
+                onClick={() => handleAddFromNative("gallery")}
+              >
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
+                  <ImageIcon className="h-4 w-4" />
+                </span>
+                Фото
+              </TapScaleButton>
+            ) : (
+              <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                  onChange={(e) => {
+                    setShowMediaPicker(false);
+                    void handleFileChange(e);
+                  }}
+                  aria-label="Выбрать фото"
+                />
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
+                  <ImageIcon className="h-4 w-4" />
+                </span>
+                Фото
+              </label>
+            )}
 
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
-              onClick={() => openFilePicker("video/*")}
-            >
+            <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+              <input
+                type="file"
+                accept="video/*"
+                multiple
+                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                onChange={(e) => {
+                  setShowMediaPicker(false);
+                  void handleFileChange(e);
+                }}
+                aria-label="Выбрать видео"
+              />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
                 <Video className="h-4 w-4" />
               </span>
               Видео
-            </TapScaleButton>
+            </label>
 
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
-              onClick={() => openFilePicker("audio/*")}
-            >
+            <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+              <input
+                type="file"
+                accept="audio/*"
+                multiple
+                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                onChange={(e) => {
+                  setShowMediaPicker(false);
+                  void handleFileChange(e);
+                }}
+                aria-label="Выбрать аудио"
+              />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
                 <Mic className="h-4 w-4" />
               </span>
               Аудио
-            </TapScaleButton>
+            </label>
 
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
-              onClick={() => openFilePicker("image/*,video/*")}
-            >
+            <label className="relative mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+              <input
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                onChange={(e) => {
+                  setShowMediaPicker(false);
+                  void handleFileChange(e);
+                }}
+                aria-label="Выбрать файлы медиа"
+              />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <Files className="h-4 w-4" />
               </span>
               Файлы
-            </TapScaleButton>
+            </label>
 
             <TapScaleButton
               type="button"
@@ -721,9 +846,10 @@ export default function CreatePost() {
             >
               Отмена
             </TapScaleButton>
-          </div>
-        </div>
-      )}
-    </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
