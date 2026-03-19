@@ -14,6 +14,7 @@
 | `PORT` | `3081` |
 | `PM2_APP_NAME` | `ping-moot-staging` |
 | `DATABASE_URL` | `postgresql://ping_moot_staging:…@localhost:5432/ping_moot_staging` |
+| `SESSION_SECURE` | Если заходишь по **`http://IP:порт`** — **`false`**, иначе сессия не сохранится (лента `/posts`, логин). Для HTTPS — `true`. |
 
 На сервере: отдельный пользователь и БД PostgreSQL, nginx (если нужен) — прокси на `127.0.0.1:3081`. Удобно держать второй файл, например `deploy.staging.env`, и перед деплоем `cp deploy.staging.env deploy.env` или вызывать скрипт с подстановкой переменных.
 
