@@ -1,0 +1,2 @@
+# Shell scripts must use LF so Linux/bash on VPS does not break (no $'\r').
+*.sh text eol=lf

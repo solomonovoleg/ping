@@ -175,13 +175,10 @@ async function main() {
     sftp.end();
 
     console.log("== Extract + server-setup ==");
-    const setup = [
-      `cd ${remoteDir}`,
-      `tar -xf .deploy-staging.tar`,
-      `rm -f .deploy-staging.tar`,
-      `APP_NAME=${appName} PORT=${remotePort} bash scripts/server-setup.sh`,
-    ].join(" && ");
-    const r = await execCommand(conn, `bash -lc ${bashSingleQuote(setup)}`);
+    // Strip CRLF from *.sh (Windows tar can ship \\r; bash on Linux then fails with $'\\r').
+    const rd = String(remoteDir).replace(/\\/g, "/").replace(/"/g, '\\"');
+    const extractAndSetup = `bash -c "cd \\"${rd}\\" && tar -xf .deploy-staging.tar && rm -f .deploy-staging.tar && sed -i 's/\\r$//' scripts/*.sh 2>/dev/null || true && APP_NAME=${appName} PORT=${remotePort} bash scripts/server-setup.sh"`;
+    const r = await execCommand(conn, extractAndSetup);
     if (r.out) process.stdout.write(r.out);
     if (r.errOut) process.stderr.write(r.errOut);
   } finally {
