@@ -6,7 +6,17 @@ import { chats } from "./chats";
 import { users } from "./users";
 import { chatFolders } from "./chat-folders";
 
-export const messageTypeEnum = ["text", "system", "voice", "image", "video", "video_note", "missed_call", "post_share"] as const;
+export const messageTypeEnum = [
+  "text",
+  "system",
+  "voice",
+  "image",
+  "video",
+  "video_note",
+  "missed_call",
+  "post_share",
+  "story_reply",
+] as const;
 export type MessageType = (typeof messageTypeEnum)[number];
 
 // Self-referential table: references to messages.id cause circular type inference
@@ -27,7 +37,7 @@ export const messages = pgTable("messages", {
   forwardedFromSenderId: varchar("forwarded_from_sender_id").references(() => users.id, { onDelete: "set null" }),
   /** Имя отправителя в момент пересылки (для подписи «Переслано от X» без джойна). */
   forwardedFromSenderName: text("forwarded_from_sender_name"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
 export const insertMessageSchema = createInsertSchema(messages).pick({

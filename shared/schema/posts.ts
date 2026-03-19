@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { boolean, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./users";
+import type { PostMediaLayout } from "../post-media-layout";
 
 /** Извлечь уникальные хештеги из текста (#слово) в нижнем регистре */
 export function extractHashtags(text: string): string[] {
@@ -30,6 +31,8 @@ export const posts = pgTable("posts", {
   imageUrl: text("image_url"),
   /** Несколько фото/видео в посте (как во ВКонтакте). URL строки. */
   mediaUrls: jsonb("media_urls").$type<string[]>(),
+  /** Зафиксированный формат отображения медиа (single/collage), чтобы у всех клиентов был одинаковый layout. */
+  mediaLayout: jsonb("media_layout").$type<PostMediaLayout | null>(),
   /** Реакции в виде [{ emoji: "❤️", count: 5 }, ...] для отображения без отдельной таблицы */
   reactions: jsonb("reactions").$type<{ emoji: string; count: number }[]>().default([]),
   /** Хештеги, извлечённые из text (#слово), для поиска */

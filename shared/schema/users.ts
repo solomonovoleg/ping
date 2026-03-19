@@ -66,6 +66,10 @@ export const users = pgTable("users", {
   profileVisibility: varchar("profile_visibility", { length: 20 }).notNull().default("all"),
   /** Показывать ли статус «в сети» всем или только подписчикам */
   showOnlineTo: varchar("show_online_to", { length: 20 }).notNull().default("all"),
+  /** Атмосфера чата: включена ли адаптивная тема для DM */
+  vibeEnabled: boolean("vibe_enabled").notNull().default(false),
+  /** Делиться атмосферой с собеседником (если true — собеседник тоже видит вайб) */
+  vibeShareWithPartner: boolean("vibe_share_with_partner").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow(),
 });
 
@@ -94,6 +98,8 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   showOnlineTo: true,
   pushEnabled: true,
   referralLimit: true,
+  vibeEnabled: true,
+  vibeShareWithPartner: true,
 }).partial();
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
