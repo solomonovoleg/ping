@@ -1,6 +1,30 @@
-# Секрет для автодеплоя staging — проще простого
+# Staging: залить на сервер
+
+## Самый быстрый путь (без GitHub Actions, без секретов в GitHub)
+
+У тебя уже есть **`deploy.staging.env`** локально — этого достаточно.
+
+**Windows (PowerShell), из корня проекта:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-staging.ps1
+```
+
+**Или** если есть Git Bash / WSL:
+
+```bash
+npm run deploy:staging
+```
+
+Скрипт копирует `deploy.staging.env` → `deploy.env` и выполняет тот же `scripts/deploy.sh`, что и ручной прод-деплой. Через несколько минут стенд на `:3081` обновится.
+
+---
+
+## Секрет в GitHub (только если нужен автодеплой из Actions)
 
 GitHub **сам не знает** пароли от сервера. Их нужно **один раз** вставить в настройках репозитория.
+
+**Не присылай пароли GitHub или токены в чат с ИИ** — это небезопасно.
 
 ## Вариант А — вручную (2 минуты)
 

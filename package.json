@@ -8,6 +8,7 @@
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
     "deploy": "bash scripts/deploy.sh",
+    "deploy:staging": "bash scripts/deploy-staging-local.sh",
     "deploy:migrate": "bash scripts/migrate-on-server.sh",
     "start": "NODE_ENV=production node dist/index.cjs",
     "start:3080": "PORT=3080 NODE_ENV=production node dist/index.cjs",
