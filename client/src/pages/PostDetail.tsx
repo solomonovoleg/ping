@@ -11,6 +11,7 @@ import { ListEmptyState } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { buildProfilePath } from "@/lib/profile-route";
 
 export default function PostDetail({ params }: { params: { id: string; postId: string } }) {
   const [, setLocation] = useLocation();
@@ -20,6 +21,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
   const userId = params.id;
   const postId = params.postId;
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const profilePathFromRoute = buildProfilePath({ isMe: userId === "me", userId, fallbackPath: "/posts" });
 
   const { data: post, isLoading, error } = useQuery({
     queryKey: ["post", postId],
@@ -32,7 +34,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       toast({ title: "Пост удалён" });
-      setLocation(userId === "me" ? "/profile/me" : `/profile/${userId}`);
+      setLocation(profilePathFromRoute);
     },
     onError: (e) => toast({ title: e instanceof Error ? e.message : "Ошибка удаления", variant: "destructive" }),
   });
@@ -49,7 +51,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
         <div className="uix-content-x py-3 flex items-center border-b border-border/50">
           <button
             type="button"
-            onClick={() => setLocation(userId === "me" ? "/profile/me" : `/profile/${userId}`)}
+            onClick={() => setLocation(profilePathFromRoute)}
             className="p-2 -ml-1 rounded-full hover:bg-secondary text-foreground min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
             aria-label="Назад к профилю"
           >
@@ -69,7 +71,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
         <div className="uix-content-x py-3 flex items-center border-b border-border/50">
           <button
             type="button"
-            onClick={() => setLocation(userId === "me" ? "/profile/me" : `/profile/${userId}`)}
+            onClick={() => setLocation(profilePathFromRoute)}
             className="p-2 -ml-1 rounded-full hover:bg-secondary text-foreground min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
             aria-label="Назад к профилю"
           >
@@ -82,7 +84,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
             title="Пост не найден"
             description="Возможно, он был удалён или ссылка устарела."
             actionLabel="К профилю"
-            onAction={() => setLocation(userId === "me" ? "/profile/me" : `/profile/${userId}`)}
+            onAction={() => setLocation(profilePathFromRoute)}
           />
         </div>
       </div>
@@ -97,7 +99,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setLocation(userId === "me" ? "/profile/me" : `/profile/${userId}`)}
+            onClick={() => setLocation(profilePathFromRoute)}
             className="p-2 -ml-2 rounded-full text-primary hover:bg-primary/10 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
             aria-label="Назад к профилю"
           >
@@ -125,7 +127,16 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
       <article className="p-4 border-b border-border/50">
         <div className="flex items-center justify-between mb-3">
           <button
-            onClick={() => setLocation(post.authorId === user?.id ? "/profile/me" : `/profile/${post.author.publicId}`)}
+            onClick={() =>
+              setLocation(
+                buildProfilePath({
+                  isMe: post.authorId === user?.id,
+                  publicId: post.author.publicId,
+                  userId: post.authorId,
+                  fallbackPath: "/posts",
+                })
+              )
+            }
             className="flex items-center gap-3 group"
           >
             <UserAvatar

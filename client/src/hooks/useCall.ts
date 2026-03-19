@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { getCallToken, getCallWsUrl, getIceServers, getMediaConstraints, CallTokenUnauthorizedError, type CallSignalingMessage } from "@/lib/calls";
+import { getCallToken, getCallWsUrl, getIceServers, getMediaConstraints, transformPeerSdp, CallTokenUnauthorizedError, type CallSignalingMessage } from "@/lib/calls";
 import { RING_TIMEOUT_MS, CONNECTING_OFFER_TIMEOUT_MS } from "@/lib/call-constants";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "@/hooks/use-toast";
@@ -67,6 +67,53 @@ export function useCall(myUserId: string | undefined) {
     return hasRTCPeerConnection && hasGetUserMedia;
   }, []);
 
+  const mapMediaAccessError = useCallback((err: unknown): string => {
+    const name = err instanceof Error ? err.name : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      return "Разрешите доступ к микрофону (и камере для видео) в настройках браузера";
+    }
+    if (name === "NotFoundError") {
+      return "Микрофон или камера не найдены";
+    }
+    if (name === "NotReadableError") {
+      return "Устройство занято другим приложением. Закройте другие звонки/диктофон и попробуйте снова.";
+    }
+    if (name === "OverconstrainedError") {
+      return "Параметры камеры/микрофона не поддерживаются на этом устройстве.";
+    }
+    return "Нет доступа к микрофону или камере";
+  }, []);
+
+  const getUserMediaWithFallback = useCallback(async (video: boolean): Promise<MediaStream> => {
+    if (typeof navigator === "undefined" || typeof navigator.mediaDevices?.getUserMedia !== "function") {
+      const err = new Error("Звонки не поддерживаются в этом браузере. Откройте сайт в Safari/Chrome по HTTPS.");
+      err.name = "NotSupportedError";
+      throw err;
+    }
+
+    const attempts: MediaStreamConstraints[] = [
+      getMediaConstraints(video),
+      // iOS Safari/WebView fallback: минимизируем constraints, которые часто ломают getUserMedia
+      { audio: true, video: video ? { facingMode: "user" } : false },
+      { audio: true, video: !!video },
+    ];
+
+    let lastErr: unknown = null;
+    for (const constraints of attempts) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+        lastErr = err;
+        console.warn("[call] getUserMedia attempt failed", err);
+      }
+    }
+
+    const message = mapMediaAccessError(lastErr);
+    const out = new Error(message);
+    if (lastErr instanceof Error) out.name = lastErr.name;
+    throw out;
+  }, [mapMediaAccessError]);
+
   const cleanup = useCallback(() => {
     if (peerRef.current) {
       peerRef.current.destroy();
@@ -128,16 +175,17 @@ export function useCall(myUserId: string | undefined) {
     stopRingbackRef.current = null;
   }, []);
 
-  const endCall = useCallback((opts?: { connectionLost?: boolean }) => {
+  const endCall = useCallback((opts?: { connectionLost?: boolean; notifyPeer?: boolean }) => {
     stopRinging();
     if (ringTimeoutRef.current) {
       clearTimeout(ringTimeoutRef.current);
       ringTimeoutRef.current = null;
     }
+    const shouldNotifyPeer = opts?.notifyPeer ?? true;
     const target = otherUserIdRef.current;
     const hadActiveCall = !!target;
     const ws = wsRef.current;
-    if (ws && ws.readyState === 1 && target) {
+    if (shouldNotifyPeer && ws && ws.readyState === 1 && target) {
       try {
         ws.send(JSON.stringify({ type: "call-end", targetUserId: target }));
       } catch (e) {
@@ -201,13 +249,18 @@ export function useCall(myUserId: string | undefined) {
       set = new Set();
       chatListenersRef.current.set(chatId, set);
     }
+    const isNewSubscription = set.size === 0;
     set.add(onMessage);
-    const ws = wsRef.current;
-    if (ws) sendSubscribeChat(ws, chatId);
+    if (isNewSubscription) {
+      const ws = wsRef.current;
+      if (ws) sendSubscribeChat(ws, chatId);
+    }
     return () => {
       set!.delete(onMessage);
-      if (set!.size === 0) chatListenersRef.current.delete(chatId);
-      sendUnsubscribeChat(chatId);
+      if (set!.size === 0) {
+        chatListenersRef.current.delete(chatId);
+        sendUnsubscribeChat(chatId);
+      }
     };
   }, [sendSubscribeChat, sendUnsubscribeChat]);
 
@@ -272,6 +325,11 @@ export function useCall(myUserId: string | undefined) {
           window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
           return;
         }
+        if (raw.type === "chat-read" && raw.chatId && raw.lastReadAt) {
+          window.dispatchEvent(new CustomEvent("ping:chat-read", { detail: { chatId: raw.chatId, readerId: raw.readerId, lastReadAt: raw.lastReadAt } }));
+          window.dispatchEvent(new CustomEvent("ping:chat-list-update"));
+          return;
+        }
         if (raw.type === "typing" && raw.chatId && typeof raw.userId === "string") {
           const set = typingListenersRef.current.get(raw.chatId as string);
           if (set) set.forEach((cb) => cb(raw.userId as string, (raw.displayName as string) ?? null));
@@ -312,6 +370,7 @@ export function useCall(myUserId: string | undefined) {
                   stream,
                   trickle: true,
                   config: { iceServers: getIceServers() },
+                  sdpTransform: transformPeerSdp,
                 });
                 peerRef.current = peer;
                 attachConnectionState(peer);
@@ -385,11 +444,15 @@ export function useCall(myUserId: string | undefined) {
           setError("Абонент не в сети. Ему отправлено уведомление о звонке.");
           setState("idle");
           cleanup();
+        } else if (msg.type === "target-waiting") {
+          const waitMs = typeof msg.waitMs === "number" && msg.waitMs > 0 ? msg.waitMs : 30000;
+          const waitSec = Math.max(1, Math.round(waitMs / 1000));
+          setError(`Абонент не в сети. Пробуем дозвон ${waitSec} сек...`);
         } else if (msg.type === "call-end") {
           stopRingbackRef.current?.();
           stopRingbackRef.current = null;
           acceptingWaitingOfferRef.current = false;
-          endCall();
+          endCall({ notifyPeer: false });
         } else if (msg.type === "answer") {
           stopRingbackRef.current?.();
           stopRingbackRef.current = null;
@@ -427,13 +490,12 @@ export function useCall(myUserId: string | undefined) {
     };
     ws.onclose = () => {
       wsRef.current = null;
-      endCall({ connectionLost: true });
+      endCall({ connectionLost: true, notifyPeer: false });
       scheduleReconnectRef.current?.();
     };
     const sendAllChatSubscriptions = () => {
       Array.from(chatListenersRef.current.keys()).forEach((id) => sendSubscribeChat(ws, id));
     };
-    sendAllChatSubscriptions();
     ws.onopen = () => sendAllChatSubscriptions();
   }, [cleanup, endCall, sendSubscribeChat, sendSignal, cleanupPeerOnly, attachConnectionState]);
 
@@ -455,16 +517,9 @@ export function useCall(myUserId: string | undefined) {
       }
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(video));
+        stream = await getUserMediaWithFallback(video);
       } catch (err) {
-        const name = err instanceof Error ? err.name : "";
-        const msg =
-          name === "NotAllowedError" || name === "PermissionDeniedError"
-            ? "Разрешите доступ к микрофону (и камере для видео) в настройках браузера"
-            : name === "NotFoundError"
-              ? "Микрофон или камера не найдены"
-              : "Нет доступа к микрофону или камере";
-        throw new Error(msg);
+        throw err instanceof Error ? err : new Error(mapMediaAccessError(err));
       }
       localStreamRef.current = stream;
       setLocalStream(stream);
@@ -489,6 +544,7 @@ export function useCall(myUserId: string | undefined) {
         stream,
         trickle: true,
         config: { iceServers: getIceServers() },
+        sdpTransform: transformPeerSdp,
       });
       peerRef.current = peer;
       attachConnectionState(peer);
@@ -505,10 +561,11 @@ export function useCall(myUserId: string | undefined) {
       });
       peer.on("close", () => endCall());
     },
-    [sendSignal, endCall, cleanup, cleanupPeerOnly, attachConnectionState, user?.displayName, user?.surname, user?.phone, isWebRtcSupported]
+    [sendSignal, endCall, cleanup, cleanupPeerOnly, attachConnectionState, user?.displayName, user?.surname, user?.phone, isWebRtcSupported, getUserMediaWithFallback, mapMediaAccessError]
   );
 
   const WS_OPEN_TIMEOUT_MS = 12000;
+  const BACKGROUND_CONNECT_MAX_RETRIES = 5;
 
   const ensureOpenWs = useCallback(async (): Promise<WebSocket> => {
     const existing = wsRef.current;
@@ -703,7 +760,7 @@ export function useCall(myUserId: string | undefined) {
         }
       }, CONNECTING_OFFER_TIMEOUT_MS);
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(info.video));
+        const stream = await getUserMediaWithFallback(info.video);
         localStreamRef.current = stream;
         setLocalStream(stream);
         // Offer мог прийти пока ждали stream — создаём peer сейчас
@@ -730,6 +787,7 @@ export function useCall(myUserId: string | undefined) {
               stream,
               trickle: true,
               config: { iceServers: getIceServers() },
+              sdpTransform: transformPeerSdp,
             });
             peerRef.current = peer;
             attachConnectionState(peer);
@@ -761,13 +819,7 @@ export function useCall(myUserId: string | undefined) {
           clearTimeout(connectingOfferTimeoutRef.current);
           connectingOfferTimeoutRef.current = null;
         }
-        const name = err instanceof Error ? err.name : "";
-        const msg =
-          name === "NotAllowedError" || name === "PermissionDeniedError"
-            ? "Разрешите доступ к микрофону (и камере для видео)"
-            : name === "NotFoundError"
-              ? "Микрофон или камера не найдены"
-              : "Нет доступа к микрофону или камере";
+        const msg = mapMediaAccessError(err);
         setError(msg);
         setState("idle");
       }
@@ -780,16 +832,9 @@ export function useCall(myUserId: string | undefined) {
     try {
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(info.video));
+        stream = await getUserMediaWithFallback(info.video);
       } catch (err) {
-        const name = err instanceof Error ? err.name : "";
-        const msg =
-          name === "NotAllowedError" || name === "PermissionDeniedError"
-            ? "Разрешите доступ к микрофону (и камере для видео)"
-            : name === "NotFoundError"
-              ? "Микрофон или камера не найдены"
-              : "Нет доступа к микрофону или камере";
-        throw new Error(msg);
+        throw new Error(mapMediaAccessError(err));
       }
       localStreamRef.current = stream;
       setLocalStream(stream);
@@ -799,6 +844,7 @@ export function useCall(myUserId: string | undefined) {
         stream,
         trickle: true,
         config: { iceServers: getIceServers() },
+        sdpTransform: transformPeerSdp,
       });
       peerRef.current = peer;
       attachConnectionState(peer);
@@ -839,7 +885,7 @@ export function useCall(myUserId: string | undefined) {
       setState("idle");
       cleanup();
     }
-  }, [incoming, myUserId, cleanup, sendSignal, endCall, cleanupPeerOnly, attachConnectionState, ensureOpenWs, isWebRtcSupported]);
+  }, [incoming, myUserId, cleanup, sendSignal, endCall, cleanupPeerOnly, attachConnectionState, ensureOpenWs, isWebRtcSupported, getUserMediaWithFallback, mapMediaAccessError]);
 
   const rejectCall = useCallback(() => {
     stopIncomingAlertRef.current?.();
@@ -887,9 +933,16 @@ export function useCall(myUserId: string | undefined) {
         .catch((err) => {
           if (!mounted) return;
           if (err instanceof CallTokenUnauthorizedError) {
+            // После логина cookie может примениться не мгновенно (особенно в мобильных webview).
+            // Делаем несколько фоновых попыток вместо немедленного отказа.
+            if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
+              setTimeout(() => connect(retryCount + 1), 1200 * (retryCount + 1));
+            } else {
+              refetchAuth().catch(() => {});
+            }
             return;
           }
-          if (retryCount < 2) {
+          if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
             setTimeout(() => connect(retryCount + 1), 1000 * (retryCount + 1));
           }
         });
@@ -905,7 +958,9 @@ export function useCall(myUserId: string | undefined) {
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible" || !mounted || !myUserId) return;
       const ws = wsRef.current;
-      if (ws && (ws.readyState === 2 || ws.readyState === 3)) scheduleReconnectRef.current?.();
+      if (!ws || ws.readyState === 2 || ws.readyState === 3) {
+        scheduleReconnectRef.current?.();
+      }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     const cleanup = () => {
@@ -916,7 +971,7 @@ export function useCall(myUserId: string | undefined) {
       closeWs();
     };
     return cleanup;
-  }, [myUserId, closeWs]);
+  }, [myUserId, closeWs, refetchAuth]);
 
   return {
     state,

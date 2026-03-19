@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
-import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Share2, Copy, Check, Settings, PenSquare, Trash2, Edit3, BarChart2, Plus, UserX } from "lucide-react";
+import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Share2, Copy, Check, Settings, PenSquare, Trash2, Edit3, BarChart2, Plus, UserX, Eye } from "lucide-react";
 import { useLocation, useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -14,11 +14,13 @@ import { fetchPostsByAuthor, formatPostTime, addReaction, removeReaction, delete
 import { PostMedia } from "@/components/PostMedia";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
-import { fetchStoriesByUser, createStory } from "@/lib/stories";
-import { uploadChatMedia } from "@/lib/chat";
+import { fetchStoriesByUser, createStory, fetchStoryViewers, type StoryItem, type StoryViewerUser, type StoryExpiresHours } from "@/lib/stories";
+import { sendMessage, uploadChatMedia } from "@/lib/chat";
 import { UserAvatar } from "@/components/UserAvatar";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { resolveUrl } from "@/lib/api-base";
+import { PullToRefresh } from "@/components/PullToRefresh";
+import { buildProfilePath } from "@/lib/profile-route";
 
 export default function UserProfile({ params: paramsProp }: { params?: { id: string } }) {
   const [, setLocation] = useLocation();
@@ -39,21 +41,29 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState(false);
   const [pagePosts, setPagePosts] = useState<FeedPost[]>([]);
-  const [pageStories, setPageStories] = useState<{ id: string; authorId: string; mediaUrl: string; thumbnailUrl: string | null; createdAt: string }[]>([]);
+  const [pageStories, setPageStories] = useState<StoryItem[]>([]);
   const [followLoading, setFollowLoading] = useState(false);
   const [addingStory, setAddingStory] = useState(false);
   const [coverLoadError, setCoverLoadError] = useState(false);
+  const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
+  const [pendingStoryFile, setPendingStoryFile] = useState<File | null>(null);
+  const [showStoryDurationPicker, setShowStoryDurationPicker] = useState(false);
+  const [storyExpiresInHours, setStoryExpiresInHours] = useState<StoryExpiresHours>(24);
+  const avatarLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const avatarLongPressHandledRef = useRef(false);
   const storyFileInputRef = useRef<HTMLInputElement>(null);
 
   const { user, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
+  const normalizedRouteId = id.trim().replace(/^@+/, "");
+  const hasInvalidRouteId = !normalizedRouteId || ["undefined", "null", "nan"].includes(normalizedRouteId.toLowerCase());
   const isMe = id === "me";
   const authorId = isMe ? user?.id : apiProfile?.id;
   const authorIdReady = isMe ? (authLoading === false) : !!apiProfile;
 
   useEffect(() => {
-    if (!id.trim()) setLocation("/posts");
-  }, [id, setLocation]);
+    if (hasInvalidRouteId) setLocation("/posts");
+  }, [hasInvalidRouteId, setLocation]);
 
   useEffect(() => {
     setCoverLoadError(false);
@@ -80,7 +90,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
     enabled: isMe && !!user?.id,
   });
 
-  const { data: queryStories = [] } = useQuery({
+  const { data: queryStories = [], refetch: refetchStories } = useQuery({
     queryKey: ["stories", authorId],
     queryFn: () => fetchStoriesByUser(authorId!),
     enabled: !!authorId && isMe,
@@ -88,6 +98,17 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
 
   const profilePosts = isMe ? queryPosts : pagePosts;
   const apiStories = isMe ? queryStories : pageStories;
+  const hasStories = (apiStories ?? []).length > 0;
+  const storyViewersCountById = (apiStories ?? []).reduce<Record<string, number>>((acc, s) => {
+    acc[s.id] = 0;
+    return acc;
+  }, {});
+
+  const { data: activeStoryViewers = [], isLoading: activeStoryViewersLoading } = useQuery({
+    queryKey: ["stories", "viewers", activeViewersStoryId],
+    queryFn: () => fetchStoryViewers(activeViewersStoryId!),
+    enabled: !!activeViewersStoryId && isMe,
+  });
 
   const reactionMutation = useMutation({
     mutationFn: async ({ postId, emoji }: { postId: string; emoji: string | null }) => {
@@ -126,7 +147,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           }
           const posts = Array.isArray(data.posts) ? data.posts.filter((p): p is FeedPost => p != null && typeof (p as FeedPost).id === "string") : [];
           const stories = Array.isArray(data.stories)
-            ? data.stories.filter((s): s is { id: string; authorId: string; mediaUrl: string; thumbnailUrl: string | null; createdAt: string } =>
+            ? data.stories.filter((s): s is StoryItem =>
                 s != null && typeof (s as { id?: string }).id === "string")
             : [];
           flushSync(() => {
@@ -143,12 +164,12 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   }, [isMe, id]);
 
   // Ранний выход только после всех хуков, иначе React #310 (разное кол-во хуков между рендерами)
-  if (!id.trim()) return null;
+  if (hasInvalidRouteId) return null;
 
   const handleCopyLink = () => {
     const base = typeof window !== "undefined" ? window.location.origin : "";
     const segment = apiProfile?.publicId != null ? String(apiProfile.publicId) : id;
-    const url = `${base}/id/${segment}`;
+    const url = `${base}/profile/${segment}`;
     if (!navigator.clipboard?.writeText) {
       toast({ title: "Копирование недоступно", variant: "destructive" });
       return;
@@ -192,6 +213,88 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       toast({ title: e instanceof Error ? e.message : "Не удалось начать диалог", variant: "destructive" });
     }
   };
+
+  const handleStoryReply = async (payload: { storyId: string; authorId: string; text: string }) => {
+    if (!user?.id) {
+      toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
+      return;
+    }
+    if (!payload.authorId || payload.authorId === user.id) {
+      toast({ title: "Нельзя отправить ответ на свой сториз", variant: "destructive" });
+      return;
+    }
+    const chat = await startDm(payload.authorId);
+    await sendMessage(chat.id, { type: "text", content: payload.text.trim() });
+    toast({ title: "Ответ на сториз отправлен" });
+  };
+
+  const handleStoryFileSelect = useCallback((file: File | null) => {
+    if (!file || !user?.id) return;
+    setPendingStoryFile(file);
+    setStoryExpiresInHours(24);
+    setShowStoryDurationPicker(true);
+  }, [user?.id]);
+
+  const handlePublishStory = useCallback(async () => {
+    const file = pendingStoryFile;
+    if (!file || !user?.id) return;
+    setShowStoryDurationPicker(false);
+    setAddingStory(true);
+    try {
+      const url = await uploadChatMedia(file);
+      await createStory(url, { expiresInHours: storyExpiresInHours });
+      queryClient.invalidateQueries({ queryKey: ["stories", user.id] });
+      queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
+      toast({ title: `Сториз добавлен на ${storyExpiresInHours}ч` });
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : "Ошибка", variant: "destructive" });
+    } finally {
+      setPendingStoryFile(null);
+      setAddingStory(false);
+    }
+  }, [pendingStoryFile, queryClient, storyExpiresInHours, toast, user?.id]);
+
+  const clearAvatarLongPress = useCallback(() => {
+    if (avatarLongPressTimerRef.current) {
+      clearTimeout(avatarLongPressTimerRef.current);
+      avatarLongPressTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => clearAvatarLongPress(), [clearAvatarLongPress]);
+
+  const handlePullRefresh = useCallback(async () => {
+    if (isMe) {
+      await Promise.all([
+        refetchPosts(),
+        refetchStories(),
+        user?.id ? queryClient.invalidateQueries({ queryKey: ["profile", "me", user.id] }) : Promise.resolve(),
+      ]);
+      return;
+    }
+    if (!id.trim()) return;
+    try {
+      const data = await fetchProfilePage(id, 50);
+      if (!data?.profile) {
+        setProfileError(true);
+        return;
+      }
+      const posts = Array.isArray(data.posts)
+        ? data.posts.filter((p): p is FeedPost => p != null && typeof (p as FeedPost).id === "string")
+        : [];
+      const stories = Array.isArray(data.stories)
+        ? data.stories.filter(
+            (s): s is StoryItem => s != null && typeof (s as { id?: string }).id === "string"
+          )
+        : [];
+      setProfileError(false);
+      setApiProfile(data.profile);
+      setPagePosts(posts);
+      setPageStories(stories);
+    } catch {
+      setProfileError(true);
+    }
+  }, [id, isMe, queryClient, refetchPosts, refetchStories, user?.id]);
 
   if (!isMe && profileLoading) {
     return (
@@ -244,11 +347,15 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       : apiProfile
         ? [apiProfile.displayName, apiProfile.surname].filter(Boolean).join(" ") || `ID ${apiProfile.publicId}`
         : "";
+  const usernameHandle = `@${String((isMe ? user?.publicId : apiProfile?.publicId) ?? id)}`;
   const avatarUrl = isMe ? user?.avatarUrl : apiProfile?.avatarUrl;
-  const coverUrl = isMe ? (user as { coverUrl?: string | null })?.coverUrl : apiProfile?.coverUrl;
-  const coverResolved = coverUrl?.trim() ? resolveUrl(coverUrl.trim()) : "";
-  const coverFallback = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop";
-  const cover = coverResolved || coverFallback;
+  const profileCoverUrl = isMe ? (user as { coverUrl?: string | null })?.coverUrl : apiProfile?.coverUrl;
+  const isCoverEnabled = isMe
+    ? (user as { showCover?: boolean })?.showCover !== false
+    : (apiProfile as { showCover?: boolean })?.showCover !== false;
+  const resolvedCoverUrl = profileCoverUrl ? resolveUrl(profileCoverUrl) : "";
+  const hasCoverAsset = !!resolvedCoverUrl && !coverLoadError;
+  const hasCover = isCoverEnabled && hasCoverAsset;
   const storiesForStrip = (apiStories ?? []).filter((s) => s && (s as { id?: string }).id != null).map((s) => {
     const thumb = (s as { thumbnailUrl?: string | null; mediaUrl?: string }).thumbnailUrl || (s as { mediaUrl?: string }).mediaUrl || "";
     return {
@@ -259,223 +366,260 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   });
 
   return (
-    <div className="relative flex flex-col min-h-full min-w-0 w-full max-w-full overflow-x-hidden bg-background pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
-      {/* Обложка: отдельный контейнер на всю ширину, без отступов (полностью в край). main в AppLayout с overflow-x-visible, чтобы не обрезать. */}
-      <div
-        className="relative h-48 sm:h-56 flex-shrink-0 overflow-hidden rounded-none bg-gradient-to-br from-muted via-muted/80 to-muted"
-        style={{
-          width: "calc(100% + max(12px, env(safe-area-inset-left, 0px)) + max(12px, env(safe-area-inset-right, 0px)))",
-          marginLeft: "calc(-1 * max(12px, env(safe-area-inset-left, 0px)))",
-        }}
+    <div className="relative flex h-full min-h-0 min-w-0 w-full max-w-full overflow-x-hidden bg-background overscroll-y-none">
+      <PullToRefresh
+        onRefresh={handlePullRefresh}
+        className="min-h-0 flex-1"
+        disabled={showStoryDurationPicker || !!activeViewersStoryId || activeStoryIndex !== null}
       >
-        {coverLoadError ? (
-          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-primary/10 to-muted text-muted-foreground text-sm px-4">
-            <span>Обложка не загрузилась</span>
-            {isMe && (
-              <button
-                type="button"
-                onClick={() => setLocation("/profile/edit")}
-                className="text-primary font-medium text-[13px]"
-              >
-                Добавить в редактировании профиля
-              </button>
-            )}
-          </div>
-        ) : (
-          <img
-            src={cover}
-            alt=""
-            className="w-full h-full object-cover min-w-0 block"
-            decoding="async"
-            onError={() => setCoverLoadError(true)}
-          />
-        )}
-        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent pointer-events-none" />
-      </div>
-      <div className="flex flex-col min-h-0 overflow-visible">
-
-      {/* Кнопки поверх шапки — с отступами под safe area */}
-      <div className="absolute top-0 left-0 right-0 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] py-3 flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top,0px))] z-50 bg-gradient-to-b from-black/50 to-transparent pointer-events-none">
-        <div className="pointer-events-auto">
-          <button
-            type="button"
-            onClick={() => setLocation("/posts")}
-            className="p-2 -ml-1 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors flex items-center min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] justify-center"
-            aria-label="Назад в ленту"
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
-        </div>
-        <div className="flex items-center gap-1.5 pointer-events-auto">
+      <div className="flex flex-col min-h-0 overflow-visible pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
+      <div className="uix-content-x sticky top-0 z-40 flex items-center justify-between border-b border-border/50 bg-background/90 py-2.5 backdrop-blur">
+        <button
+          type="button"
+          onClick={() => setLocation("/posts")}
+          className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
+          aria-label="Назад в ленту"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <p className="truncate px-2 text-[16px] font-semibold">{usernameHandle}</p>
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={handleCopyLink}
-            className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+            className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
             aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку на профиль"}
           >
-            {copied ? <Check className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
+            {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
           </button>
           {isMe ? (
             <button
               type="button"
               onClick={() => setLocation("/settings")}
-              className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+              className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
               aria-label="Настройки"
             >
-              <Settings className="w-5 h-5" />
+              <Settings className="h-4 w-4" />
             </button>
           ) : (
-            <>
-              <button
-                type="button"
-                className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                aria-label="Уведомления"
-              >
-                <Bell className="w-5 h-5" />
-              </button>
-              <button
-                type="button"
-                className="p-2 rounded-full bg-black/20 backdrop-blur-md text-white hover:bg-black/40 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                aria-label="Ещё"
-              >
-                <MoreHorizontal className="w-5 h-5" />
-              </button>
-            </>
+            <button
+              type="button"
+              className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
+              aria-label="Ещё"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
           )}
         </div>
       </div>
 
-      <div className="relative w-full max-w-[480px] min-w-0 mx-auto flex flex-col shrink-0 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] -mt-12 pt-0 overflow-visible">
-      {/* Profile Info — overflow-visible чтобы аватар не обрезался */}
-      <div className="relative mb-6 overflow-visible">
-        <div className="flex justify-between items-end gap-3 mb-3 min-w-0">
-          <div 
-            className={cn("relative group flex-shrink-0", isMe && "cursor-pointer")}
-            onClick={isMe ? () => setLocation("/profile/edit") : () => setActiveStoryIndex(0)}
+      {hasCover ? (
+        <div className="relative h-36 w-full overflow-hidden border-b border-border/60 bg-muted/30">
+          <img
+            src={resolvedCoverUrl}
+            alt="Обложка профиля"
+            className="h-full w-full object-cover"
+            onError={() => setCoverLoadError(true)}
+          />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/45 to-transparent" />
+          {isMe && (
+            <button
+              type="button"
+              onClick={() => setLocation("/profile/edit")}
+              className="absolute bottom-3 right-3 min-h-[var(--uix-touch-min)] rounded-full border border-white/25 bg-black/50 px-3 text-xs font-medium text-white backdrop-blur hover:bg-black/60"
+              aria-label="Изменить обложку"
+            >
+              Изменить обложку
+            </button>
+          )}
+        </div>
+      ) : isMe ? (
+        <div className="uix-content-x mt-2">
+          <TapScaleButton
+            type="button"
+            onClick={() => setLocation("/profile/edit")}
+            haptic
+            subtle
+            className="flex w-full items-center justify-between rounded-2xl border border-dashed border-border bg-secondary/20 px-4 py-3 text-left hover:bg-secondary/35"
+            aria-label={hasCoverAsset ? "Включить обложку профиля" : "Добавить обложку в профиль"}
           >
-            <div className="w-28 h-28 rounded-full p-[3px] bg-gradient-to-tr from-primary to-purple-500 transition-transform duration-200 group-active:scale-95 overflow-hidden flex items-center justify-center border-4 border-background shadow-lg">
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">
+                {hasCoverAsset ? "Обложка скрыта" : "Добавьте обложку профиля"}
+              </p>
+              <p className="text-[12px] text-muted-foreground">
+                {hasCoverAsset
+                  ? "Включите показ обложки в настройках профиля"
+                  : "С ней страница будет выглядеть живее и персональнее"}
+              </p>
+            </div>
+            <Plus className="h-5 w-5 text-muted-foreground" />
+          </TapScaleButton>
+        </div>
+      ) : null}
+
+      <div className={cn("uix-content-x pt-3", hasCover && "-mt-8 relative z-10")}>
+        <div className={cn("mb-3 flex items-center gap-4", hasCover && "rounded-2xl border border-border/60 bg-background/95 p-3 shadow-sm backdrop-blur")}>
+          <div
+            className={cn("relative group flex-shrink-0", isMe && "cursor-pointer")}
+            onClick={() => {
+              if (!isMe) {
+                setActiveStoryIndex(0);
+                return;
+              }
+              if (avatarLongPressHandledRef.current) {
+                avatarLongPressHandledRef.current = false;
+                return;
+              }
+              if (hasStories) {
+                setActiveStoryIndex(0);
+              } else {
+                storyFileInputRef.current?.click();
+              }
+            }}
+            onPointerDown={() => {
+              if (!isMe) return;
+              avatarLongPressHandledRef.current = false;
+              clearAvatarLongPress();
+              avatarLongPressTimerRef.current = setTimeout(() => {
+                avatarLongPressHandledRef.current = true;
+                storyFileInputRef.current?.click();
+              }, 420);
+            }}
+            onPointerUp={clearAvatarLongPress}
+            onPointerLeave={clearAvatarLongPress}
+            onPointerCancel={clearAvatarLongPress}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div
+              className={cn(
+                "h-24 w-24 rounded-full p-[3px] transition-transform duration-200 group-active:scale-95",
+                hasStories ? "bg-gradient-to-tr from-primary via-violet-500 to-fuchsia-500 animate-story-ring" : "bg-border"
+              )}
+            >
               <UserAvatar
                 avatarUrl={avatarUrl ?? undefined}
                 displayName={displayName}
                 seed={authorId ?? ""}
-                size={112}
-                className="w-full h-full rounded-full object-cover"
+                size={96}
+                className="h-full w-full rounded-full border-2 border-background object-cover"
               />
             </div>
             {isMe && (
-              <div className="absolute bottom-1 right-1 bg-primary text-white p-1.5 rounded-full border-2 border-background pointer-events-none">
-                <Plus className="w-3 h-3" />
+              <div className="absolute bottom-0 right-0 rounded-full border-2 border-background bg-primary p-1 text-white pointer-events-none">
+                <Plus className="h-3 w-3" />
               </div>
             )}
           </div>
-          
-          <div className="flex gap-2 min-w-0 flex-shrink flex-wrap justify-end">
-            {isMe ? (
-              <>
-                <TapScaleButton type="button" haptic subtle className="px-3 py-2 rounded-full font-semibold text-[13px] bg-secondary text-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0" aria-label="Статистика">
-                  <BarChart2 className="w-4 h-4 flex-shrink-0" />
-                  <span className="truncate">Статистика</span>
-                </TapScaleButton>
-                <TapScaleButton type="button" onClick={() => setLocation("/profile/edit")} haptic className="px-3 py-2 rounded-full font-semibold text-[13px] bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0" aria-label="Редактировать профиль">
-                  <Edit3 className="w-4 h-4 flex-shrink-0" />
-                  <span className="truncate">Изменить</span>
-                </TapScaleButton>
-              </>
-            ) : (
-              <div className="flex gap-2 flex-wrap min-w-0 justify-end">
-                <TapScaleButton
-                  type="button"
-                  onClick={handleStartChat}
-                  disabled={!apiProfile?.canMessage}
-                  haptic
-                  title={!apiProfile?.canMessage ? "Подпишитесь, чтобы написать" : "Написать"}
-                  className={cn(
-                    "px-4 py-2 rounded-full font-semibold text-[14px] transition-all duration-300 flex items-center gap-2",
-                    apiProfile?.canMessage
-                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                      : "bg-secondary text-muted-foreground cursor-not-allowed"
-                  )}
-                  aria-label="Написать сообщение"
-                >
-                  <MessageSquare className="w-4 h-4" />
-                  Написать
-                </TapScaleButton>
-                <TapScaleButton
-                  type="button"
-                  onClick={handleFollowToggle}
-                  disabled={followLoading}
-                  haptic
-                  className={cn(
-                    "px-4 py-2 rounded-full font-semibold text-[14px] transition-all flex items-center gap-2 disabled:opacity-70",
-                    apiProfile?.isFollowing
-                      ? "bg-secondary text-foreground hover:bg-secondary/80"
-                      : "bg-primary text-primary-foreground hover:bg-primary/90"
-                  )}
-                  aria-label={apiProfile?.isFollowing ? "Отписаться" : "Подписаться"}
-                >
-                  {followLoading ? "…" : apiProfile?.isFollowing ? "Отписаться" : "Подписаться"}
-                </TapScaleButton>
-              </div>
-            )}
+
+          <div className="flex min-w-0 flex-1 items-center justify-around gap-1 text-center">
+            <div className="min-w-[58px]">
+              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.postsCount ?? profilePosts.length) : (apiProfile?.postsCount ?? 0)}</p>
+              <p className="text-[12px] text-muted-foreground">Посты</p>
+            </div>
+            <div className="min-w-[58px]">
+              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followersCount ?? 0) : (apiProfile?.followersCount ?? 0)}</p>
+              <p className="text-[12px] text-muted-foreground">Подписчики</p>
+            </div>
+            <div className="min-w-[58px]">
+              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followingCount ?? 0) : (apiProfile?.followingCount ?? 0)}</p>
+              <p className="text-[12px] text-muted-foreground">Подписки</p>
+            </div>
           </div>
         </div>
 
-        <h1 className="uix-text-title leading-tight">{displayName}</h1>
-        <p className="text-muted-foreground text-[15px] mb-1">
-          ID {(isMe ? user?.publicId : apiProfile?.publicId) ?? "—"}
-        </p>
-        {(isMe ? user?.gender : apiProfile?.gender) && (
-          <p className="text-muted-foreground text-[14px] mb-3">
-            {(isMe ? user?.gender : apiProfile?.gender) === "male"
-              ? "Мужской"
-              : (isMe ? user?.gender : apiProfile?.gender) === "female"
-                ? "Женский"
-                : "Другое"}
+        <div className="mb-3">
+          <p className="text-[15px] font-semibold leading-tight">{displayName}</p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">
+            ID {(isMe ? user?.publicId : apiProfile?.publicId) ?? "—"}
           </p>
-        )}
-        {(isMe ? (user as { bio?: string | null })?.bio : apiProfile?.bio) ? (
-          <p className="text-[15px] leading-relaxed mb-2 text-foreground/90 whitespace-pre-wrap">
-            {isMe ? (user as { bio?: string | null }).bio : apiProfile?.bio}
-          </p>
-        ) : null}
-        {(() => {
-          const link = isMe ? (user as { profileLink?: string | null })?.profileLink : (apiProfile as { profileLink?: string | null })?.profileLink;
-          const url = link?.trim();
-          if (!url) return null;
-          const href = url.startsWith("http://") || url.startsWith("https://") ? url : `https://${url}`;
-          return (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="text-[15px] text-primary hover:underline break-all mb-2 block">
-              {url}
-            </a>
-          );
-        })()}
-        <div className="flex items-center gap-4 sm:gap-6 mb-4 flex-wrap">
-          <div className="flex flex-col min-w-[4rem]">
-            <span className="font-bold text-lg">{isMe ? (myProfileStats?.postsCount ?? profilePosts.length) : (apiProfile?.postsCount ?? 0)}</span>
-            <span className="text-xs text-muted-foreground">Постов</span>
-          </div>
-          <div className="flex flex-col min-w-[4rem]">
-            <span className="font-bold text-lg">{isMe ? (myProfileStats?.followersCount ?? 0) : (apiProfile?.followersCount ?? 0)}</span>
-            <span className="text-xs text-muted-foreground">Подписчиков</span>
-          </div>
-          <div className="flex flex-col min-w-[4rem]">
-            <span className="font-bold text-lg">{isMe ? (myProfileStats?.followingCount ?? 0) : (apiProfile?.followingCount ?? 0)}</span>
-            <span className="text-xs text-muted-foreground">Подписок</span>
-          </div>
-          <div className="flex flex-col min-w-[4rem]">
-            <span className="font-bold text-lg">{isMe ? (myProfileStats?.reactionsCount ?? 0) : (apiProfile?.reactionsCount ?? 0)}</span>
-            <span className="text-xs text-muted-foreground">Реакций</span>
-          </div>
-          <div className="flex flex-col min-w-[4rem]">
-            <span className="font-bold text-lg">{isMe ? (myProfileStats?.commentsCount ?? 0) : (apiProfile?.commentsCount ?? 0)}</span>
-            <span className="text-xs text-muted-foreground">Комментариев</span>
-          </div>
+          {(isMe ? (user as { bio?: string | null })?.bio : apiProfile?.bio) ? (
+            <p className="mt-1.5 whitespace-pre-wrap text-[14px] leading-relaxed text-foreground/90">
+              {isMe ? (user as { bio?: string | null }).bio : apiProfile?.bio}
+            </p>
+          ) : null}
+          {(() => {
+            const link = isMe ? (user as { profileLink?: string | null })?.profileLink : (apiProfile as { profileLink?: string | null })?.profileLink;
+            const url = link?.trim();
+            if (!url) return null;
+            const href = url.startsWith("http://") || url.startsWith("https://") ? url : `https://${url}`;
+            return (
+              <a href={href} target="_blank" rel="noopener noreferrer" className="mt-1.5 block break-all text-[14px] text-primary hover:underline">
+                {url}
+              </a>
+            );
+          })()}
         </div>
+
+        {isMe ? (
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <TapScaleButton
+              type="button"
+              onClick={() => setLocation("/profile/edit")}
+              haptic
+              className="min-h-[var(--uix-touch-min)] rounded-xl border border-border bg-secondary/70 px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-secondary"
+              aria-label="Редактировать профиль"
+            >
+              Изменить профиль
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              haptic
+              subtle
+              className="min-h-[var(--uix-touch-min)] rounded-xl border border-border bg-secondary/70 px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-secondary"
+              aria-label="Статистика"
+            >
+              Статистика
+            </TapScaleButton>
+          </div>
+        ) : (
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <TapScaleButton
+              type="button"
+              onClick={handleFollowToggle}
+              disabled={followLoading}
+              haptic
+              className={cn(
+                "min-h-[var(--uix-touch-min)] rounded-xl px-3 py-2 text-[13px] font-semibold transition-colors disabled:opacity-70",
+                apiProfile?.isFollowing
+                  ? "border border-border bg-secondary/80 text-foreground hover:bg-secondary"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90"
+              )}
+              aria-label={apiProfile?.isFollowing ? "Отписаться" : "Подписаться"}
+            >
+              {followLoading ? "..." : apiProfile?.isFollowing ? "Подписки" : "Подписаться"}
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              onClick={handleStartChat}
+              disabled={!apiProfile?.canMessage}
+              haptic
+              className={cn(
+                "min-h-[var(--uix-touch-min)] rounded-xl border border-border px-3 py-2 text-[13px] font-semibold transition-colors",
+                apiProfile?.canMessage ? "bg-secondary/70 text-foreground hover:bg-secondary" : "bg-secondary/40 text-muted-foreground"
+              )}
+              aria-label="Написать сообщение"
+            >
+              Написать
+            </TapScaleButton>
+          </div>
+        )}
       </div>
 
-      {/* Profile Highlights/Stories */}
-      <div className="mb-6">
-        <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-2">
+      <div className="uix-content-x mb-3">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[12px] font-semibold tracking-[0.02em] text-muted-foreground">Актуальное</p>
+          {isMe && (
+            <button
+              type="button"
+              onClick={() => storyFileInputRef.current?.click()}
+              className="rounded-full px-2 py-1 text-[12px] font-medium text-primary hover:bg-primary/10"
+            >
+              Добавить
+            </button>
+          )}
+        </div>
+        <div className="flex gap-3 overflow-x-auto hide-scrollbar pb-2">
           {isMe && (
             <>
               <input
@@ -483,28 +627,17 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 type="file"
                 accept="image/*,video/*"
                 className="sr-only"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
                   e.target.value = "";
-                  if (!file || !user?.id) return;
-                  setAddingStory(true);
-                  try {
-                    const url = await uploadChatMedia(file);
-                    await createStory(url);
-                    queryClient.invalidateQueries({ queryKey: ["stories", user.id] });
-                    toast({ title: "Сториз добавлен" });
-                  } catch (err) {
-                    toast({ title: err instanceof Error ? err.message : "Ошибка", variant: "destructive" });
-                  } finally {
-                    setAddingStory(false);
-                  }
+                  handleStoryFileSelect(file);
                 }}
               />
               <div
                 role="button"
                 tabIndex={0}
                 onClick={() => storyFileInputRef.current?.click()}
-                onKeyDown={(e) => e.key === "Enter" && storyFileInputRef.current?.click()}
+                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && storyFileInputRef.current?.click()}
                 className={cn(
                   "flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group min-w-[4rem]",
                   addingStory && "opacity-60 pointer-events-none"
@@ -521,6 +654,17 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                   {addingStory ? "Загрузка…" : "Новое"}
                 </span>
               </div>
+              {storiesForStrip.length === 0 && (
+                <div className="flex w-[208px] flex-shrink-0 items-center gap-2 rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-3 py-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-background">
+                    <Plus className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-[12px] font-semibold text-foreground">Добавьте первое актуальное</p>
+                    <p className="text-[11px] text-muted-foreground">Сториз закрепится в профиле</p>
+                  </div>
+                </div>
+              )}
             </>
           )}
           {storiesForStrip.map((story, idx) => (
@@ -541,50 +685,62 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               </span>
             </div>
           ))}
+          {!isMe && storiesForStrip.length === 0 && (
+            <div className="flex w-full min-w-[220px] items-center justify-center rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-4 py-4 text-center">
+              <p className="text-[12px] text-muted-foreground">Пока нет актуальных историй</p>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border/50 sticky top-0 bg-background/80 backdrop-blur-xl z-40">
+      <div className="sticky top-0 z-40 flex border-b border-border/50 bg-background/90 backdrop-blur-xl">
         <button 
           onClick={() => setActiveTab("posts")}
           className={cn(
-            "flex-1 py-3 text-[15px] font-semibold flex justify-center items-center gap-2 transition-colors relative",
+            "relative flex flex-1 items-center justify-center py-3 transition-colors",
             activeTab === "posts" ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
           )}
+          aria-label="Публикации"
         >
-          <Grid className="w-4 h-4" />
-          Публикации
+          <Grid className="h-5 w-5" />
           {activeTab === "posts" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full"></div>
+            <div className="absolute bottom-0 left-1/2 h-0.5 w-14 -translate-x-1/2 rounded-t-full bg-foreground" />
           )}
         </button>
         <button 
           onClick={() => setActiveTab("saved")}
           className={cn(
-            "flex-1 py-3 text-[15px] font-semibold flex justify-center items-center gap-2 transition-colors relative",
+            "relative flex flex-1 items-center justify-center py-3 transition-colors",
             activeTab === "saved" ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
           )}
+          aria-label="Сохранённое"
         >
-          <Bookmark className="w-4 h-4" />
-          Сохраненное
+          <Bookmark className="h-5 w-5" />
           {activeTab === "saved" && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full"></div>
+            <div className="absolute bottom-0 left-1/2 h-0.5 w-14 -translate-x-1/2 rounded-t-full bg-foreground" />
           )}
         </button>
       </div>
 
       {/* Content Area */}
-      <div className="flex flex-col">
+      <div className="flex flex-col gap-2 px-2 pb-2">
         {activeTab === "posts" && isMe && (
-          <div className="p-4 border-b border-border/50 bg-secondary/10 flex items-center gap-3 cursor-pointer hover:bg-secondary/20 transition-colors" onClick={() => setLocation("/create-post")}>
-            <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-primary flex-shrink-0">
-              <PenSquare className="w-5 h-5" />
+          <TapScaleButton
+            type="button"
+            onClick={() => setLocation("/create-post")}
+            haptic
+            className="flex w-full items-center gap-3 rounded-2xl border border-border/60 bg-secondary/20 px-4 py-3 text-left transition-colors hover:bg-secondary/30"
+            aria-label="Создать новый пост"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[14px] font-semibold text-foreground">Поделиться новостью</p>
+              <p className="truncate text-[12px] text-muted-foreground">Текст, фото или видео</p>
             </div>
-            <div className="text-[15px] text-muted-foreground font-medium">
-              Написать новый пост...
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-background text-primary">
+              <PenSquare className="h-5 w-5" />
             </div>
-          </div>
+          </TapScaleButton>
         )}
 
         {activeTab === "posts" ? (
@@ -614,7 +770,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
             </LoadingProgress>
           ) : (
           profilePosts.map((post: FeedPost) => (
-            <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors relative group/article">
+            <article key={post.id} className="relative rounded-2xl border border-border/60 bg-card p-3 shadow-sm transition-colors hover:bg-secondary/10">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <UserAvatar
@@ -622,22 +778,22 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                     displayName={displayName}
                     seed={authorId ?? ""}
                     size={40}
-                    className="w-10 h-10 rounded-xl flex-shrink-0"
+                    className="h-10 w-10 flex-shrink-0 rounded-full"
                   />
                   <div>
-                    <h3 className="font-semibold text-[15px]">{displayName}</h3>
+                    <h3 className="text-[14px] font-semibold">{displayName}</h3>
                     <p className="text-xs text-muted-foreground">{formatPostTime(post.createdAt)}</p>
                   </div>
                 </div>
                 
                 {isMe ? (
-                  <div className="flex items-center gap-1 opacity-0 group-hover/article:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setLocation(`/profile/me/post/${post.id}`);
                       }}
-                      className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>
@@ -648,7 +804,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                           deletePostMutation.mutate(post.id);
                         }
                       }}
-                      className="p-2 rounded-full text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
                       disabled={deletePostMutation.isPending}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -666,7 +822,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               </div>
 
               <div className="mb-3">
-                <p className="text-[15px] leading-relaxed whitespace-pre-wrap">
+                <p className="whitespace-pre-wrap text-[14px] leading-relaxed">
                   {post.text}
                 </p>
                 <PostMedia
@@ -677,12 +833,12 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               <div className="flex items-center justify-between pt-1">
                   <div className="flex items-center gap-2 relative">
                     {/* Reactions Pill */}
-                    <div 
+                    <div
                       className={cn(
-                        "flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary transition-colors cursor-pointer border active:scale-95 select-none",
+                        "flex cursor-pointer select-none items-center gap-1 rounded-full border px-3 py-1.5 text-[13px] transition-colors active:scale-95",
                         (post.myReaction ?? null)
-                          ? "bg-primary/10 border-primary/30 text-foreground" 
-                          : "text-secondary-foreground hover:bg-secondary/80 border-border/30"
+                          ? "border-primary/30 bg-primary/10 text-foreground"
+                          : "border-border/30 text-secondary-foreground hover:bg-secondary/80"
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -711,13 +867,13 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                       </span>
                     </div>
                     
-                    <button 
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
                       }}
                       className={cn(
-                        "flex items-center justify-center w-8 h-8 rounded-full bg-secondary transition-colors border",
+                        "flex h-8 w-8 items-center justify-center rounded-full border bg-secondary transition-colors",
                         showReactionPicker === post.id 
                           ? "text-primary border-primary/50 bg-primary/10" 
                           : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
@@ -746,7 +902,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                     
                     <button
                       onClick={() => setActiveCommentPostId(post.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium border border-border/30 ml-auto"
+                      className="ml-auto flex items-center gap-1.5 rounded-full border border-border/30 bg-secondary px-3 py-1.5 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
                     >
                       <MessageSquare className="w-4 h-4" />
                       {post.commentsCount}
@@ -754,10 +910,10 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                   </div>
 
                 <div className="flex items-center gap-1">
-                  <button type="button" className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" aria-label="Сохранить в избранное">
+                  <button type="button" className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" aria-label="Сохранить в избранное">
                     <Bookmark className="w-5 h-5" />
                   </button>
-                  <button type="button" className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" aria-label="Поделиться">
+                  <button type="button" className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" aria-label="Поделиться">
                     <Share2 className="w-5 h-5" />
                   </button>
                 </div>
@@ -781,10 +937,145 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
             userName: displayName,
             userAvatar: resolveUrl(avatarUrl ?? "") || resolveUrl((apiStories?.[0] as { thumbnailUrl?: string; mediaUrl?: string })?.thumbnailUrl ?? (apiStories?.[0] as { mediaUrl?: string })?.mediaUrl ?? ""),
             time: formatPostTime((s as { createdAt?: string }).createdAt ?? ""),
+            authorId: (s as { authorId?: string }).authorId ?? (authorId ?? undefined),
           }))} 
           initialIndex={Math.min(activeStoryIndex, (apiStories ?? []).length - 1)} 
           onClose={() => setActiveStoryIndex(null)} 
+          canSeeViewers={isMe}
+          onOpenViewers={(storyId) => setActiveViewersStoryId(storyId)}
+          viewersCountByStoryId={storyViewersCountById}
+          onReply={isMe ? undefined : handleStoryReply}
+          canReply={!isMe}
         />
+      )}
+
+      {showStoryDurationPicker && (
+        <div
+          className="fixed inset-0 z-[220] flex items-end bg-black/45 px-3 pt-3 pb-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+12px)] touch-pan-y"
+          onClick={() => {
+            setShowStoryDurationPicker(false);
+            setPendingStoryFile(null);
+          }}
+        >
+          <div
+            className="mx-auto w-full max-w-[480px] max-h-[78vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-border px-4 py-3">
+              <p className="text-sm font-semibold">Срок жизни сториз</p>
+              <p className="mt-1 text-xs text-muted-foreground">Выберите, сколько хранить сториз после публикации.</p>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto overscroll-y-contain p-3 touch-pan-y">
+              <div className="grid grid-cols-3 gap-2">
+                {([24, 46, 56] as const).map((hours) => (
+                  <button
+                    key={hours}
+                    type="button"
+                    onClick={() => setStoryExpiresInHours(hours)}
+                    className={cn(
+                      "min-h-[var(--uix-touch-min)] rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
+                      storyExpiresInHours === hours
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-secondary/50 text-foreground hover:bg-secondary"
+                    )}
+                  >
+                    {hours} ч
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStoryDurationPicker(false);
+                    setPendingStoryFile(null);
+                  }}
+                  className="min-h-[var(--uix-touch-min)] rounded-xl bg-secondary px-4 py-2 text-sm font-medium text-foreground"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePublishStory}
+                  disabled={addingStory || !pendingStoryFile}
+                  className="min-h-[var(--uix-touch-min)] rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+                >
+                  {addingStory ? "Публикация..." : "Опубликовать"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeViewersStoryId && (
+        <div
+          className="fixed inset-0 z-[220] flex items-end bg-black/45 px-3 pt-3 pb-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+12px)]"
+          onClick={() => setActiveViewersStoryId(null)}
+        >
+          <div
+            className="mx-auto w-full max-w-[480px] rounded-2xl border border-border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Eye className="h-4 w-4 text-muted-foreground" />
+                <p className="text-sm font-semibold">Кто посмотрел сториз</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveViewersStoryId(null)}
+                className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
+                aria-label="Закрыть список просмотров"
+              >
+                <ChevronLeft className="h-4 w-4 rotate-180" />
+              </button>
+            </div>
+            <div className="max-h-[52vh] overflow-y-auto p-2">
+              {activeStoryViewersLoading ? (
+                <div className="px-3 py-4 text-sm text-muted-foreground">Загрузка...</div>
+              ) : activeStoryViewers.length === 0 ? (
+                <ListEmptyState
+                  icon={Eye}
+                  title="Пока нет просмотров"
+                  description="Когда пользователи посмотрят сториз, они появятся здесь."
+                  className="border-none"
+                />
+              ) : (
+                (activeStoryViewers as StoryViewerUser[]).map((viewer) => (
+                  <button
+                    key={viewer.id}
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-secondary/60"
+                    onClick={() =>
+                      setLocation(
+                        buildProfilePath({
+                          publicId: viewer.publicId,
+                          userId: viewer.id,
+                          fallbackPath: "/posts",
+                        })
+                      )
+                    }
+                  >
+                    <UserAvatar
+                      avatarUrl={viewer.avatarUrl ?? undefined}
+                      displayName={[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
+                      seed={viewer.id}
+                      size={36}
+                      className="h-9 w-9"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{formatPostTime(viewer.viewedAt)}</p>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       <CommentsModal 
@@ -794,7 +1085,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       />
 
       </div>
-      </div>
+      </PullToRefresh>
     </div>
   );
 }

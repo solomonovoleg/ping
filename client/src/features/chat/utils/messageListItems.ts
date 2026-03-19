@@ -3,7 +3,7 @@
  */
 import type { ApiMessage } from "../types";
 import type { MessageListItem } from "../types";
-import { getDateSectionLabel, toDateKey } from "./format";
+import { getDateSectionLabel, toDateKey, parseMessageDate } from "./format";
 import { GROUP_GAP_MIN_MS } from "../constants";
 
 export function buildMessageListItems(messages: ApiMessage[]): MessageListItem[] {
@@ -14,7 +14,7 @@ export function buildMessageListItems(messages: ApiMessage[]): MessageListItem[]
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const isRegular = msg.type !== "system" && msg.type !== "missed_call";
-    const msgTime = new Date(msg.createdAt).getTime();
+    const msgTime = parseMessageDate(msg.createdAt).getTime();
     const dateKey = toDateKey(msg.createdAt);
     if (dateKey !== lastDateKey) {
       lastDateKey = dateKey;
@@ -29,7 +29,7 @@ export function buildMessageListItems(messages: ApiMessage[]): MessageListItem[]
       const next = messages[i + 1];
       const nextRegular = next && next.type !== "system" && next.type !== "missed_call";
       const nextSameSender = next && (next.senderId ?? null) === (msg.senderId ?? null);
-      const nextGapOk = next && new Date(next.createdAt).getTime() - msgTime <= GROUP_GAP_MIN_MS;
+      const nextGapOk = next && parseMessageDate(next.createdAt).getTime() - msgTime <= GROUP_GAP_MIN_MS;
       isLastInGroup = !nextRegular || !nextSameSender || !nextGapOk;
       prevSenderId = msg.senderId ?? null;
       prevTime = msgTime;

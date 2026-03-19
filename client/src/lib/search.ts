@@ -11,10 +11,11 @@ export type SearchUser = {
   avatarUrl: string | null;
 };
 
-export async function searchUsers(q: string): Promise<SearchUser[]> {
+export async function searchUsers(q: string, signal?: AbortSignal): Promise<SearchUser[]> {
   if (!q.trim()) return [];
   const res = await apiFetch(`${API}/users/search?q=${encodeURIComponent(q.trim())}`, {
     cache: "no-store",
+    signal,
   });
   if (!res.ok) throw new Error("Ошибка поиска");
   return res.json();
@@ -25,6 +26,7 @@ export type Chat = {
   type: string;
   name: string | null;
   createdAt: string;
+  otherMember?: { id: string; publicId: number } | null;
 };
 
 export async function startDm(userId: string): Promise<Chat> {

@@ -1,14 +1,41 @@
 import { API, apiFetch } from "@/lib/api-base";
 
-export type MessageType = "text" | "system" | "voice" | "image" | "video";
+export type MessageType = "text" | "system" | "voice" | "image" | "video" | "video_note";
+
+export async function getChatMedia(
+  chatId: string,
+  opts?: { folderId?: string | null; limit?: number; before?: string }
+): Promise<{ id: string; type: string; content: string; createdAt: string }[]> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 30) });
+  if (opts?.folderId) params.set("folderId", opts.folderId);
+  if (opts?.before) params.set("before", opts.before);
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/media?${params}`);
+  if (!res.ok) throw new Error("Не удалось загрузить медиа");
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function getChatLinks(
+  chatId: string,
+  opts?: { folderId?: string | null; limit?: number; before?: string }
+): Promise<{ url: string; messageId: string; createdAt: string }[]> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 50) });
+  if (opts?.folderId) params.set("folderId", opts.folderId);
+  if (opts?.before) params.set("before", opts.before);
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/links?${params}`);
+  if (!res.ok) throw new Error("Не удалось загрузить ссылки");
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
 
 export async function getMessages(
   chatId: string,
-  opts?: { limit?: number; before?: string }
+  opts?: { limit?: number; before?: string; folderId?: string }
 ): Promise<ChatMessage[]> {
   const limit = opts?.limit ?? 100;
   const params = new URLSearchParams({ limit: String(limit) });
   if (opts?.before) params.set("before", opts.before);
+  if (opts?.folderId) params.set("folderId", opts.folderId);
   const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?${params}`);
   if (!res.ok) throw new Error("Не удалось загрузить сообщения");
   const data = await res.json();
@@ -72,19 +99,120 @@ export async function isMessageSaved(messageId: string): Promise<boolean> {
   return !!data.saved;
 }
 
+export async function updateChat(
+  chatId: string,
+  data: { name?: string; avatarUrl?: string }
+): Promise<{ id: string; name: string | null; avatarUrl: string | null }> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось обновить чат");
+  }
+  return res.json();
+}
+
+export async function addGroupMember(
+  chatId: string,
+  userId: string
+): Promise<{ id: string; type: string; name: string | null; members?: unknown[]; myRole?: string }> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось добавить участника");
+  }
+  return res.json();
+}
+
+export async function removeGroupMember(
+  chatId: string,
+  userId: string
+): Promise<{ id: string; type: string; name: string | null; members?: unknown[]; myRole?: string }> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось исключить участника");
+  }
+  return res.json();
+}
+
+export type ChatFolder = {
+  id: string;
+  chatId: string;
+  name: string;
+  isMain: boolean;
+  orderIndex: number;
+  createdAt: string;
+  unreadCount?: number;
+};
+
+export async function listChatFolders(chatId: string): Promise<ChatFolder[]> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/folders`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function createChatFolder(chatId: string, name: string): Promise<ChatFolder> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/folders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось создать папку");
+  }
+  return res.json();
+}
+
+export async function updateChatFolder(chatId: string, folderId: string, name: string): Promise<ChatFolder> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/folders/${encodeURIComponent(folderId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось переименовать");
+  }
+  return res.json();
+}
+
+export async function deleteChatFolder(chatId: string, folderId: string): Promise<void> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/folders/${encodeURIComponent(folderId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось удалить папку");
+  }
+}
+
 export async function sendMessage(
   chatId: string,
-  payload: { content: string; type?: MessageType; replyToId?: string; forwardedFromMessageId?: string; originalChatId?: string }
+  payload: { content: string; type?: MessageType; folderId?: string; replyToId?: string; forwardedFromMessageId?: string; originalChatId?: string; scheduledAt?: string }
 ): Promise<ChatMessage> {
-  const body: { content: string; type: string; replyToId?: string; forwardedFromMessageId?: string; originalChatId?: string } = {
+  const body: { content: string; type: string; folderId?: string; replyToId?: string; forwardedFromMessageId?: string; originalChatId?: string; scheduledAt?: string } = {
     content: payload.content,
     type: payload.type ?? "text",
   };
+  if (payload.folderId) body.folderId = payload.folderId;
   if (payload.replyToId) body.replyToId = payload.replyToId;
   if (payload.forwardedFromMessageId && payload.originalChatId) {
     body.forwardedFromMessageId = payload.forwardedFromMessageId;
     body.originalChatId = payload.originalChatId;
   }
+  if (payload.scheduledAt) body.scheduledAt = payload.scheduledAt;
   const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -134,8 +262,14 @@ export async function uploadChatMedia(file: File): Promise<string> {
   form.append("file", file);
   const res = await apiFetch(`${API}/upload/chat-media`, { method: "POST", body: form });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { message?: string }).message || "Не удалось загрузить файл");
+    if (res.status === 413) {
+      throw new Error("Файл слишком большой: фото до 50 МБ, видео до 500 МБ.");
+    }
+    const errJson = await res.json().catch(() => null);
+    const errText = errJson && typeof errJson === "object" && "message" in errJson
+      ? String((errJson as { message?: unknown }).message ?? "")
+      : "";
+    throw new Error(errText || "Не удалось загрузить файл");
   }
   const data = (await res.json()) as { url: string };
   return data.url;
@@ -148,6 +282,7 @@ export type ReactionItem = { emoji: string; count: number };
 export type ChatMessage = {
   id: string;
   chatId: string;
+  folderId?: string | null;
   senderId: string | null;
   type: MessageType;
   content: string;

@@ -6,6 +6,7 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/contexts/AuthContext";
 import { updateProfile, uploadAvatar, uploadCover } from "@/lib/auth";
 import { resolveUrl } from "@/lib/api-base";
@@ -21,6 +22,15 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "other", label: "Другое" },
 ];
 
+function normalizeGender(value: unknown): Gender | "" {
+  if (typeof value !== "string") return "";
+  const v = value.trim().toLowerCase();
+  if (v === "male" || v === "мужской") return "male";
+  if (v === "female" || v === "женский") return "female";
+  if (v === "other" || v === "другое") return "other";
+  return "";
+}
+
 export default function EditProfile() {
   const [, setLocation] = useLocation();
   const { user, refetch, setUserFromLogin } = useAuth();
@@ -35,6 +45,7 @@ export default function EditProfile() {
   const [editBio, setEditBio] = useState("");
   const [editProfileLink, setEditProfileLink] = useState("");
   const [editCoverUrl, setEditCoverUrl] = useState("");
+  const [editShowCover, setEditShowCover] = useState(true);
   const [avatarCropDataUrl, setAvatarCropDataUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -52,13 +63,14 @@ export default function EditProfile() {
     if (!user) return;
     setEditDisplayName((user.displayName ?? "").slice(0, NAME_MAX_LENGTH));
     setEditSurname((user.surname ?? "").slice(0, NAME_MAX_LENGTH));
-    setEditGender((user.gender as Gender) ?? "");
+    setEditGender(normalizeGender(user.gender));
     setEditBirthDate(user.birthDate ?? "");
     setEditAvatarUrl(user.avatarUrl ?? "");
     setEditAvatarPreview(user.avatarUrl ? user.avatarUrl : null);
     setEditBio((user as { bio?: string | null }).bio ?? "");
     setEditProfileLink((user as { profileLink?: string | null }).profileLink ?? "");
     setEditCoverUrl((user as { coverUrl?: string | null }).coverUrl ?? "");
+    setEditShowCover((user as { showCover?: boolean }).showCover !== false);
     setCoverImageError(false);
     setAvatarImageError(false);
   }, [user]);
@@ -107,6 +119,7 @@ export default function EditProfile() {
           bio: editBio.trim() || null,
           profileLink: editProfileLink.trim() || null,
           coverUrl: editCoverUrl.trim() || null,
+          showCover: editShowCover,
         });
         setUserFromLogin(updated);
         refetch().catch(() => {});
@@ -121,7 +134,7 @@ export default function EditProfile() {
         setSaving(false);
       }
     },
-    [editDisplayName, editSurname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, setUserFromLogin, refetch, toast, setLocation]
+    [editDisplayName, editSurname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation]
   );
 
   const handleCoverFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -169,7 +182,7 @@ export default function EditProfile() {
   }
 
   return (
-    <div className="flex flex-col min-h-[100vh] bg-background w-full max-w-full overflow-x-hidden">
+    <div className="flex flex-col min-h-[100dvh] bg-background w-full max-w-full overflow-x-hidden">
       {/* Шапка: фиксированная */}
       <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border/50 bg-background min-w-0">
         <TapScaleButton
@@ -187,7 +200,7 @@ export default function EditProfile() {
 
       {/* Форма: скроллируется вместе со страницей, без горизонтального скролла */}
       <div className="flex-1 w-full min-w-0">
-        <form onSubmit={handleSubmit} className="p-0 pb-8 w-full min-w-0 box-border">
+        <form onSubmit={handleSubmit} className="p-0 pb-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+24px)] w-full min-w-0 box-border">
           {/* Блок шапки — от края до края без отступов */}
           <div className="w-[100vw] max-w-none ml-[calc(-50vw+50%)] mb-5">
             <div className="space-y-2 px-4">
@@ -241,6 +254,44 @@ export default function EditProfile() {
           </div>
 
           <div className="px-4 space-y-5 max-w-[480px] mx-auto">
+          <div className="rounded-xl border border-border/70 bg-secondary/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Показывать обложку</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Если выключить, обложка сохранится, но не будет видна в профиле.
+                </p>
+              </div>
+              <Switch
+                checked={editShowCover}
+                onCheckedChange={setEditShowCover}
+                aria-label="Показывать обложку профиля"
+              />
+            </div>
+            <div className="mt-3 rounded-xl border border-border/70 bg-background p-2">
+              <p className="px-1 pb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">
+                Превью профиля
+              </p>
+              {editCoverUrl && editShowCover && !coverImageError ? (
+                <div className="overflow-hidden rounded-lg border border-border/60">
+                  <img
+                    src={resolveUrl(editCoverUrl)}
+                    alt="Превью обложки"
+                    className="h-20 w-full object-cover"
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-[80px] items-center justify-center rounded-lg border border-dashed border-border bg-secondary/20 px-3 text-center">
+                  <p className="text-xs text-muted-foreground">
+                    {editCoverUrl && !coverImageError
+                      ? "Обложка сейчас скрыта в профиле"
+                      : "Загрузите обложку, чтобы увидеть превью"}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="flex flex-col items-center gap-3">
             <Label>Аватар</Label>
             <div className="flex items-center gap-3 flex-wrap justify-center">
@@ -359,11 +410,12 @@ export default function EditProfile() {
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
-          <div className="flex gap-3 pt-2">
+          <div className="sticky z-10 flex gap-3 pt-2 pb-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-t border-border/40"
+               style={{ bottom: "calc(var(--uix-nav-bottom) + env(safe-area-inset-bottom,0px) + 8px)" }}>
             <Button
               type="button"
               variant="outline"
-              className="flex-1"
+              className="flex-1 min-h-[var(--uix-touch-min)]"
               onClick={() => setLocation("/profile/me")}
             >
               Отмена
@@ -371,7 +423,7 @@ export default function EditProfile() {
             <TapScaleButton
               type="submit"
               haptic
-              className="flex-1 rounded-lg min-h-9 px-4 py-2 bg-primary text-primary-foreground border border-primary-border font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
+              className="flex-1 rounded-lg min-h-[var(--uix-touch-min)] px-4 py-2 bg-primary text-primary-foreground border border-primary-border font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
               disabled={saving}
             >
               {saving ? "Сохранение…" : "Сохранить"}

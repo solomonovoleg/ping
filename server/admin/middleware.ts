@@ -1,10 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
+import { getUserId } from "../auth/session";
 import { storage } from "../storage";
 
 const ADMIN_ROLES = ["moderator", "admin", "super_admin"] as const;
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const userId = req.session?.userId;
+  const userId = getUserId(req);
   if (!userId) {
     res.status(401).json({ message: "Unauthorized" });
     return;
@@ -26,7 +27,7 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 
 /** Только admin и super_admin (не moderator) */
 export async function requireAdminOrSuper(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const userId = req.session?.userId;
+  const userId = getUserId(req);
   if (!userId) {
     res.status(401).json({ message: "Unauthorized" });
     return;
@@ -48,7 +49,7 @@ export async function requireAdminOrSuper(req: Request, res: Response, next: Nex
 
 /** Только super_admin */
 export async function requireSuperAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const userId = req.session?.userId;
+  const userId = getUserId(req);
   if (!userId) {
     res.status(401).json({ message: "Unauthorized" });
     return;

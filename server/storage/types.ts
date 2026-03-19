@@ -8,6 +8,8 @@ import type {
   InsertChatMember,
   Message,
   InsertMessage,
+  ChatFolder,
+  InsertChatFolder,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -71,6 +73,8 @@ export interface IStorage {
   listInvitedUsers(inviterUserId: string): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "avatarUrl" | "createdAt">[]>;
 
   getChatById(id: string): Promise<Chat | undefined>;
+  /** Участник чата (для проверки роли). */
+  getChatMember(chatId: string, userId: string): Promise<ChatMember | undefined>;
   /** ID участников чата (для обогащения DM именем собеседника). */
   getChatMemberIds(chatId: string): Promise<string[]>;
   getChatsForUser(userId: string): Promise<Chat[]>;
@@ -78,17 +82,49 @@ export interface IStorage {
   getOrCreateDmChat(userId: string, otherUserId: string): Promise<Chat>;
   createChat(data: InsertChat): Promise<Chat>;
   addChatMember(data: InsertChatMember): Promise<ChatMember>;
+  removeChatMember(chatId: string, userId: string): Promise<boolean>;
+  updateChat(chatId: string, data: { name?: string; avatarUrl?: string }): Promise<Chat | undefined>;
   updateLastRead(chatId: string, userId: string): Promise<void>;
   getChatMemberLastReadAt(chatId: string, userId: string): Promise<Date | null>;
   getUnreadCount(chatId: string, userId: string): Promise<number>;
+  /** Непрочитанные в папке: folderId=null для основной папки (сообщения без folderId). */
+  getUnreadCountByFolder(chatId: string, folderId: string | null, userId: string): Promise<number>;
 
-  getMessagesByChatId(chatId: string, limit?: number, beforeMessageId?: string): Promise<Message[]>;
+  getMessagesByChatId(chatId: string, limit?: number, beforeMessageId?: string, folderId?: string | null): Promise<Message[]>;
+  /** Медиа-сообщения (image, video, voice, video_note) для панели «Медиафайлы». */
+  getMediaMessages(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string): Promise<Message[]>;
+  /** Текстовые сообщения для извлечения ссылок (панель «Ссылки»). */
+  getTextMessagesForLinks(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string): Promise<Pick<Message, "id" | "content" | "createdAt">[]>;
+
   /** Последнее сообщение в чате (для превью в списке) */
   getLastMessage(chatId: string): Promise<Message | undefined>;
   createMessage(data: InsertMessage): Promise<Message>;
   getMessage(chatId: string, messageId: string): Promise<Message | undefined>;
   deleteMessage(chatId: string, messageId: string): Promise<boolean>;
   updateMessage(chatId: string, messageId: string, content: string): Promise<Message | undefined>;
+
+  /** Отложенная отправка: создать запись, получить просроченные, удалить. */
+  createScheduledMessage(data: {
+    chatId: string;
+    folderId?: string | null;
+    senderId: string;
+    type: string;
+    content: string;
+    replyToId?: string | null;
+    scheduledAt: Date;
+  }): Promise<{ id: string; scheduledAt: Date }>;
+  getScheduledMessagesDue(limit: number): Promise<
+    { id: string; chatId: string; folderId: string | null; senderId: string | null; type: string; content: string; replyToId: string | null }[]
+  >;
+  deleteScheduledMessage(id: string): Promise<boolean>;
+
+  /** Папки группового чата: основной поток + второстепенные. */
+  listChatFolders(chatId: string): Promise<ChatFolder[]>;
+  getOrCreateMainFolder(chatId: string): Promise<ChatFolder>;
+  createChatFolder(chatId: string, name: string, orderIndex: number): Promise<ChatFolder>;
+  getChatFolder(folderId: string): Promise<ChatFolder | undefined>;
+  updateChatFolder(folderId: string, data: { name?: string }): Promise<ChatFolder | undefined>;
+  deleteChatFolder(folderId: string): Promise<boolean>;
 
   /** Поиск по тексту сообщений в чатах, где пользователь участник. */
   searchMessages(
@@ -115,4 +151,31 @@ export interface IStorage {
     }[]
   >;
   isMessageSaved(userId: string, messageId: string): Promise<boolean>;
+
+  /** Треки: списки сообщений пользователя */
+  createTrack(userId: string, name: string): Promise<{ id: string; name: string; createdAt: Date }>;
+  listTracks(userId: string): Promise<{ id: string; name: string; createdAt: Date }[]>;
+  getTrack(userId: string, trackId: string): Promise<{ id: string; name: string; createdAt: Date } | undefined>;
+  addMessageToTrack(userId: string, trackId: string, messageId: string, chatId: string): Promise<void>;
+  removeTrackItem(userId: string, trackId: string, itemId: string): Promise<void>;
+  setTrackItemDone(userId: string, trackId: string, itemId: string, done: boolean): Promise<void>;
+  updateTrack(userId: string, trackId: string, data: { name: string }): Promise<void>;
+  deleteTrack(userId: string, trackId: string): Promise<void>;
+  getTracksStats(userId: string): Promise<{ totalTracks: number; activeItemsCount: number; doneItemsCount: number; lastAddedAt: Date | null }>;
+  listTrackItems(
+    userId: string,
+    trackId: string
+  ): Promise<
+    {
+      id: string;
+      messageId: string;
+      chatId: string;
+      chatName: string;
+      content: string;
+      type: string;
+      messageCreatedAt: Date;
+      addedAt: Date;
+      doneAt: Date | null;
+    }[]
+  >;
 }

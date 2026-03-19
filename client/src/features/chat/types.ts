@@ -2,11 +2,25 @@
  * Типы для фичи «Чат». Макс. 300 строк на файл.
  */
 
+export type ApiChatMember = {
+  id: string;
+  publicId?: number;
+  displayName: string | null;
+  surname: string | null;
+  avatarUrl?: string | null;
+  role?: "admin" | "member";
+};
+
 export type ApiChat = {
   id: string;
   type: string;
   name: string | null;
+  avatarUrl?: string | null;
   createdAt: string;
+  /** Роль текущего пользователя в группе (admin | member) */
+  myRole?: "admin" | "member";
+  /** Участники группового чата (для отображения имени отправителя) */
+  members?: ApiChatMember[];
   otherMember?: {
     id: string;
     publicId?: number;
@@ -22,9 +36,12 @@ export type ApiChat = {
 export type ApiMessage = {
   id: string;
   chatId: string;
+  folderId?: string | null;
   senderId: string | null;
   type: string;
   content: string;
+  /** Транскрипт голосового сообщения (опционально). */
+  transcript?: string | null;
   replyToId?: string | null;
   replyTo?: { id: string; senderId: string | null; type: string; content: string };
   forwardedFromMessageId?: string | null;

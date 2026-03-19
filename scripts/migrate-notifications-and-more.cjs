@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS user_blocks (
   UNIQUE (blocker_id, blocked_id)
 );
 CREATE INDEX IF NOT EXISTS user_blocks_blocker_id_idx ON user_blocks(blocker_id);
+
+-- Chats: аватар группового чата
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar_url text;
 `;
 
 async function main() {

@@ -4,6 +4,7 @@ import { adminAuditLog } from "@shared/schema";
 export type AuditAction =
   | "user.ban"
   | "user.unban"
+  | "user.update"
   | "user.delete"
   | "user.role"
   | "message.delete"

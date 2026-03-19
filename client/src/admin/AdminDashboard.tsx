@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDateWithYearLocal } from "@/lib/timezone";
 import {
   adminGetStats,
   adminGetUsers,
@@ -16,11 +17,17 @@ import {
   adminUnblockUser,
   adminDeleteUser,
   adminLogout,
+  adminGetFeedAlgorithm,
+  adminUpdateFeedAlgorithm,
+  adminCreateReferralCode,
+  adminGetReferralCodes,
   type AdminStats,
   type AdminUser,
+  type FeedAlgoConfig,
+  type AdminReferralCode,
 } from "./api";
 import { useToast } from "@/hooks/use-toast";
-import { LogOut, Search, Ban, CheckCircle, Trash2 } from "lucide-react";
+import { LogOut, Search, Ban, CheckCircle, Trash2, Copy, Ticket } from "lucide-react";
 
 const PAGE_SIZE = 20;
 
@@ -34,6 +41,11 @@ export function AdminDashboard() {
   const [showDeleted, setShowDeleted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [feedConfig, setFeedConfig] = useState<FeedAlgoConfig | null>(null);
+  const [feedSaving, setFeedSaving] = useState(false);
+  const [referralCodes, setReferralCodes] = useState<AdminReferralCode[]>([]);
+  const [creatingCode, setCreatingCode] = useState(false);
+  const [inviteFormat, setInviteFormat] = useState<"phrase" | "digits">("phrase");
   const { toast } = useToast();
 
   const loadStats = useCallback(async () => {
@@ -68,8 +80,49 @@ export function AdminDashboard() {
   }, [loadStats]);
 
   useEffect(() => {
+    adminGetFeedAlgorithm()
+      .then(setFeedConfig)
+      .catch(() => toast({ title: "Не удалось загрузить настройки ленты", variant: "destructive" }));
+  }, [toast]);
+
+  const loadReferralCodes = useCallback(async () => {
+    try {
+      const { codes } = await adminGetReferralCodes();
+      setReferralCodes(codes);
+    } catch {
+      setReferralCodes([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadReferralCodes();
+  }, [loadReferralCodes]);
+
+  useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  const handleCreateInviteCode = async () => {
+    setCreatingCode(true);
+    try {
+      const created = await adminCreateReferralCode({ format: inviteFormat, expiresInHours: 7 * 24 });
+      setReferralCodes((prev) => [{ ...created, expiresInHours: created.expiresInHours }, ...prev]);
+      toast({ title: "Код создан", description: created.code });
+      await navigator.clipboard.writeText(created.code);
+      toast({ title: "Код скопирован в буфер" });
+    } catch (e) {
+      toast({ title: e instanceof Error ? e.message : "Ошибка создания кода", variant: "destructive" });
+    } finally {
+      setCreatingCode(false);
+    }
+  };
+
+  const copyCode = (code: string) => {
+    navigator.clipboard.writeText(code).then(
+      () => toast({ title: "Код скопирован" }),
+      () => toast({ title: "Не удалось скопировать", variant: "destructive" })
+    );
+  };
 
   const handleBlock = async (u: AdminUser) => {
     setActionId(u.id);
@@ -133,6 +186,156 @@ export function AdminDashboard() {
       </header>
 
       <main className="p-4 space-y-6">
+        {feedConfig && (
+          <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-3">
+            <p className="text-sm font-semibold text-slate-100">Алгоритм ленты</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-xs text-slate-400">
+                Режим
+                <select
+                  className="mt-1 w-full rounded-md border border-slate-600 bg-slate-800 px-2 py-2 text-sm text-white"
+                  value={feedConfig.mode}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, mode: e.target.value as FeedAlgoConfig["mode"] } : prev)}
+                >
+                  <option value="strict_chrono">strict_chrono</option>
+                  <option value="chrono_boost_v1">chrono_boost_v1</option>
+                </select>
+              </label>
+              <label className="text-xs text-slate-400">
+                Окно буста (ч)
+                <Input
+                  type="number"
+                  value={feedConfig.boostWindowHours}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, boostWindowHours: Number(e.target.value) || 12 } : prev)}
+                  className="mt-1 bg-slate-800 border-slate-600 text-white"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Реакция (+мин)
+                <Input
+                  type="number"
+                  value={feedConfig.reactionBoostMinutes}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, reactionBoostMinutes: Number(e.target.value) || 0 } : prev)}
+                  className="mt-1 bg-slate-800 border-slate-600 text-white"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Комментарий (+мин)
+                <Input
+                  type="number"
+                  value={feedConfig.commentBoostMinutes}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, commentBoostMinutes: Number(e.target.value) || 0 } : prev)}
+                  className="mt-1 bg-slate-800 border-slate-600 text-white"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Репост (+мин)
+                <Input
+                  type="number"
+                  value={feedConfig.shareBoostMinutes}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, shareBoostMinutes: Number(e.target.value) || 0 } : prev)}
+                  className="mt-1 bg-slate-800 border-slate-600 text-white"
+                />
+              </label>
+              <label className="text-xs text-slate-400">
+                Новый аккаунт фактор (0..1)
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={feedConfig.newAccountFactor}
+                  onChange={(e) => setFeedConfig((prev) => prev ? { ...prev, newAccountFactor: Number(e.target.value) || 0 } : prev)}
+                  className="mt-1 bg-slate-800 border-slate-600 text-white"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                disabled={feedSaving}
+                onClick={async () => {
+                  setFeedSaving(true);
+                  try {
+                    const next = await adminUpdateFeedAlgorithm(feedConfig);
+                    setFeedConfig(next);
+                    toast({ title: "Алгоритм ленты обновлён" });
+                  } catch (e) {
+                    toast({ title: e instanceof Error ? e.message : "Ошибка обновления", variant: "destructive" });
+                  } finally {
+                    setFeedSaving(false);
+                  }
+                }}
+              >
+                {feedSaving ? "Сохранение..." : "Сохранить алгоритм"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-3">
+          <p className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+            <Ticket className="w-4 h-4" />
+            Пригласительные коды
+          </p>
+          <p className="text-xs text-slate-400">
+            Админ может создавать неограниченное количество кодов. Пользователи регистрируются по коду. Обычный пользователь — до 3 приглашений.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-md border border-slate-600 overflow-hidden">
+              <button
+                type="button"
+                className={`px-3 py-2 text-sm ${inviteFormat === "phrase" ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
+                onClick={() => setInviteFormat("phrase")}
+              >
+                Фраза
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-2 text-sm ${inviteFormat === "digits" ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
+                onClick={() => setInviteFormat("digits")}
+              >
+                4 цифры
+              </button>
+            </div>
+            <Button
+              size="sm"
+              disabled={creatingCode}
+              onClick={handleCreateInviteCode}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              {creatingCode ? "Создание…" : "Создать код"}
+            </Button>
+          </div>
+          {referralCodes.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-500">Активные коды (действуют 7 дней):</p>
+              <ul className="space-y-1.5">
+                {referralCodes.map((c) => (
+                  <li
+                    key={c.id}
+                    className="flex items-center justify-between gap-2 py-2 px-3 rounded-md bg-slate-800 border border-slate-600"
+                  >
+                    <code className="text-sm font-mono text-emerald-300 break-all">{c.code}</code>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-slate-500">
+                        до {formatDateWithYearLocal(new Date(c.expiresAt))}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 w-8 p-0 text-slate-400 hover:text-white"
+                        onClick={() => copyCode(c.code)}
+                        aria-label="Скопировать код"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
         {stats && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="rounded-lg bg-slate-800 border border-slate-700 p-4">

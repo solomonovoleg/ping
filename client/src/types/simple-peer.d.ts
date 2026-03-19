@@ -7,6 +7,8 @@ declare module "simple-peer" {
     config?: RTCConfiguration;
     offerOptions?: RTCOfferOptions;
     answerOptions?: RTCAnswerOptions;
+    /** Custom SDP transform (e.g. for munging codecs). */
+    sdpTransform?: (sdp: string) => string;
   }
 
   interface SignalData {

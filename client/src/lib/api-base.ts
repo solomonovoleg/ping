@@ -60,17 +60,29 @@ export function getAuthHeaders(): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
 }
 
-/** fetch к нашему API: подставляет Bearer в нативе, в вебе только credentials. При 401 сбрасывает токен и шлёт событие auth:session-expired (аудит п.72). Для опциональных запросов (push-token) 401 не считаем «сессия истекла». */
-export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+type ApiFetchInit = RequestInit & {
+  /** Не считать 401 истечением сессии (локальный/опциональный запрос). */
+  suppressSessionExpireOn401?: boolean;
+};
+
+/** fetch к нашему API: подставляет Bearer в нативе, в вебе только credentials. При 401 сбрасывает токен и шлёт событие auth:session-expired. Для опциональных запросов (push-token, calls/token) 401 не считаем «сессия истекла». */
+export function apiFetch(url: string, init?: ApiFetchInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   Object.entries(getAuthHeaders()).forEach(([k, v]) => headers.set(k, v));
   return fetch(url, { ...init, credentials: init?.credentials ?? "include", headers }).then(
     (res) => {
       if (res.status === 401) {
-        setAuthToken(null);
-        const isOptionalAuth = /\/push-token\/?$|\/push-token\?/.test(url) || url.includes("push-token");
-        if (typeof window !== "undefined" && !isOptionalAuth) {
-          window.dispatchEvent(new CustomEvent("auth:session-expired"));
+        const isOptionalAuth =
+          init?.suppressSessionExpireOn401 === true ||
+          /\/push-token\/?$|\/push-token\?/.test(url) ||
+          url.includes("push-token") ||
+          /\/calls\/token\/?$|\/calls\/token\?/.test(url) ||
+          url.includes("/calls/token");
+        if (!isOptionalAuth) {
+          setAuthToken(null);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("auth:session-expired"));
+          }
         }
       }
       return res;

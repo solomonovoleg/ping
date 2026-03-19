@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -12,10 +14,13 @@ import { fetchAuditLog } from "@/lib/admin";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale";
 
+const PAGE_SIZE = 50;
+
 export default function AdminAudit() {
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const { data: log, isLoading, error } = useQuery({
-    queryKey: ["admin", "audit"],
-    queryFn: () => fetchAuditLog({ limit: 100 }),
+    queryKey: ["admin", "audit", limit],
+    queryFn: () => fetchAuditLog({ limit }),
   });
 
   return (
@@ -36,32 +41,45 @@ export default function AdminAudit() {
             <p className="text-muted-foreground py-4">Записей пока нет (или БД не используется).</p>
           )}
           {log && log.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Время</TableHead>
-                  <TableHead>Действие</TableHead>
-                  <TableHead>Объект</TableHead>
-                  <TableHead>Детали</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {log.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
-                      {formatDistanceToNow(new Date(entry.createdAt), { addSuffix: true, locale: ru })}
-                    </TableCell>
-                    <TableCell className="font-medium">{entry.action}</TableCell>
-                    <TableCell>
-                      {entry.targetType} {entry.targetId && `#${entry.targetId.slice(0, 8)}`}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm max-w-xs truncate">
-                      {entry.details && JSON.stringify(entry.details)}
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Время</TableHead>
+                    <TableHead>Действие</TableHead>
+                    <TableHead>Объект</TableHead>
+                    <TableHead>Детали</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {log.map((entry) => (
+                    <TableRow key={entry.id}>
+                      <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
+                        {formatDistanceToNow(new Date(entry.createdAt), { addSuffix: true, locale: ru })}
+                      </TableCell>
+                      <TableCell className="font-medium">{entry.action}</TableCell>
+                      <TableCell>
+                        {entry.targetType} {entry.targetId && `#${entry.targetId.slice(0, 8)}`}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm max-w-xs truncate">
+                        {entry.details && JSON.stringify(entry.details)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {log.length === limit && limit < 200 && (
+                <div className="mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLimit((prev) => prev + PAGE_SIZE)}
+                  >
+                    Загрузить ещё
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

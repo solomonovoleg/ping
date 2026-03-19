@@ -11,6 +11,7 @@ export const chats = pgTable("chats", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   type: text("type", { enum: chatTypeEnum }).notNull().default("dm"),
   name: text("name"),
+  avatarUrl: text("avatar_url"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

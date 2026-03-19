@@ -9,6 +9,7 @@ export type PublicProfile = {
   gender: string | null;
   avatarUrl: string | null;
   coverUrl?: string | null;
+  showCover?: boolean;
   profileLink?: string | null;
   hideFromSearch: boolean;
   bio: string | null;
@@ -23,8 +24,18 @@ export type PublicProfile = {
   commentsCount: number;
 };
 
+function normalizeProfileRouteId(id: string): string {
+  const raw = id.trim();
+  try {
+    return decodeURIComponent(raw).trim().replace(/^@+/, "");
+  } catch {
+    return raw.replace(/^@+/, "");
+  }
+}
+
 export async function fetchUserProfile(id: string): Promise<PublicProfile | null> {
-  const res = await apiFetch(`${API}/users/profile/${encodeURIComponent(id)}`, {
+  const profileId = normalizeProfileRouteId(id);
+  const res = await apiFetch(`${API}/users/profile/${encodeURIComponent(profileId)}`, {
     credentials: "include",
     cache: "no-store",
   });
@@ -38,10 +49,11 @@ export async function fetchProfilePage(
   id: string,
   postsLimit = 50
 ): Promise<{ profile: PublicProfile; posts: FeedPost[]; stories: unknown[] } | null> {
+  const profileId = normalizeProfileRouteId(id);
   const params = new URLSearchParams();
   if (postsLimit > 0) params.set("postsLimit", String(Math.min(postsLimit, 100)));
   const res = await apiFetch(
-    `${API}/users/profile/${encodeURIComponent(id)}/page?${params}`,
+    `${API}/users/profile/${encodeURIComponent(profileId)}/page?${params}`,
     { credentials: "include", cache: "no-store" }
   );
   if (res.status === 404) return null;

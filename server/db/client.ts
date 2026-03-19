@@ -55,6 +55,7 @@ export async function ensureUserColumns(): Promise<void> {
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS fcm_token TEXT");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS show_cover BOOLEAN NOT NULL DEFAULT true");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_link TEXT");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT");
@@ -62,6 +63,7 @@ export async function ensureUserColumns(): Promise<void> {
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_visibility VARCHAR(20) DEFAULT 'all'");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS show_online_to VARCHAR(20) DEFAULT 'all'");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_enabled BOOLEAN NOT NULL DEFAULT true");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_limit INTEGER");
     userColumnsEnsured = true;
     const { ensureReplySchema } = await import("../messages/reply");
     await ensureReplySchema(p);

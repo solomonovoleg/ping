@@ -21,6 +21,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const [messageMenu, setMessageMenu] = useState<{ msg: ApiMessage; x: number; y: number } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [forwardingMessage, setForwardingMessage] = useState<ApiMessage | null>(null);
+  const [addToTrackMessage, setAddToTrackMessage] = useState<ApiMessage | null>(null);
   const [messageSavedMap, setMessageSavedMap] = useState<Record<string, boolean>>({});
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [shatteringMessageId, setShatteringMessageId] = useState<string | null>(null);
@@ -28,8 +29,6 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const messageMenuRef = useRef<HTMLDivElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressConsumedMessageIdRef = useRef<string | null>(null);
-  const lastTapMessageIdRef = useRef<string | null>(null);
-  const lastTapTimeRef = useRef<number>(0);
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearLongPress = useCallback(() => {
@@ -41,11 +40,14 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     longPressConsumedMessageIdRef.current = null;
   }, []);
 
+  const reactionLockRef = useRef(false);
   const handleReaction = useCallback(
     async (msg: ApiMessage, emoji: string) => {
+      if (reactionLockRef.current) return;
       closeMenu();
       const previousMy = msg.myReaction ?? null;
       const isRemoving = previousMy === emoji;
+      reactionLockRef.current = true;
       try {
         if (isRemoving) {
           await removeMessageReaction(chatId, msg.id);
@@ -78,6 +80,8 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
         );
       } catch {
         toast({ title: isRemoving ? "Не удалось убрать реакцию" : "Не удалось поставить реакцию", variant: "destructive" });
+      } finally {
+        reactionLockRef.current = false;
       }
     },
     [chatId, closeMenu, toast, setMessages]
@@ -99,20 +103,9 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
       clearLongPress();
       if (longPressConsumedMessageIdRef.current === messageId) {
         longPressConsumedMessageIdRef.current = null;
-        return;
       }
-      const now = Date.now();
-      if (lastTapMessageIdRef.current === messageId && now - lastTapTimeRef.current < 400) {
-        lastTapMessageIdRef.current = null;
-        lastTapTimeRef.current = 0;
-        const m = messages.find((mx) => mx.id === messageId);
-        if (m) handleReaction(m, "👍");
-        return;
-      }
-      lastTapMessageIdRef.current = messageId;
-      lastTapTimeRef.current = now;
     },
-    [clearLongPress, handleReaction, messages]
+    [clearLongPress]
   );
   const handleMessagePointerLeave = useCallback(() => clearLongPress(), [clearLongPress]);
   const handleMessageContextMenu = useCallback((e: React.MouseEvent) => e.preventDefault(), []);
@@ -164,6 +157,11 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
 
   const handleForward = useCallback((msg: ApiMessage) => {
     setForwardingMessage(msg);
+    closeMenu();
+  }, [closeMenu]);
+
+  const handleAddToTrack = useCallback((msg: ApiMessage) => {
+    setAddToTrackMessage(msg);
     closeMenu();
   }, [closeMenu]);
 
@@ -297,6 +295,9 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     handleClearSelection,
     forwardingMessage,
     setForwardingMessage,
+    addToTrackMessage,
+    setAddToTrackMessage,
+    handleAddToTrack,
     forwardChatsFiltered,
     messageSavedMap,
     scrollToMessageAndHighlight,

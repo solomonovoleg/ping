@@ -1,0 +1,3 @@
+-- Аватар группового чата
+ALTER TABLE chats
+ADD COLUMN IF NOT EXISTS avatar_url text;

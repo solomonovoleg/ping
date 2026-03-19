@@ -5,14 +5,15 @@ import { getSavedMessages } from "@/lib/chat";
 import { ListEmptyState } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TapScaleDiv } from "@/components/ui/tap-scale";
+import { formatTimeLocal, formatDateShortLocal } from "@/lib/timezone";
 
 function formatSavedTime(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
-  if (diff < 86400000) return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (diff < 86400000) return formatTimeLocal(d);
   if (diff < 172800000) return "Вчера";
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return formatDateShortLocal(d);
 }
 
 export default function SavedMessages() {

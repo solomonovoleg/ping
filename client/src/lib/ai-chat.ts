@@ -34,3 +34,17 @@ export async function sendAiMessage(content: string): Promise<SendAiMessageResul
   }
   return res.json();
 }
+
+export async function proofreadText(content: string): Promise<string> {
+  const res = await apiFetch(`${API}/ai-chat/proofread`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Ошибка проверки текста");
+  }
+  const data = (await res.json().catch(() => ({}))) as { text?: string };
+  return typeof data.text === "string" && data.text.trim().length > 0 ? data.text : content;
+}

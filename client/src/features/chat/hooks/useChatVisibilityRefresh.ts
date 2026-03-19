@@ -19,7 +19,11 @@ export function useChatVisibilityRefresh(chatId: string, currentChatIdRef: { cur
         readAndRefreshRetryScheduledRef.current = true;
         readAndRefreshRetryRef.current = setTimeout(() => doReadAndRefresh(true), 2500);
       };
-      apiFetch(`${base}/read`, { method: "PUT" }).catch(() => scheduleRetry());
+      apiFetch(`${base}/read`, { method: "PUT" })
+        .then(() => {
+          setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
+        })
+        .catch(() => scheduleRetry());
       apiFetch(base)
         .then((r) => r.ok ? r.json() : null)
         .then((data: ApiChat | null) => { if (data && data.id === currentChatIdRef.current) setChat(data); })

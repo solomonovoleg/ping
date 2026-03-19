@@ -20,7 +20,17 @@ const ALLOWED_MIMES = [
   "video/mp4",
   "video/webm",
   "video/quicktime", // mov (iPhone и др.)
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/aac",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/webm",
+  "audio/ogg",
 ];
+const ALLOWED_EXT_RE = /\.(jpe?g|png|gif|webp|heic|heif|mp4|webm|mov|mp3|m4a|aac|wav|ogg)$/i;
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) {
@@ -46,8 +56,10 @@ const upload = multer({
   limits: { fileSize: MAX_SIZE },
   fileFilter(_req, file, cb) {
     const mime = (file.mimetype || "").toLowerCase().trim();
-    if (!mime || !ALLOWED_MIMES.includes(mime)) {
-      cb(new Error("Разрешены только фото (JPEG, PNG, GIF, WebP, HEIC) и видео (MP4, WebM, MOV) до 500 МБ"));
+    const byMime = !!mime && ALLOWED_MIMES.includes(mime);
+    const byExt = ALLOWED_EXT_RE.test(file.originalname || "");
+    if (!byMime && !byExt) {
+      cb(new Error("Разрешены только фото, видео и аудио (JPEG/PNG/WEBP/HEIC, MP4/MOV/WebM, MP3/M4A/WAV/OGG) до 500 МБ"));
       return;
     }
     cb(null, true);

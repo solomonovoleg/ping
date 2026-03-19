@@ -21,6 +21,23 @@ export type AdminUser = {
   createdAt: string;
 };
 
+export type FeedAlgoMode = "strict_chrono" | "chrono_boost_v1";
+export type FeedAlgoConfig = {
+  mode: FeedAlgoMode;
+  boostWindowHours: number;
+  boostCapMinutes: number;
+  reactionBoostMinutes: number;
+  commentBoostMinutes: number;
+  shareBoostMinutes: number;
+  candidatePadding: number;
+  candidateMin: number;
+  candidateMax: number;
+  veryNewAccountHours: number;
+  newAccountHours: number;
+  veryNewAccountFactor: number;
+  newAccountFactor: number;
+};
+
 export async function adminMe(): Promise<boolean> {
   const res = await fetch(`${API}/admin/me`, { credentials: "include" });
   return res.ok;
@@ -98,4 +115,54 @@ export async function adminDeleteUser(id: string): Promise<void> {
     const data = await res.json().catch(() => ({}));
     throw new Error((data && data.message) || "Ошибка удаления");
   }
+}
+
+export async function adminGetFeedAlgorithm(): Promise<FeedAlgoConfig> {
+  const res = await fetch(`${API}/admin/feed-algorithm`, { credentials: "include" });
+  if (!res.ok) throw new Error("Ошибка загрузки алгоритма ленты");
+  return res.json();
+}
+
+export async function adminUpdateFeedAlgorithm(patch: Partial<FeedAlgoConfig>): Promise<FeedAlgoConfig> {
+  const res = await fetch(`${API}/admin/feed-algorithm`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка обновления алгоритма ленты");
+  }
+  return res.json();
+}
+
+export type AdminReferralCode = {
+  id: string;
+  code: string;
+  expiresAt: string;
+  expiresInHours?: number;
+};
+
+export async function adminCreateReferralCode(opts?: {
+  format?: "phrase" | "digits";
+  expiresInHours?: number;
+}): Promise<AdminReferralCode> {
+  const res = await fetch(`${API}/admin/referrals/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(opts ?? {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка создания кода");
+  }
+  return res.json();
+}
+
+export async function adminGetReferralCodes(): Promise<{ codes: AdminReferralCode[] }> {
+  const res = await fetch(`${API}/admin/referrals/codes`, { credentials: "include" });
+  if (!res.ok) throw new Error("Ошибка загрузки кодов");
+  return res.json();
 }

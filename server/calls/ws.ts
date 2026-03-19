@@ -37,9 +37,15 @@ type RingingCall = { callerId: string; calleeId: string; chatId: string; video: 
 const ringingByCallee = new Map<string, RingingCall>();
 
 /** Звонящий ждёт, пока абонент офлайн. Если за это время абонент не зашёл — шлём target-offline. */
-const CALLER_WAIT_MS = numEnv("CALLS_CALLER_WAIT_MS", 60 * 1000);
+const CALLER_WAIT_MS = numEnv("CALLS_CALLER_WAIT_MS", 30 * 1000);
 type CallerWait = { calleeId: string; chatId: string; video: boolean; timer: ReturnType<typeof setTimeout> };
 const callerWaitByCaller = new Map<string, CallerWait>();
+const CALLS_DEBUG = process.env.CALLS_DEBUG === "1";
+
+function debugCall(event: string, details: Record<string, unknown>): void {
+  if (!CALLS_DEBUG) return;
+  console.log(`[calls] ${event}`, details);
+}
 
 function pruneExpiredPending(): void {
   const now = Date.now();
@@ -53,6 +59,7 @@ export type CallSignalingMessage =
   | { type: "call-accept"; video: boolean; fromUserId: string }
   | { type: "call-reject"; fromUserId: string }
   | { type: "call-end"; fromUserId: string }
+  | { type: "target-waiting"; fromUserId: string; waitMs: number }
   | { type: "target-offline"; fromUserId: string }
   | { type: "offer"; sdp: RTCSessionDescriptionInit; fromUserId: string }
   | { type: "answer"; sdp: RTCSessionDescriptionInit; fromUserId: string }
@@ -174,8 +181,19 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
         fromUserId: pending.fromUserId,
         fromDisplayName: pending.fromDisplayName,
       });
+      debugCall("deliver-pending-initiate", {
+        toUserId: userId,
+        fromUserId: pending.fromUserId,
+        chatId: pending.chatId,
+        video: pending.video,
+      });
       if (pending.offer) {
         sendToUser(userId, { type: "offer", fromUserId: pending.fromUserId, sdp: pending.offer });
+        debugCall("deliver-pending-offer", {
+          toUserId: userId,
+          fromUserId: pending.fromUserId,
+          chatId: pending.chatId,
+        });
       }
     }
 
@@ -270,6 +288,7 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
               expiresAt: Date.now() + PENDING_CALL_TTL_MS,
             });
             sendPushToUser(targetUserId, "Вам звонит " + callerName, "Откройте приложение, чтобы ответить").catch(() => {});
+            sendToUser(fromUserId, { type: "target-waiting", fromUserId: targetUserId, waitMs: CALLER_WAIT_MS });
             const waitTimer = setTimeout(() => {
               callerWaitByCaller.delete(fromUserId);
               pendingCallsByCallee.delete(targetUserId);
@@ -277,6 +296,13 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
               recordMissedCall(chatId, fromUserId, targetUserId, video).catch((e) => console.error("[calls] recordMissedCall:", e));
             }, CALLER_WAIT_MS);
             callerWaitByCaller.set(fromUserId, { calleeId: targetUserId, chatId, video, timer: waitTimer });
+            debugCall("call-initiate-target-offline", {
+              fromUserId,
+              targetUserId,
+              chatId,
+              video,
+              waitMs: CALLER_WAIT_MS,
+            });
           } else {
             const callerName = typeof parsed.fromDisplayName === "string" && parsed.fromDisplayName.trim() ? parsed.fromDisplayName.trim() : "Абонент";
             const chatId = typeof parsed.chatId === "string" ? parsed.chatId : "";
@@ -306,6 +332,13 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
             }, RING_TIMEOUT_MS);
             ringingByCallee.set(targetUserId, { callerId: fromUserId, calleeId: targetUserId, chatId, video, timer });
             sendToUser(targetUserId, parsed as CallSignalingMessage);
+            debugCall("call-initiate-forwarded", {
+              fromUserId,
+              targetUserId,
+              chatId,
+              video,
+              calleeSocketsCount: calleeSockets.length,
+            });
           }
           return;
         }
@@ -316,6 +349,11 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
         const calleeOnline = calleeSockets.length > 0;
 
         if (parsed.type === "call-accept" || parsed.type === "call-reject" || parsed.type === "call-end") {
+          debugCall("call-control-received", {
+            type: parsed.type,
+            fromUserId: userId,
+            targetUserId,
+          });
           pendingCallsByCallee.delete(userId);
           pendingCallsByCallee.delete(targetUserId);
           const ring = ringingByCallee.get(userId) ?? ringingByCallee.get(targetUserId);
@@ -343,10 +381,17 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
           if (calleeOnline) {
             console.log("[calls] forwarding offer to", targetUserId);
             sendToUser(targetUserId, parsed as CallSignalingMessage);
+            debugCall("offer-forwarded", { fromUserId, targetUserId });
+          } else {
+            debugCall("offer-buffered-target-offline", { fromUserId, targetUserId });
           }
         } else if (parsed.type === "answer") {
           console.log("[calls] forwarding answer to", targetUserId);
           sendToUser(targetUserId, parsed as CallSignalingMessage);
+          debugCall("answer-forwarded", { fromUserId, targetUserId });
+        } else if (parsed.type === "ice-candidate") {
+          sendToUser(targetUserId, parsed as CallSignalingMessage);
+          debugCall("ice-forwarded", { fromUserId, targetUserId, calleeOnline });
         } else {
           sendToUser(targetUserId, parsed as CallSignalingMessage);
         }
@@ -362,9 +407,17 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
     ws.on("close", () => {
       removeConnection(ws);
       const set = socketsByUser.get(userId);
+      let hasOtherActiveSockets = false;
       if (set) {
         set.delete(ws);
+        hasOtherActiveSockets = Array.from(set.values()).some((s) => s.readyState === 1);
         if (set.size === 0) socketsByUser.delete(userId);
+      }
+
+      // У пользователя может быть несколько вкладок/сокетов.
+      // Закрытие одного сокета не должно завершать звонок, пока есть другой активный.
+      if (hasOtherActiveSockets) {
+        return;
       }
 
       const ringAsCallee = ringingByCallee.get(userId);
@@ -375,7 +428,7 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
         console.log("[calls] call-end (callee disconnected)", { callerId: ringAsCallee.callerId, calleeId: userId });
         sendToUser(ringAsCallee.callerId, { type: "call-end", fromUserId: userId });
       }
-      for (const [calleeId, ring] of ringingByCallee.entries()) {
+      for (const [calleeId, ring] of Array.from(ringingByCallee.entries())) {
         if (ring.callerId === userId) {
           clearTimeout(ring.timer);
           ringingByCallee.delete(calleeId);

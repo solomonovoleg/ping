@@ -36,19 +36,25 @@ import { searchMessages, type SearchMessageHit } from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER } from "@/lib/motion";
+import { formatTimeLocal, formatDateShortLocal } from "@/lib/timezone";
 
 type ApiChat = {
   id: string;
   type: string;
   name: string | null;
+  avatarUrl?: string | null;
   createdAt: string;
   otherMember?: { id: string; publicId: number } | null;
   otherMemberAvatarUrl?: string | null;
   otherMemberLastSeenAt?: string | null;
+  otherMemberHasActiveStory?: boolean;
+  otherMemberHasUnseenStory?: boolean;
   lastMessage?: { type: string; content: string; createdAt: string } | null;
+  hasUnread?: boolean;
+  unreadCount?: number;
 };
 
-/** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM». */
+/** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM» (локальное время). */
 function formatLastSeen(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -58,9 +64,9 @@ function formatLastSeen(iso: string | null | undefined): string | null {
   if (diffMin < 2) return "в сети";
   if (diffMin < 60) return "был(а) недавно";
   const diffHours = diffMin / 60;
-  if (diffHours < 24) return `был(а) в ${d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+  if (diffHours < 24) return `был(а) в ${formatTimeLocal(d)}`;
   if (diffHours < 48) return "был(а) вчера";
-  return `был(а) ${d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`;
+  return `был(а) ${formatDateShortLocal(d)}`;
 }
 
 async function fetchChats(): Promise<ApiChat[]> {
@@ -73,9 +79,9 @@ function formatChatTime(createdAt: string): string {
   const d = new Date(createdAt);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
-  if (diff < 86400000) return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (diff < 86400000) return formatTimeLocal(d);
   if (diff < 172800000) return "Вчера";
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return formatDateShortLocal(d);
 }
 
 type DateSectionKey = "today" | "yesterday" | "week" | "earlier";
@@ -153,25 +159,49 @@ const ChatRow = memo(function ChatRow({
     );
   const content = (
     <>
-      <UserAvatar
-        avatarUrl={chat.otherMemberAvatarUrl ?? undefined}
-        displayName={chat.name ?? "Диалог"}
-        seed={chat.id}
-        size={46}
-        className={cn("h-[46px] w-[46px] flex-shrink-0 sm:h-[50px] sm:w-[50px]", isAiChat && "ring-2 ring-indigo-400/60 ring-offset-2 ring-offset-indigo-500/10")}
-        showOnlineIndicator={chat.type === "dm" && !isAiChat}
-        lastSeenAt={chat.otherMemberLastSeenAt ?? undefined}
-      />
+      <div
+        className={cn(
+          "rounded-full p-[2px] transition-transform duration-200",
+          chat.otherMemberHasUnseenStory && !isAiChat
+            ? "bg-gradient-to-tr from-primary via-fuchsia-500 to-purple-500 animate-story-ring"
+            : chat.otherMemberHasActiveStory && !isAiChat
+              ? "bg-gradient-to-tr from-primary/75 to-purple-400/70"
+              : "bg-transparent"
+        )}
+      >
+        <UserAvatar
+          avatarUrl={(chat.type === "group" ? chat.avatarUrl : chat.otherMemberAvatarUrl) ?? undefined}
+          displayName={chat.name ?? "Диалог"}
+          seed={chat.id}
+          size={46}
+          className={cn("h-[46px] w-[46px] flex-shrink-0 sm:h-[50px] sm:w-[50px]", isAiChat && "ring-2 ring-indigo-400/60 ring-offset-2 ring-offset-indigo-500/10")}
+          showOnlineIndicator={chat.type === "dm" && !isAiChat}
+          lastSeenAt={chat.otherMemberLastSeenAt ?? undefined}
+        />
+      </div>
       <div className="flex-1 min-w-0">
         <div className="flex justify-between items-baseline gap-1.5">
-          <h3 className={cn("truncate text-[15px] font-semibold leading-5 sm:text-[16px]", isAiChat && "text-indigo-700 dark:text-indigo-200")}>
+          <h3
+            className={cn(
+              "truncate text-[15px] font-semibold leading-5 sm:text-[16px]",
+              isAiChat && "text-indigo-700 dark:text-indigo-200",
+              chat.hasUnread && !isAiChat && "text-foreground"
+            )}
+          >
             {chat.name ?? (chat.type === "dm" ? "Диалог" : "Чат")}
           </h3>
           <span className="flex-shrink-0 text-[11px] text-muted-foreground/90 sm:text-xs">
             {formatChatTime(chat.lastMessage?.createdAt ?? chat.createdAt)}
           </span>
         </div>
-        <p className={cn("mt-0.5 truncate text-[13px] leading-[1.25rem] sm:text-[13.5px]", isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : "text-muted-foreground")}>{preview}</p>
+        <p
+          className={cn(
+            "mt-0.5 truncate text-[13px] leading-[1.25rem] sm:text-[13.5px]",
+            isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : chat.hasUnread ? "text-foreground/80 font-medium" : "text-muted-foreground"
+          )}
+        >
+          {preview}
+        </p>
       </div>
     </>
   );
@@ -182,15 +212,11 @@ const ChatRow = memo(function ChatRow({
         initial={reducedMotion ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
-        className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-500/12 via-violet-500/8 to-indigo-500/5 shadow-sm border border-indigo-500/20 hover:from-indigo-500/18 hover:via-violet-500/12 hover:to-indigo-500/8 hover:border-indigo-500/30 hover:shadow-md transition-all duration-200"
+        className="rounded-xl sm:rounded-2xl border border-indigo-500/12 bg-indigo-500/8 transition-colors duration-150 hover:bg-indigo-500/12"
       >
-        <div
-          className="absolute left-0 top-0 bottom-0 w-1 rounded-l-full bg-gradient-to-b from-indigo-400 via-violet-500 to-indigo-600 pinned-chat-accent"
-          aria-hidden
-        />
         <TapScaleDiv
           onClick={onSelect}
-          className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-2xl bg-transparent py-2 pl-4 pr-0 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:py-2.5 sm:pl-5 sm:pr-2 hover:bg-transparent"
+          className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors duration-75 hover:bg-indigo-500/8 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5"
         >
           {content}
         </TapScaleDiv>
@@ -198,12 +224,30 @@ const ChatRow = memo(function ChatRow({
     );
   }
 
+  const hasUnread = chat.hasUnread === true;
+  const unreadCount = Math.max(0, chat.unreadCount ?? 0);
+  const badgeLabel = unreadCount <= 0 ? "" : unreadCount > 99 ? "99+" : String(unreadCount);
+
   return (
     <TapScaleDiv
       onClick={onSelect}
-      className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl px-0 py-2 transition-colors duration-75 hover:bg-secondary/50 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2 sm:py-2.5"
+      className={cn(
+        "uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors duration-75 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5",
+        "border-border/20 hover:bg-secondary/40",
+        hasUnread
+          ? "bg-secondary/60 hover:bg-secondary/70 dark:bg-secondary/45 dark:hover:bg-secondary/55"
+          : "bg-card/60 hover:bg-secondary/50"
+      )}
     >
       {content}
+      {hasUnread && badgeLabel && (
+        <span
+          className="flex-shrink-0 inline-flex min-h-[20px] min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground"
+          aria-label={`${unreadCount} непрочитанных`}
+        >
+          {badgeLabel}
+        </span>
+      )}
     </TapScaleDiv>
   );
 });
@@ -233,6 +277,7 @@ export default function Chats() {
   const { data: chats = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["chats"],
     queryFn: fetchChats,
+    refetchOnMount: "always",
   });
 
   // Подписка на все чаты: новые сообщения → обновить список; типинг и запись ГС → показать в превью
@@ -332,6 +377,11 @@ export default function Chats() {
           (c) =>
             (c.name ?? "").toLowerCase().includes(searchLower)
         );
+  const chatsSortedByLastMessage = [...filteredChats].sort((a, b) => {
+    const aTs = Date.parse(a.lastMessage?.createdAt ?? a.createdAt);
+    const bTs = Date.parse(b.lastMessage?.createdAt ?? b.createdAt);
+    return bTs - aTs;
+  });
   const showAiOver = searchLower === "" || "ai over".includes(searchLower);
   const aiOverChat: ApiChat = {
     id: AI_CHAT_ID,
@@ -539,18 +589,18 @@ export default function Chats() {
       <div className="w-full max-w-full min-w-0 flex flex-col h-full bg-background relative">
         
         {/* Header — компактно, как в TG: ~5px от краёв */}
-        <div className="uix-content-x-tight pt-1.5 pb-1 sm:pt-3 sm:pb-1.5 glass z-20 sticky top-0 border-b border-border/50">
-          <div className="flex justify-between items-center mb-1 sm:mb-1.5">
-            <span className="uix-text-title font-semibold">Чаты</span>
+        <div className="uix-content-x pt-safe-offset-2 pb-2 sm:pt-4 sm:pb-2.5 glass z-20 sticky top-0 border-b border-border/50">
+          <div className="flex justify-between items-center mb-2">
+            <span className="uix-text-title tracking-tight">Чаты</span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center p-1.5 sm:p-2 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 active:scale-95"
+                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 active:scale-95"
                   title="Новый чат или группа"
                   aria-label="Новый чат или групповой чат"
                 >
-                  <Edit className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <Edit className="w-5 h-5" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[180px]">
@@ -575,26 +625,27 @@ export default function Chats() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-2">
             <GlobalSearch
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Поиск по номеру, ID или имени..."
-              className="[&_input]:py-2 [&_input]:text-[14px] sm:[&_input]:py-2.5 sm:[&_input]:text-[15px]"
+              className="[&_input]:h-11 [&_input]:rounded-xl [&_input]:bg-card/75 [&_input]:text-[15px] [&_input]:shadow-[inset_0_0_0_1px_hsl(var(--border)/0.5)] [&_input]:focus:ring-2 [&_input]:focus:ring-primary/25"
             />
             <button 
               onClick={() => setShowContactsPage(true)}
-              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center p-2 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors duration-75 flex-shrink-0 active:scale-95"
+              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 flex-shrink-0 active:scale-95"
               title="Контакты"
+              aria-label="Контакты"
             >
-              <UserPlus className="w-4 h-4 sm:w-5 sm:h-5" />
+              <UserPlus className="w-5 h-5" />
             </button>
           </div>
         </div>
 
         {/* List Content — чаты в 5px от краёв, как в Telegram */}
         <PullToRefresh onRefresh={() => refetch()} className="min-h-0">
-          <div className="uix-content-x-tight py-1 sm:py-2 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
+          <div className="uix-content-x py-2 sm:py-2.5 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))] space-y-1">
             {searchQuery.trim().length >= 2 && (
               <div className="mb-3">
                 <p className="text-xs font-medium text-muted-foreground mb-1.5">В сообщениях</p>
@@ -629,7 +680,7 @@ export default function Chats() {
                 description="Проверьте интернет и попробуйте снова"
                 onRetry={() => refetch()}
               />
-            ) : filteredChats.length === 0 ? (
+            ) : chatsSortedByLastMessage.length === 0 ? (
               <ListEmptyState
                 icon={MessageCircle}
                 title={chats.length === 0 ? "У вас пока нет чатов" : "Нет чатов по запросу"}
@@ -643,7 +694,7 @@ export default function Chats() {
               />
             ) : (
               (() => {
-                const chatsWithoutAi = filteredChats.filter((c) => c.id !== AI_CHAT_ID);
+                const chatsWithoutAi = chatsSortedByLastMessage.filter((c) => c.id !== AI_CHAT_ID);
                 const bySection = groupChatsByDateSection(chatsWithoutAi);
                 return [
                   ...(showAiOver
@@ -653,7 +704,7 @@ export default function Chats() {
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           transition={{ duration: DURATION_NORMAL_S * 0.6, ease: EASING_OUT_BEZIER }}
-                          className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground px-0 py-1.5 sm:py-2 sticky top-0 bg-background/95 backdrop-blur z-10"
+                          className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2"
                         >
                           <Pin className="w-3 h-3 text-indigo-500/80" aria-hidden />
                           Закреплён
@@ -672,7 +723,7 @@ export default function Chats() {
                     const sectionChats = bySection.get(key) ?? [];
                     if (sectionChats.length === 0) return [];
                     return [
-                      <p key={key} className="text-[11px] font-medium text-muted-foreground px-0 py-1.5 sm:py-2 sticky top-0 bg-background/95 backdrop-blur z-10">
+                      <p key={key} className="text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2">
                         {DATE_SECTION_LABELS[key]}
                       </p>,
                       ...sectionChats.map((chat) => (

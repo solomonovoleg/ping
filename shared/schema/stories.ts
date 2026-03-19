@@ -9,6 +9,10 @@ export const stories = pgTable("stories", {
   mediaUrl: text("media_url").notNull(),
   thumbnailUrl: text("thumbnail_url"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  /** Когда сториз перестаёт быть активным (для 24/46/56 часов). */
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" })
+    .notNull()
+    .default(sql`(now() + interval '24 hours')`),
 });
 
 export type Story = typeof stories.$inferSelect;

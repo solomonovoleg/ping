@@ -36,8 +36,21 @@ CREATE TABLE IF NOT EXISTS stories (
   author_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   media_url text NOT NULL,
   thumbnail_url text,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL DEFAULT (now() + interval '24 hours')
 );
+
+ALTER TABLE stories
+  ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+
+UPDATE stories
+SET expires_at = COALESCE(expires_at, created_at + interval '24 hours');
+
+ALTER TABLE stories
+  ALTER COLUMN expires_at SET DEFAULT (now() + interval '24 hours');
+
+ALTER TABLE stories
+  ALTER COLUMN expires_at SET NOT NULL;
 `;
 
 async function main() {

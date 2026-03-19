@@ -17,6 +17,7 @@ import {
   MessageCircle,
   Bookmark,
   Volume2,
+  Type,
   Trash2,
   ExternalLink,
   Mail,
@@ -38,7 +39,9 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { getSavedTheme, setTheme, type ThemeId } from "@/lib/theme";
 import { getMicroSoundsEnabled, setMicroSoundsEnabled } from "@/lib/micro-feedback";
+import { getSpellCheckEnabled, setSpellCheckEnabled } from "@/lib/spellcheck-prefs";
 import { getMyReferralCodes, createReferralCode, getInvitedUsers, type InvitedUser } from "@/lib/referrals";
+import { formatDateWithYearLocal } from "@/lib/timezone";
 import { startDm } from "@/lib/search";
 
 import { PageTitle } from "@/components/PageTitle";
@@ -66,6 +69,7 @@ export default function Settings() {
   const [privacySaving, setPrivacySaving] = useState(false);
   const [pushSaving, setPushSaving] = useState(false);
   const [microSounds, setMicroSoundsState] = useState(getMicroSoundsEnabled);
+  const [spellCheck, setSpellCheckState] = useState(getSpellCheckEnabled);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [, setLocation] = useLocation();
@@ -349,6 +353,24 @@ export default function Settings() {
                 }}
               />
             </div>
+            <div className="flex items-center justify-between gap-4 p-4 rounded-2xl border border-border/50 bg-card shadow-sm mt-2">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Type className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-medium text-foreground">Автоисправление орфографии</p>
+                  <p className="text-xs text-muted-foreground">В чатах при наборе сообщения</p>
+                </div>
+              </div>
+              <Switch
+                checked={spellCheck}
+                onCheckedChange={(checked) => {
+                  setSpellCheckEnabled(checked);
+                  setSpellCheckState(checked);
+                }}
+              />
+            </div>
           </div>
 
           {/* Invite section */}
@@ -455,7 +477,7 @@ export default function Settings() {
                           <p className="font-medium text-[15px] truncate">{displayName}</p>
                           {invited.createdAt && (
                             <p className="text-xs text-muted-foreground">
-                              Зарегистрирован {new Date(invited.createdAt).toLocaleDateString("ru-RU")}
+                              Зарегистрирован {formatDateWithYearLocal(new Date(invited.createdAt))}
                             </p>
                           )}
                         </div>

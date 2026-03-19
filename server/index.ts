@@ -58,6 +58,51 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+const MAX_LOG_PREVIEW_CHARS = 1200;
+const MAX_STRING_FIELD_CHARS = 180;
+
+function sanitizeLogPayload(value: unknown): unknown {
+  if (value == null) return value;
+  if (typeof value === "string") {
+    if (value.startsWith("data:")) {
+      return `[data-url omitted, length=${value.length}]`;
+    }
+    if (value.length > MAX_STRING_FIELD_CHARS) {
+      return `${value.slice(0, MAX_STRING_FIELD_CHARS)}…[${value.length} chars]`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 8) {
+      return {
+        summary: `array(${value.length})`,
+        firstItems: value.slice(0, 3).map((item) => sanitizeLogPayload(item)),
+      };
+    }
+    return value.map((item) => sanitizeLogPayload(item));
+  }
+  if (typeof value === "object") {
+    const src = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(src)) {
+      out[key] = sanitizeLogPayload(item);
+    }
+    return out;
+  }
+  return value;
+}
+
+function payloadToLogString(payload: unknown): string {
+  try {
+    const sanitized = sanitizeLogPayload(payload);
+    const raw = JSON.stringify(sanitized);
+    if (raw.length <= MAX_LOG_PREVIEW_CHARS) return raw;
+    return `${raw.slice(0, MAX_LOG_PREVIEW_CHARS)}…[truncated ${raw.length - MAX_LOG_PREVIEW_CHARS} chars]`;
+  } catch {
+    return "[unserializable payload]";
+  }
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -74,7 +119,7 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        logLine += ` :: ${payloadToLogString(capturedJsonResponse)}`;
       }
 
       log(logLine);
@@ -123,6 +168,17 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      if (process.env.DATABASE_URL) {
+        const { processScheduledMessages } = require("./messages/service");
+        setInterval(async () => {
+          try {
+            const n = await processScheduledMessages();
+            if (n > 0) log(`[scheduled] sent ${n} message(s)`);
+          } catch (e) {
+            console.warn("[scheduled] worker error:", e);
+          }
+        }, 60_000);
+      }
     },
   );
 })();

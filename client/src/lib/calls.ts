@@ -8,7 +8,7 @@ export class CallTokenUnauthorizedError extends Error {
 }
 
 export async function getCallToken(): Promise<string> {
-  const res = await apiFetch(`${API}/calls/token`, { method: "POST" });
+  const res = await apiFetch(`${API}/calls/token`, { method: "POST", suppressSessionExpireOn401: true });
   if (res.status === 401) throw new CallTokenUnauthorizedError();
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { message?: string };
@@ -46,22 +46,60 @@ export function getCallWsUrl(token: string): string {
 
 /** Ограничения для getUserMedia: качественный звук (эхо/шум) и при необходимости видео. */
 export function getMediaConstraints(video: boolean): MediaStreamConstraints {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isIos = /iPhone|iPad|iPod/i.test(ua);
   return {
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-      sampleRate: 48000,
+      // На iOS Safari/WebView sampleRate часто приводит к OverconstrainedError.
+      ...(isIos ? {} : { sampleRate: 48000 }),
     },
     video: video
       ? {
           facingMode: "user",
-          width: { ideal: 1280, min: 320 },
-          height: { ideal: 720, min: 240 },
+          width: isIos ? { ideal: 960, min: 240 } : { ideal: 1280, min: 320 },
+          height: isIos ? { ideal: 540, min: 180 } : { ideal: 720, min: 240 },
           frameRate: { ideal: 24, max: 30 },
         }
       : false,
   };
+}
+
+function preferPayloadInMLine(lines: string[], media: "audio" | "video", codecRegex: RegExp): string[] {
+  const mLineIndex = lines.findIndex((l) => l.startsWith(`m=${media} `));
+  if (mLineIndex < 0) return lines;
+  const payloadOrder = lines[mLineIndex].split(" ");
+  if (payloadOrder.length < 4) return lines;
+
+  const preferredPayloads = lines
+    .map((line) => {
+      const m = line.match(codecRegex);
+      return m?.[1] ?? null;
+    })
+    .filter((v): v is string => Boolean(v));
+  if (!preferredPayloads.length) return lines;
+
+  const header = payloadOrder.slice(0, 3);
+  const payloads = payloadOrder.slice(3);
+  const preferredSet = new Set(preferredPayloads);
+  const first = payloads.filter((p) => preferredSet.has(p));
+  const rest = payloads.filter((p) => !preferredSet.has(p));
+  lines[mLineIndex] = [...header, ...first, ...rest].join(" ");
+  return lines;
+}
+
+/**
+ * SDP-трансформация для кросс-платформенных звонков:
+ * - audio: предпочитаем opus
+ * - video: предпочитаем H264 (особенно важно для iOS Safari/WebView)
+ */
+export function transformPeerSdp(sdp: string): string {
+  const lines = sdp.split("\r\n");
+  preferPayloadInMLine(lines, "audio", /^a=rtpmap:(\d+)\s+opus\/48000/i);
+  preferPayloadInMLine(lines, "video", /^a=rtpmap:(\d+)\s+H264\/90000/i);
+  return lines.join("\r\n");
 }
 
 /** ICE-серверы для WebRTC: STUN по умолчанию + опционально TURN из env (для симметричных NAT/файрволов). */
@@ -89,6 +127,7 @@ export type CallSignalingMessage =
   | { type: "call-accept"; video: boolean; fromUserId: string }
   | { type: "call-reject"; fromUserId: string }
   | { type: "call-end"; fromUserId: string }
+  | { type: "target-waiting"; fromUserId: string; waitMs: number }
   | { type: "target-offline"; fromUserId: string }
   | { type: "offer"; sdp: RTCSessionDescriptionInit; fromUserId: string }
   | { type: "answer"; sdp: RTCSessionDescriptionInit; fromUserId: string }

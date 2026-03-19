@@ -4,10 +4,12 @@ export type NotificationItem = {
   id: string;
   type: string;
   actorId: string;
+  actorPublicId: number | null;
   actorName: string;
   actorAvatarUrl: string | null;
   postId: string | null;
   postAuthorId: string | null;
+  postAuthorPublicId: number | null;
   commentId: string | null;
   excerpt: string | null;
   readAt: string | null;

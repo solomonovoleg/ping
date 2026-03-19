@@ -51,3 +51,17 @@ export function notifyNewMessage(chatId: string, message: ChatMessagePayload): v
     if (ws.readyState === 1) ws.send(payload);
   });
 }
+
+type WsWithUserId = WebSocket & { userId?: string };
+
+/** Уведомить подписчиков чата о прочтении (кроме того, кто прочитал). */
+export function notifyChatRead(chatId: string, readerId: string, lastReadAt: string): void {
+  const set = byChat.get(chatId);
+  if (!set) return;
+  const payload = JSON.stringify({ type: "chat-read", chatId, readerId, lastReadAt });
+  set.forEach((ws) => {
+    const w = ws as WsWithUserId;
+    if (w.userId === readerId) return;
+    if (ws.readyState === 1) ws.send(payload);
+  });
+}

@@ -10,6 +10,7 @@ export type AuthUser = {
   birthDate: string | null;
   avatarUrl: string | null;
   coverUrl?: string | null;
+  showCover?: boolean;
   profileLink?: string | null;
   platformRole?: string;
   hideFromSearch?: boolean;
@@ -39,6 +40,7 @@ export async function fetchMe(): Promise<AuthUser | null> {
     birthDate: data.birthDate ?? null,
     avatarUrl: data.avatarUrl ?? null,
     coverUrl: data.coverUrl ?? null,
+    showCover: data.showCover !== false,
     profileLink: data.profileLink ?? null,
     platformRole: data.platformRole ?? "user",
     hideFromSearch: data.hideFromSearch ?? false,
@@ -205,6 +207,7 @@ export async function updateProfile(data: {
   hideFromSearch?: boolean;
   bio?: string | null;
   coverUrl?: string | null;
+  showCover?: boolean;
   profileLink?: string | null;
   pushEnabled?: boolean;
 }): Promise<AuthUser> {

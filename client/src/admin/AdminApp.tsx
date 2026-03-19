@@ -4,7 +4,9 @@ import { fetchMe, login } from "@/lib/auth";
 import AdminLayout from "@/pages/admin/AdminLayout";
 import AdminDashboard from "@/pages/admin/Dashboard";
 import AdminUsers from "@/pages/admin/Users";
+import AdminReferrals from "@/pages/admin/Referrals";
 import AdminAdmins from "@/pages/admin/Admins";
+import AdminSettings from "@/pages/admin/Settings";
 import AdminAudit from "@/pages/admin/Audit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,8 +115,12 @@ export function AdminApp() {
   const content =
     location === "/admin/users" ? (
       <AdminUsers />
+    ) : location === "/admin/referrals" ? (
+      <AdminReferrals />
     ) : location === "/admin/admins" ? (
       <AdminAdmins />
+    ) : location === "/admin/settings" ? (
+      <AdminSettings />
     ) : location === "/admin/audit" ? (
       <AdminAudit />
     ) : (

@@ -251,6 +251,8 @@ export async function sharePostToUser(postId: string, toUserId: string): Promise
   return body;
 }
 
+import { formatDateShortLocal } from "@/lib/timezone";
+
 export function formatPostTime(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -263,5 +265,5 @@ export function formatPostTime(iso: string): string {
   if (h < 24) return `${h} ч назад`;
   if (days === 1) return "Вчера";
   if (days < 7) return `${days} дн назад`;
-  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return formatDateShortLocal(d);
 }

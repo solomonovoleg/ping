@@ -1,54 +1,118 @@
 /**
  * Один пузырь сообщения (текст/голос/фото/видео/пост). React.memo — при «печатает» не ре-рендерим весь список.
  */
-import { memo, createElement, Fragment, useRef } from "react";
+import { memo, createElement, Fragment, useRef, useState } from "react";
 import { Clock, AlertCircle, Reply as ReplyIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
-import { formatMessageTime } from "../utils/format";
+import { formatMessageTime, parseMessageDate } from "../utils/format";
+import { buildProfilePath } from "@/lib/profile-route";
 import { UserAvatar } from "@/components/UserAvatar";
 import { VoiceMessagePlayer } from "@/components/VoiceMessagePlayer";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import type { ApiMessage } from "../types";
 
-const URL_REGEX = /https?:\/\/[^\s<>]+/g;
-
-/** Разбивает текст на фрагменты и превращает URL в кликабельные ссылки */
-function linkifyText(text: string): React.ReactNode {
-  const segments: React.ReactNode[] = [];
+/** Разбивает текст на фрагменты: URL — ссылки, @[Name](id) — ссылки на профиль */
+function linkifyTextWithMentions(
+  text: string,
+  onMentionClick: (id: string) => void
+): React.ReactNode {
+  const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let key = 0;
+  const re = /(https?:\/\/[^\s<>]+)|@\[([^\]]+)\]\(([^)]+)\)/g;
   let m: RegExpExecArray | null;
-  URL_REGEX.lastIndex = 0;
-  while ((m = URL_REGEX.exec(text)) !== null) {
+  while ((m = re.exec(text)) !== null) {
     if (m.index > lastIndex) {
-      segments.push(text.slice(lastIndex, m.index));
+      parts.push(text.slice(lastIndex, m.index));
     }
-    const url = m[0];
-    segments.push(
-      createElement(
-        "a",
-        {
-          key: key++,
-          href: url,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          className: "text-primary underline underline-offset-1 break-all",
-          onClick: (e: React.MouseEvent) => e.stopPropagation(),
-        },
-        url
-      )
-    );
-    lastIndex = m.index + url.length;
+    if (m[1]) {
+      const url = m[1];
+      parts.push(
+        createElement(
+          "a",
+          {
+            key: key++,
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            className: "text-primary underline underline-offset-1 break-all",
+            onClick: (e: React.MouseEvent) => e.stopPropagation(),
+          },
+          url
+        )
+      );
+    } else {
+      const name = m[2];
+      const id = m[3];
+      const path = buildProfilePath({ publicId: id, userId: id });
+      parts.push(
+        createElement(
+          "a",
+          {
+            key: key++,
+            href: path,
+            className: "text-primary font-medium underline underline-offset-1",
+            onClick: (e: React.MouseEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onMentionClick(id);
+            },
+          },
+          `@${name}`
+        )
+      );
+    }
+    lastIndex = m.index + m[0].length;
   }
   if (lastIndex < text.length) {
-    segments.push(text.slice(lastIndex));
+    parts.push(text.slice(lastIndex));
   }
-  if (segments.length === 0) return text;
-  if (segments.length === 1) return segments[0];
-  return createElement(Fragment, {}, ...segments);
+  if (parts.length === 0) return text;
+  if (parts.length === 1) return parts[0];
+  return createElement(Fragment, {}, ...parts);
 }
+
+export type MessageBubbleColorPreset = "primary" | "slate" | "violet" | "sky";
+
+const MSG_BUBBLE_CLASSES: Record<
+  MessageBubbleColorPreset,
+  { bubble: string; videoNoteBorder: string; replyBlock: string; footer: string; shatter: string }
+> = {
+  primary: {
+    bubble:
+      "bg-primary/15 dark:bg-primary/35 text-foreground dark:text-primary-50 border border-primary/30 dark:border-primary/50 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    videoNoteBorder: "border-primary-400/50 dark:border-primary-500/35",
+    replyBlock: "bg-primary/15 dark:bg-primary/25 border-l-[3px] border-l-primary/50 dark:border-l-primary/60",
+    footer: "text-primary-800/90 dark:text-primary-200/90",
+    shatter: "bg-primary-100/90 dark:bg-primary-900/35",
+  },
+  slate: {
+    bubble:
+      "bg-slate-200 dark:bg-slate-700/90 text-foreground dark:text-slate-100 border border-slate-300/70 dark:border-slate-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    videoNoteBorder: "border-slate-400/50 dark:border-slate-500/35",
+    replyBlock: "bg-slate-300/20 dark:bg-slate-600/20 border-l-[3px] border-l-slate-500/50 dark:border-l-slate-400/50",
+    footer: "text-slate-700/90 dark:text-slate-300/90",
+    shatter: "bg-slate-200/90 dark:bg-slate-800/70",
+  },
+  violet: {
+    bubble:
+      "bg-violet-200/95 dark:bg-violet-900/50 text-foreground dark:text-violet-100 border border-violet-300/70 dark:border-violet-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    videoNoteBorder: "border-violet-400/50 dark:border-violet-500/35",
+    replyBlock: "bg-violet-300/20 dark:bg-violet-600/25 border-l-[3px] border-l-violet-500/50 dark:border-l-violet-400/50",
+    footer: "text-violet-800/90 dark:text-violet-200/90",
+    shatter: "bg-violet-100/90 dark:bg-violet-900/35",
+  },
+  sky: {
+    bubble:
+      "bg-sky-200/95 dark:bg-sky-900/50 text-foreground dark:text-sky-100 border border-sky-300/70 dark:border-sky-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    videoNoteBorder: "border-sky-400/50 dark:border-sky-500/35",
+    replyBlock: "bg-sky-300/20 dark:bg-sky-600/25 border-l-[3px] border-l-sky-500/50 dark:border-l-sky-400/50",
+    footer: "text-sky-800/90 dark:text-sky-200/90",
+    shatter: "bg-sky-100/90 dark:bg-sky-900/35",
+  },
+};
 
 export type ChatMessageRowProps = {
   msg: ApiMessage;
@@ -57,12 +121,15 @@ export type ChatMessageRowProps = {
   isMe: boolean;
   isDm: boolean;
   senderName: string;
-  otherMemberAvatarUrl: string | null;
+  /** Аватар отправителя (для групповых — из members; для DM — otherMember) */
+  senderAvatarUrl: string | null;
   otherMemberId: string;
   lastReadAt: string | null;
   currentUserId: string;
   currentUserAvatarUrl: string | null;
   currentUserDisplayName: string;
+  /** Пресет цвета пузыря своих сообщений (primary, slate, violet, sky) */
+  messageBubbleColor?: MessageBubbleColorPreset;
   isSelected: boolean;
   isHighlighted: boolean;
   isShattering: boolean;
@@ -77,7 +144,94 @@ export type ChatMessageRowProps = {
   onScrollToReply: (id: string) => void;
   onShatterComplete: (id: string) => void;
   onOpenProfile: (authorId: string) => void;
+  /** ID следующего голосового в чате (для «слушать следующее») */
+  nextVoiceMessageId?: string | null;
+  /** ID голосового, который сейчас воспроизводится (для автозапуска следующего) */
+  activeVoiceId?: string | null;
+  /** Вызывается при завершении воспроизведения голосового (передаётся ID следующего для автозапуска) */
+  onVoiceEnded?: (nextVoiceMessageId: string | null) => void;
 };
+
+function formatVideoNoteDuration(seconds: number | null): string {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const total = Math.floor(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+const VIDEO_NOTE_PREVIEW_SEC = 5;
+const VIDEO_NOTE_PLAY_START_SEC = 1;
+
+function VideoNoteBubble({
+  src,
+  isMe,
+  bubbleColorPreset = "primary",
+}: {
+  src: string;
+  isMe: boolean;
+  bubbleColorPreset?: MessageBubbleColorPreset;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [durationSec, setDurationSec] = useState<number | null>(null);
+  const borderClass = isMe ? MSG_BUBBLE_CLASSES[bubbleColorPreset].videoNoteBorder : "border-border/55";
+
+  const togglePlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      if (video.currentTime < VIDEO_NOTE_PLAY_START_SEC || video.currentTime >= VIDEO_NOTE_PREVIEW_SEC) {
+        video.currentTime = VIDEO_NOTE_PLAY_START_SEC;
+      }
+      void video.play().catch(() => {});
+      return;
+    }
+    video.pause();
+  };
+
+  return (
+    <div className={cn("flex", isPlaying && "w-full justify-center")}>
+      <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        togglePlayback();
+      }}
+      className={cn(
+        "group relative block h-[176px] w-[176px] overflow-hidden rounded-full border shadow-md transition-transform duration-300 ease-out will-change-transform",
+        isPlaying ? "z-10 scale-[1.5]" : "scale-100",
+        borderClass
+      )}
+      aria-label={isPlaying ? "Пауза видеокружка" : "Воспроизвести видеокружок"}
+    >
+      <video
+        ref={videoRef}
+        src={src}
+        className="h-full w-full object-cover"
+        playsInline
+        preload="metadata"
+        controls={false}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+        onLoadedMetadata={(e) => {
+          const target = e.currentTarget;
+          const dur = Number.isFinite(target.duration) ? target.duration : null;
+          setDurationSec(dur);
+          if (dur != null && dur >= VIDEO_NOTE_PREVIEW_SEC && target.paused) {
+            target.currentTime = VIDEO_NOTE_PREVIEW_SEC;
+          }
+        }}
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
+      <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white/95">
+        {formatVideoNoteDuration(durationSec)}
+      </span>
+    </button>
+    </div>
+  );
+}
 
 function ChatMessageRowInner({
   msg,
@@ -86,12 +240,13 @@ function ChatMessageRowInner({
   isMe,
   isDm,
   senderName,
-  otherMemberAvatarUrl,
+  senderAvatarUrl,
   otherMemberId,
   lastReadAt,
   currentUserId,
   currentUserAvatarUrl,
   currentUserDisplayName,
+  messageBubbleColor = "primary",
   isSelected,
   isHighlighted,
   isShattering,
@@ -105,7 +260,11 @@ function ChatMessageRowInner({
   onScrollToReply,
   onShatterComplete,
   onOpenProfile,
+  nextVoiceMessageId,
+  activeVoiceId,
+  onVoiceEnded,
 }: ChatMessageRowProps) {
+  const bubbleStyles = MSG_BUBBLE_CLASSES[messageBubbleColor];
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const swipeStartXRef = useRef<number | null>(null);
   const swipeStartedRef = useRef(false);
@@ -113,7 +272,7 @@ function ChatMessageRowInner({
   const swipeHapticTriggeredRef = useRef(false);
   const replyHintRef = useRef<HTMLDivElement | null>(null);
   const showSenderName = !isDm;
-  const isMedia = msg.type === "voice" || msg.type === "image" || msg.type === "video";
+  const isMedia = msg.type === "voice" || msg.type === "image" || msg.type === "video" || msg.type === "video_note";
   // Telegram-style: хвостик на нижнем углу (один угол меньше — «хвост» пузыря)
   const bubbleRounding = isMe
     ? cn(
@@ -134,9 +293,7 @@ function ChatMessageRowInner({
     ? "p-0 rounded-[14px] overflow-hidden relative select-none touch-none bg-transparent"
     : cn(
         "px-2.5 py-1.5 relative select-none touch-none",
-        isMe
-          ? "bg-[#d9fdd3] dark:bg-emerald-900/35 text-foreground dark:text-emerald-50 shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-emerald-300/30 dark:border-emerald-500/25"
-          : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
+        isMe ? bubbleStyles.bubble : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
         bubbleRounding
       );
   const showAvatarOther = !isMe && !isDm && isLastInGroup;
@@ -155,11 +312,10 @@ function ChatMessageRowInner({
       )}
     >
       {showAvatarOther && (
-        <UserAvatar avatarUrl={otherMemberAvatarUrl ?? undefined} displayName={senderName} seed={otherMemberId} size={avatarSize} className={avatarClass} />
+        <UserAvatar avatarUrl={senderAvatarUrl ?? undefined} displayName={senderName} seed={msg.senderId ?? otherMemberId} size={avatarSize} className={avatarClass} />
       )}
       {!showAvatarOther && !isMe && !isDm && <div className="w-[30px] flex-shrink-0" />}
       <div className={cn("flex flex-col gap-0.5 min-w-0 max-w-[82%]", isMe ? "items-end" : "items-start")}>
-        {showSenderName && isFirstInGroup && <span className={cn("text-[11px] font-medium text-muted-foreground px-1", isMe && "order-2")}>{senderName}</span>}
         <div className={cn("relative w-fit max-w-full", isShattering && "pointer-events-none", msg.reactions && msg.reactions.length > 0 && "pb-5")}>
           <div
             ref={replyHintRef}
@@ -323,14 +479,22 @@ function ChatMessageRowInner({
                   onClick={(e) => { e.stopPropagation(); if (replyTargetId) onScrollToReply(replyTargetId); }}
                   className={cn(
                     "mb-2 min-w-0 w-full cursor-pointer rounded-[8px] border-l-[3px] py-1 pr-2 pl-2 text-left transition-opacity hover:opacity-90",
-                    isMe
-                      ? "bg-emerald-700/10 dark:bg-emerald-300/10 border-emerald-700/35 dark:border-emerald-300/35"
-                      : "bg-black/5 dark:bg-white/10 border-primary/45"
+                    isMe ? bubbleStyles.replyBlock : "bg-black/5 dark:bg-white/10 border-primary/45"
                   )}
                 >
                   <p className="mb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground">{replyAuthor}</p>
                   <p className="text-[13px] line-clamp-2 break-words leading-snug opacity-95">
-                    {msg.replyTo ? (msg.replyTo.type === "text" ? msg.replyTo.content : msg.replyTo.type === "voice" ? "Голосовое сообщение" : msg.replyTo.type === "image" ? "Фото" : msg.replyTo.type) : "Сообщение"}
+                    {msg.replyTo
+                      ? msg.replyTo.type === "text"
+                        ? msg.replyTo.content
+                        : msg.replyTo.type === "voice"
+                          ? "Голосовое сообщение"
+                          : msg.replyTo.type === "image"
+                            ? "Фото"
+                            : msg.replyTo.type === "video_note"
+                              ? "Видеокружок"
+                              : msg.replyTo.type
+                      : "Сообщение"}
                   </p>
                 </button>
               );
@@ -340,7 +504,16 @@ function ChatMessageRowInner({
                 const rawContent = typeof msg.content === "string" ? msg.content.trim() : "";
                 const voiceSrc = rawContent ? resolveUrl(rawContent) : "";
                 if (!voiceSrc) return <span className="text-sm text-muted-foreground">Голосовое сообщение (недоступно)</span>;
-                return <VoiceMessagePlayer src={voiceSrc} isMe={isMe} />;
+                return (
+                  <VoiceMessagePlayer
+                    src={voiceSrc}
+                    isMe={isMe}
+                    bubbleColorPreset={messageBubbleColor}
+                    transcript={msg.transcript}
+                    onEnded={onVoiceEnded ? () => onVoiceEnded(nextVoiceMessageId ?? null) : undefined}
+                    autoPlay={activeVoiceId === msg.id}
+                  />
+                );
               })()
             ) : msg.type === "image" ? (
               <a href={resolveUrl(msg.content)} target="_blank" rel="noopener noreferrer" className="block rounded-[10px] overflow-hidden max-w-[260px]">
@@ -348,6 +521,8 @@ function ChatMessageRowInner({
               </a>
             ) : msg.type === "video" ? (
               <video src={resolveUrl(msg.content)} controls className="max-h-[280px] max-w-[260px] rounded-[10px] object-cover" playsInline />
+            ) : msg.type === "video_note" ? (
+              <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
             ) : msg.type === "post_share" ? (
               (() => {
                 let preview: { postId?: string; text?: string; imageUrl?: string | null; authorName?: string; authorId?: string } = {};
@@ -367,11 +542,11 @@ function ChatMessageRowInner({
               })()
             ) : (
               <p className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap max-w-[min(240px,72vw)]">
-                {linkifyText(msg.content)}
+                {linkifyTextWithMentions(msg.content, onOpenProfile)}
               </p>
             )}
             {showFooter && (
-              <div className={cn("text-[11px] flex justify-end items-center gap-0.5", isMedia ? "mt-1 px-0.5" : "mt-0.5", isMe && !isMedia ? "text-emerald-800/90 dark:text-emerald-200/90" : "text-muted-foreground")}>
+              <div className={cn("text-[11px] flex justify-end items-center gap-0.5", isMedia ? "mt-1 px-0.5" : "mt-0.5", isMe && !isMedia ? bubbleStyles.footer : "text-muted-foreground")}>
                 {formatMessageTime(msg.createdAt)}
                 {isMe && (() => {
                   if (msg.sendStatus === "sending") return <span className="inline-flex items-center gap-0.5" title="Отправляется"><Clock className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" aria-hidden /></span>;
@@ -381,12 +556,13 @@ function ChatMessageRowInner({
                       <button type="button" className="text-[10px] font-medium underline underline-offset-1 hover:opacity-100 opacity-90" onClick={(e) => { e.stopPropagation(); onRetry(msg); }}>Повторить</button>
                     </span>
                   );
-                  const isRead = lastReadAt && new Date(msg.createdAt) <= new Date(lastReadAt);
+                  const isRead = lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
                   const title = isRead && lastReadAt ? `Просмотрено в ${formatMessageTime(lastReadAt)}` : "Доставлено";
+                  const checkGlow = "drop-shadow-[0_0_5px_hsl(var(--primary)/0.6)]";
                   return (
-                    <span className="inline-flex items-center gap-0.5" title={title}>
-                      <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>
-                      {isRead && <svg className="w-3 h-3 flex-shrink-0 -ml-2.25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>}
+                    <span className={cn("inline-flex items-center gap-0.5", isRead && "text-primary")} title={title}>
+                      <svg className={cn("w-3 h-3 flex-shrink-0", isRead && checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>
+                      {isRead && <svg className={cn("w-3 h-3 flex-shrink-0 -ml-2.25", checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>}
                     </span>
                   );
                 })()}
@@ -403,8 +579,13 @@ function ChatMessageRowInner({
             ))}
           </div>
           )}
-          {isShattering && <ShatterEffect className="absolute inset-0 rounded-[14px]" shardClassName={isMe ? "bg-emerald-100/90 dark:bg-emerald-900/35" : "bg-white/85 dark:bg-slate-900/70"} onComplete={() => onShatterComplete(msg.id)} />}
+          {isShattering && <ShatterEffect className="absolute inset-0 rounded-[14px]" shardClassName={isMe ? bubbleStyles.shatter : "bg-white/85 dark:bg-slate-900/70"} onComplete={() => onShatterComplete(msg.id)} />}
         </div>
+        {showSenderName && isLastInGroup && (
+          <span className={cn("text-[10px] font-medium text-muted-foreground/80 mt-0.5 px-1", isMe && "text-right")}>
+            {senderName}
+          </span>
+        )}
       </div>
       {showAvatarMe && <UserAvatar avatarUrl={currentUserAvatarUrl ?? undefined} displayName={currentUserDisplayName ?? "Вы"} seed={msg.senderId ?? ""} size={avatarSize} className={avatarClass} />}
       {!showAvatarMe && isMe && <div className="w-[30px] flex-shrink-0" />}

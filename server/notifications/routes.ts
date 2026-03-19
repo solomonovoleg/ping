@@ -3,6 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { notifications, posts, users } from "@shared/schema";
 import { requireAuth, getUserId } from "../auth/session";
+import { storage } from "../storage";
 
 export function registerNotificationsRoutes(app: Express): void {
   /** Список уведомлений текущего пользователя */
@@ -17,6 +18,7 @@ export function registerNotificationsRoutes(app: Express): void {
           id: notifications.id,
           type: notifications.type,
           actorId: notifications.actorId,
+          actorPublicId: users.publicId,
           postId: notifications.postId,
           commentId: notifications.commentId,
           excerpt: notifications.excerpt,
@@ -34,14 +36,26 @@ export function registerNotificationsRoutes(app: Express): void {
         .orderBy(desc(notifications.createdAt))
         .limit(limit)
         .offset(offset);
+      const postAuthorIds = Array.from(
+        new Set(rows.map((r) => r.postAuthorId).filter((id): id is string => typeof id === "string" && id.length > 0))
+      );
+      const postAuthorPublicIdById = new Map<string, number>();
+      await Promise.all(
+        postAuthorIds.map(async (authorId) => {
+          const author = await storage.getUser(authorId);
+          if (author?.publicId != null) postAuthorPublicIdById.set(authorId, author.publicId);
+        })
+      );
       const list = rows.map((r) => ({
         id: r.id,
         type: r.type,
         actorId: r.actorId,
+        actorPublicId: r.actorPublicId ?? null,
         actorName: [r.actorDisplayName, r.actorSurname].filter(Boolean).join(" ") || "Пользователь",
         actorAvatarUrl: r.actorAvatarUrl ?? null,
         postId: r.postId ?? null,
         postAuthorId: r.postAuthorId ?? null,
+        postAuthorPublicId: r.postAuthorId ? (postAuthorPublicIdById.get(r.postAuthorId) ?? null) : null,
         commentId: r.commentId ?? null,
         excerpt: r.excerpt ?? null,
         readAt: r.readAt?.toISOString?.() ?? null,

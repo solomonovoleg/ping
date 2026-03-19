@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, type ComponentType } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -18,24 +18,104 @@ import Chats from "@/pages/Chats";
 import Posts from "@/pages/Posts";
 import NotFound from "@/pages/not-found";
 
+const CHUNK_CACHE_MISMATCH_RE = /(Loading chunk|ChunkLoadError|Failed to fetch dynamically imported module|Importing a module script failed)/i;
+const TRANSIENT_IMPORT_RE = /(Failed to fetch|NetworkError|Load failed|timeout)/i;
+const IMPORT_RETRY_ATTEMPTS = 2;
+const IMPORT_RETRY_DELAY_MS = 450;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Защита от битых lazy-чанков после деплоя:
+ * если импорт упал из-за mismatch старого HTML/кэша и новых хешей,
+ * пробуем один авто-reload страницы, затем отдаём исходную ошибку.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function lazyWithRetry<T extends { default: ComponentType<any> }>(
+  importer: () => Promise<T>,
+  chunkKey: string
+) {
+  return lazy(async () => {
+    const retryKey = `lazy-retry:${chunkKey}`;
+    for (let attempt = 0; attempt <= IMPORT_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        const mod = await importer();
+        if (typeof window !== "undefined") {
+          try {
+            window.sessionStorage.removeItem(retryKey);
+          } catch {}
+        }
+        return mod;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? "");
+        const canSoftRetry = TRANSIENT_IMPORT_RE.test(message) && attempt < IMPORT_RETRY_ATTEMPTS;
+        if (canSoftRetry) {
+          await wait(IMPORT_RETRY_DELAY_MS * (attempt + 1));
+          continue;
+        }
+
+        const shouldHardReload = CHUNK_CACHE_MISMATCH_RE.test(message);
+        if (typeof window !== "undefined" && shouldHardReload) {
+          let alreadyRetried = false;
+          try {
+            alreadyRetried = window.sessionStorage.getItem(retryKey) === "1";
+          } catch {}
+          if (!alreadyRetried) {
+            try {
+              window.sessionStorage.setItem(retryKey, "1");
+            } catch {}
+            window.location.reload();
+            await new Promise<never>(() => {});
+          }
+        }
+        throw error;
+      }
+    }
+    throw new Error("Не удалось загрузить страницу");
+  });
+}
+
 // Тяжёлые страницы — подгружаются по мере перехода (уменьшает начальный бандл)
-const ChatDetail = lazy(() => import("@/pages/ChatDetail"));
-const UserProfile = lazy(() => import("@/pages/UserProfile"));
-const PostDetail = lazy(() => import("@/pages/PostDetail"));
-const EditProfile = lazy(() => import("@/pages/EditProfile"));
-const CreatePost = lazy(() => import("@/pages/CreatePost"));
-const Board = lazy(() => import("@/pages/Board"));
-const Settings = lazy(() => import("@/pages/Settings"));
-const SavedMessages = lazy(() => import("@/pages/SavedMessages"));
-const Subscribers = lazy(() => import("@/pages/Subscribers"));
-const Notifications = lazy(() => import("@/pages/Notifications"));
-const AdminApp = lazy(() => import("@/admin/AdminApp").then((m) => ({ default: m.AdminApp })));
+const ChatDetail = lazyWithRetry(() => import("@/pages/ChatDetail"), "chat-detail");
+const UserProfile = lazyWithRetry(() => import("@/pages/UserProfile"), "user-profile");
+const PostDetail = lazyWithRetry(() => import("@/pages/PostDetail"), "post-detail");
+const EditProfile = lazyWithRetry(() => import("@/pages/EditProfile"), "edit-profile");
+const CreatePost = lazyWithRetry(() => import("@/pages/CreatePost"), "create-post");
+const Board = lazyWithRetry(() => import("@/pages/Board"), "board");
+const BoardTracksList = lazyWithRetry(() => import("@/features/board/tracks/TracksListPage").then((m) => ({ default: m.TracksListPage })), "board-tracks");
+const BoardTracksDetail = lazyWithRetry(() => import("@/pages/BoardTracksDetail"), "board-tracks-detail");
+const Settings = lazyWithRetry(() => import("@/pages/Settings"), "settings");
+const SavedMessages = lazyWithRetry(() => import("@/pages/SavedMessages"), "saved-messages");
+const Subscribers = lazyWithRetry(() => import("@/pages/Subscribers"), "subscribers");
+const Notifications = lazyWithRetry(() => import("@/pages/Notifications"), "notifications");
+const AdminApp = lazyWithRetry(() => import("@/admin/AdminApp").then((m) => ({ default: m.AdminApp })), "admin-app");
 
 const PageFallback = () => (
   <div className="flex flex-1 items-center justify-center min-h-[200px]">
     <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
   </div>
 );
+
+function LegacyProfileRedirect({ params }: { params?: { id?: string } }) {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    const rawId = params?.id?.trim() ?? "";
+    if (!rawId) {
+      setLocation("/posts");
+      return;
+    }
+    const normalizedId = encodeURIComponent(rawId.replace(/^@+/, ""));
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    setLocation(`/profile/${normalizedId}${search}`);
+  }, [params?.id, setLocation]);
+
+  return null;
+}
 
 function Router() {
   return (
@@ -49,9 +129,11 @@ function Router() {
           <Route path="/profile/edit" component={EditProfile} />
           <Route path="/profile/:id/post/:postId" component={PostDetail} />
           <Route path="/profile/:id" component={UserProfile} />
-          <Route path="/id/:id" component={UserProfile} />
+          <Route path="/id/:id" component={LegacyProfileRedirect} />
           <Route path="/subscribers" component={Subscribers} />
           <Route path="/notifications" component={Notifications} />
+          <Route path="/board/tracks/:trackId" component={BoardTracksDetail} />
+          <Route path="/board/tracks" component={BoardTracksList} />
           <Route path="/board" component={Board} />
           <Route path="/settings" component={Settings} />
           <Route path="/saved" component={SavedMessages} />
@@ -118,7 +200,9 @@ function App() {
           <Switch>
             <Route path="/privacy" component={Privacy} />
             <Route path="/admin/users" component={AdminApp} />
+            <Route path="/admin/referrals" component={AdminApp} />
             <Route path="/admin/admins" component={AdminApp} />
+            <Route path="/admin/settings" component={AdminApp} />
             <Route path="/admin/audit" component={AdminApp} />
             <Route path="/admin" component={AdminApp} />
             <Route>

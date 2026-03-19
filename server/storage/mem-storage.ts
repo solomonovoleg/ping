@@ -1,11 +1,16 @@
 import type { IStorage } from "./types";
+import type { ChatFolder } from "@shared/schema";
 import { createUsersStore } from "./users-store";
 import { createChatsStore } from "./chats-store";
 import { createMessagesStore } from "./messages-store";
 import { createReferralCodesStore } from "./referral-codes-store";
+import { randomUUID } from "crypto";
 
 /** In-memory contacts: ownerId -> Set of contactUserId */
 const contactsMap = new Map<string, Set<string>>();
+
+/** In-memory folders: chatId -> ChatFolder[] */
+const foldersByChat = new Map<string, ChatFolder[]>();
 
 /** In-memory follows: followerId -> Set of followingId */
 const followsMap = new Map<string, Set<string>>();
@@ -277,6 +282,10 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.chats.getById(id));
   }
 
+  async getChatMember(chatId: string, userId: string) {
+    return Promise.resolve(this.chats.getMember(chatId, userId));
+  }
+
   async getChatMemberIds(chatId: string) {
     return Promise.resolve(this.chats.getMemberIds(chatId));
   }
@@ -302,8 +311,99 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.chats.addMember(data));
   }
 
-  async getMessagesByChatId(chatId: string, limit?: number, beforeMessageId?: string) {
-    return Promise.resolve(this.messages.getByChatId(chatId, limit, beforeMessageId));
+  async removeChatMember(chatId: string, userId: string): Promise<boolean> {
+    return Promise.resolve(this.chats.removeMember(chatId, userId));
+  }
+
+  async updateChat(chatId: string, data: { name?: string; avatarUrl?: string }) {
+    return Promise.resolve(this.chats.update(chatId, data));
+  }
+
+  async getMessagesByChatId(chatId: string, limit?: number, beforeMessageId?: string, folderId?: string | null) {
+    return Promise.resolve(this.messages.getByChatId(chatId, limit, beforeMessageId, folderId));
+  }
+
+  async getMediaMessages(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string) {
+    const list = this.messages.getByChatId(chatId, limit * 2, beforeMessageId, folderId);
+    const media = list.filter((m) => ["image", "video", "voice", "video_note"].includes((m as { type?: string }).type ?? ""));
+    return Promise.resolve(media.slice(-limit));
+  }
+
+  async getTextMessagesForLinks(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string) {
+    const list = this.messages.getByChatId(chatId, limit, beforeMessageId, folderId);
+    const text = list.filter((m) => (m as { type?: string }).type === "text");
+    return Promise.resolve(text.map((m) => ({ id: m.id, content: m.content, createdAt: m.createdAt })));
+  }
+
+  async listChatFolders(chatId: string): Promise<ChatFolder[]> {
+    const list = foldersByChat.get(chatId) ?? [];
+    return Promise.resolve([...list].sort((a, b) => a.orderIndex - b.orderIndex));
+  }
+
+  async getOrCreateMainFolder(chatId: string): Promise<ChatFolder> {
+    let list = foldersByChat.get(chatId);
+    const main = list?.find((f) => f.isMain);
+    if (main) return Promise.resolve(main);
+    const folder: ChatFolder = {
+      id: randomUUID(),
+      chatId,
+      name: "Общий",
+      isMain: true,
+      orderIndex: 0,
+      createdAt: new Date(),
+    };
+    list = list ?? [];
+    list.push(folder);
+    foldersByChat.set(chatId, list);
+    return Promise.resolve(folder);
+  }
+
+  async createChatFolder(chatId: string, name: string, orderIndex: number): Promise<ChatFolder> {
+    const folder: ChatFolder = {
+      id: randomUUID(),
+      chatId,
+      name: name.trim(),
+      isMain: false,
+      orderIndex,
+      createdAt: new Date(),
+    };
+    const list = foldersByChat.get(chatId) ?? [];
+    list.push(folder);
+    foldersByChat.set(chatId, list);
+    return Promise.resolve(folder);
+  }
+
+  async getChatFolder(folderId: string): Promise<ChatFolder | undefined> {
+    const lists = Array.from(foldersByChat.values());
+    for (const list of lists) {
+      const f = list.find((x: ChatFolder) => x.id === folderId);
+      if (f) return Promise.resolve(f);
+    }
+    return Promise.resolve(undefined);
+  }
+
+  async updateChatFolder(folderId: string, data: { name?: string }): Promise<ChatFolder | undefined> {
+    const lists = Array.from(foldersByChat.values());
+    for (const list of lists) {
+      const f = list.find((x: ChatFolder) => x.id === folderId);
+      if (f && data.name?.trim()) {
+        f.name = data.name.trim();
+        return Promise.resolve(f);
+      }
+    }
+    return Promise.resolve(undefined);
+  }
+
+  async deleteChatFolder(folderId: string): Promise<boolean> {
+    const entries = Array.from(foldersByChat.entries());
+    for (const [chatId, list] of entries) {
+      const f = list.find((x: ChatFolder) => x.id === folderId);
+      if (f && !f.isMain) {
+        foldersByChat.set(chatId, list.filter((x: ChatFolder) => x.id !== folderId));
+        return Promise.resolve(true);
+      }
+    }
+    return Promise.resolve(false);
   }
 
   async getLastMessage(chatId: string) {
@@ -327,6 +427,29 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.messages.update(chatId, messageId, content));
   }
 
+  async createScheduledMessage(data: {
+    chatId: string;
+    folderId?: string | null;
+    senderId: string;
+    type: string;
+    content: string;
+    replyToId?: string | null;
+    scheduledAt: Date;
+  }): Promise<{ id: string; scheduledAt: Date }> {
+    const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    return Promise.resolve({ id, scheduledAt: data.scheduledAt });
+  }
+
+  async getScheduledMessagesDue(_limit: number): Promise<
+    { id: string; chatId: string; folderId: string | null; senderId: string | null; type: string; content: string; replyToId: string | null }[]
+  > {
+    return Promise.resolve([]);
+  }
+
+  async deleteScheduledMessage(_id: string): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
   async updateLastRead(chatId: string, userId: string): Promise<void> {
     this.chats.setLastRead(chatId, userId, new Date());
   }
@@ -340,8 +463,18 @@ export class MemStorage implements IStorage {
     const member = this.chats.getMember(chatId, userId);
     const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
     const list = this.messages.getByChatId(chatId);
-    if (!since) return list.length;
-    return list.filter((m) => new Date(m.createdAt) > since).length;
+    const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
+    if (!since) return list.filter(fromOthers).length;
+    return list.filter((m) => fromOthers(m) && new Date(m.createdAt) > since).length;
+  }
+
+  async getUnreadCountByFolder(chatId: string, folderId: string | null, userId: string): Promise<number> {
+    const member = this.chats.getMember(chatId, userId);
+    const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
+    const list = this.messages.getByChatId(chatId, undefined, undefined, folderId);
+    const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
+    if (!since) return list.filter(fromOthers).length;
+    return list.filter((m) => fromOthers(m) && new Date(m.createdAt) > since).length;
   }
 
   async searchMessages(
@@ -372,5 +505,61 @@ export class MemStorage implements IStorage {
 
   async isMessageSaved(_userId: string, _messageId: string): Promise<boolean> {
     return Promise.resolve(false);
+  }
+
+  async createTrack(userId: string, name: string): Promise<{ id: string; name: string; createdAt: Date }> {
+    const id = crypto.randomUUID();
+    return { id, name: name.trim() || "Новый трек", createdAt: new Date() };
+  }
+
+  async listTracks(_userId: string): Promise<{ id: string; name: string; createdAt: Date; totalItems: number; activeItems: number; doneItems: number }[]> {
+    return [];
+  }
+
+  async getTrack(_userId: string, _trackId: string): Promise<{ id: string; name: string; createdAt: Date } | undefined> {
+    return undefined;
+  }
+
+  async addMessageToTrack(_userId: string, _trackId: string, _messageId: string, _chatId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async removeTrackItem(_userId: string, _trackId: string, _itemId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async updateTrack(_userId: string, _trackId: string, _data: { name: string }): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async deleteTrack(_userId: string, _trackId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async getTracksStats(_userId: string): Promise<{ totalTracks: number; activeItemsCount: number; doneItemsCount: number; lastAddedAt: Date | null }> {
+    return { totalTracks: 0, activeItemsCount: 0, doneItemsCount: 0, lastAddedAt: null };
+  }
+
+  async setTrackItemDone(_userId: string, _trackId: string, _itemId: string, _done: boolean): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async listTrackItems(
+    _userId: string,
+    _trackId: string
+  ): Promise<
+    {
+      id: string;
+      messageId: string;
+      chatId: string;
+      chatName: string;
+      content: string;
+      type: string;
+      messageCreatedAt: Date;
+      addedAt: Date;
+      doneAt: Date | null;
+    }[]
+  > {
+    return [];
   }
 }

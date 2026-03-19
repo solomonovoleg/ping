@@ -40,6 +40,8 @@ export const users = pgTable("users", {
   hideFromSearch: boolean("hide_from_search").notNull().default(false),
   /** Кто пригласил (реферальная регистрация) */
   invitedById: text("invited_by_id"),
+  /** Лимит приглашений (null = 3 по умолчанию). Админ может увеличить для отдельных пользователей. */
+  referralLimit: integer("referral_limit"),
   /** Когда пользователь последний раз был в приложении (для статуса «в сети») */
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" }),
   /** FCM токен для пуш-уведомлений (Android / iOS через FCM) */
@@ -50,6 +52,8 @@ export const users = pgTable("users", {
   bio: text("bio"),
   /** URL шапки профиля (баннер сверху) */
   coverUrl: text("cover_url"),
+  /** Показывать ли шапку (если загружена) */
+  showCover: boolean("show_cover").notNull().default(true),
   /** Ссылка в профиле (блог, магазин и т.д.) */
   profileLink: text("profile_link"),
   /** Город / локация */
@@ -81,6 +85,7 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   hideFromSearch: true,
   bio: true,
   coverUrl: true,
+  showCover: true,
   profileLink: true,
   city: true,
   status: true,
@@ -88,6 +93,7 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   profileVisibility: true,
   showOnlineTo: true,
   pushEnabled: true,
+  referralLimit: true,
 }).partial();
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

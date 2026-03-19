@@ -58,6 +58,7 @@ export function registerAdminUsersRoutes(app: Express): void {
       "status",
       "profileVisibility",
       "showOnlineTo",
+      "referralLimit",
     ] as const;
     const data: Record<string, unknown> = {};
     for (const key of updatableFields) {

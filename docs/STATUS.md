@@ -6,7 +6,7 @@
 |-------------|-----------------|------------------------|------------------------------|---------------------------|
 | **Комментарии** | ✅ `post_comments` | ✅ `server/comments/routes.ts` (~105 строк) | GET/POST `/api/posts/:postId/comments` | CommentsModal, от имени пользователя |
 | **Лайки (реакции)** | ✅ `post_reactions` | ✅ `server/reactions/routes.ts` (~55 строк) | GET в ленте, POST/DELETE `/api/posts/:postId/reactions` | Посты + профиль: выбор эмодзи, сохранение в БД |
-| **Сториз**  | ✅ `stories`    | ✅ `server/stories/routes.ts` (~117 строк) | GET `/api/users/:userId/stories`, POST/DELETE `/api/stories` | Профиль: загрузка сториз по пользователю |
+| **Сториз**  | ✅ `stories`    | ✅ `server/stories/` (routes thin + service) | GET `/api/users/:userId/stories`, POST/DELETE `/api/stories`, feed, viewers | Профиль: загрузка сториз по пользователю |
 
 - **Посты**: таблица `posts`, модуль `server/posts/`, лента и создание поста.
 - **Профиль**: аватар, имя, фамилия, пол, посты, сториз, реакции — данные из БД/API.

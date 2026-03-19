@@ -1,7 +1,9 @@
-import { API } from "@/lib/api-base";
+import { API, getAuthHeaders } from "@/lib/api-base";
 
 function adminFetch(path: string, init?: RequestInit) {
-  return fetch(`${API}${path}`, { credentials: "include", ...init });
+  const headers = new Headers(init?.headers);
+  Object.entries(getAuthHeaders()).forEach(([k, v]) => headers.set(k, v));
+  return fetch(`${API}${path}`, { ...init, credentials: "include", headers });
 }
 
 export type DashboardStats = {
@@ -29,6 +31,8 @@ export type AdminUser = {
   platformRole?: string;
   /** Количество приглашённых пользователей */
   referralCount?: number;
+  /** Лимит приглашений (null = 3 по умолчанию). Админ может увеличить. */
+  referralLimit?: number | null;
 };
 
 export async function fetchAdminUsers(opts: {
@@ -56,7 +60,7 @@ export async function fetchAdminUser(id: string): Promise<AdminUser | null> {
 
 export async function updateAdminUser(
   id: string,
-  payload: Partial<Pick<AdminUser, "displayName" | "surname">> & { status?: string; city?: string; bio?: string }
+  payload: Partial<Pick<AdminUser, "displayName" | "surname" | "referralLimit">> & { status?: string; city?: string; bio?: string }
 ): Promise<AdminUser> {
   const res = await adminFetch(`/admin/users/${id}`, {
     method: "PATCH",
@@ -135,6 +139,42 @@ export type AuditLogEntry = {
   createdAt: string;
 };
 
+export type FeedAlgoMode = "strict_chrono" | "chrono_boost_v1";
+export type FeedAlgoConfig = {
+  mode: FeedAlgoMode;
+  boostWindowHours: number;
+  boostCapMinutes: number;
+  reactionBoostMinutes: number;
+  commentBoostMinutes: number;
+  shareBoostMinutes: number;
+  candidatePadding: number;
+  candidateMin: number;
+  candidateMax: number;
+  veryNewAccountHours: number;
+  newAccountHours: number;
+  veryNewAccountFactor: number;
+  newAccountFactor: number;
+};
+
+export async function fetchFeedAlgorithm(): Promise<FeedAlgoConfig> {
+  const res = await adminFetch("/admin/feed-algorithm");
+  if (!res.ok) throw new Error("Ошибка загрузки алгоритма ленты");
+  return res.json();
+}
+
+export async function updateFeedAlgorithm(patch: Partial<FeedAlgoConfig>): Promise<FeedAlgoConfig> {
+  const res = await adminFetch("/admin/feed-algorithm", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка обновления алгоритма ленты");
+  }
+  return res.json();
+}
+
 export async function fetchAuditLog(opts: { limit?: number; offset?: number }): Promise<AuditLogEntry[]> {
   const params = new URLSearchParams();
   if (opts.limit != null) params.set("limit", String(opts.limit));
@@ -142,4 +182,34 @@ export async function fetchAuditLog(opts: { limit?: number; offset?: number }): 
   const res = await adminFetch(`/admin/audit-log?${params}`);
   if (!res.ok) return [];
   return res.json();
+}
+
+export type AdminReferralCode = {
+  id: string;
+  code: string;
+  expiresAt: string;
+  expiresInHours?: number;
+};
+
+export async function createAdminReferralCode(opts?: {
+  format?: "phrase" | "digits";
+  expiresInHours?: number;
+}): Promise<AdminReferralCode> {
+  const res = await adminFetch("/admin/referrals/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts ?? {}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.message) || "Ошибка создания кода");
+  }
+  return res.json();
+}
+
+export async function fetchAdminReferralCodes(): Promise<AdminReferralCode[]> {
+  const res = await adminFetch("/admin/referrals/codes");
+  if (!res.ok) throw new Error("Ошибка загрузки кодов");
+  const data = await res.json();
+  return data.codes ?? [];
 }

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { ChevronLeft, Bell } from "lucide-react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -10,6 +11,7 @@ import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 
 function notificationLabel(item: NotificationItem): string {
   const name = item.actorName;
@@ -31,6 +33,7 @@ export default function Notifications() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const autoMarkedRef = useRef(false);
 
   const { data: list = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["notifications"],
@@ -51,16 +54,35 @@ export default function Notifications() {
 
   const unreadCount = list.filter((n) => !n.readAt).length;
 
+  useEffect(() => {
+    if (isLoading || markAllReadMutation.isPending) return;
+    if (autoMarkedRef.current) return;
+    if (unreadCount <= 0) return;
+    autoMarkedRef.current = true;
+    markAllReadMutation.mutate();
+  }, [isLoading, unreadCount, markAllReadMutation]);
+
   const handleItemTap = (item: NotificationItem) => {
     if (!item.readAt) markReadMutation.mutate(item.id);
+    const actorPath = buildProfilePath({
+      publicId: item.actorPublicId,
+      userId: item.actorId,
+      fallbackPath: "/posts",
+    });
+    const postPath = buildProfilePostPath({
+      postId: item.postId,
+      publicId: item.postAuthorPublicId,
+      userId: item.postAuthorId,
+      fallbackPath: "/posts",
+    });
     if (item.type === "follow" || (item.type === "mention" && !item.postId)) {
-      setLocation(`/profile/${item.actorId}`);
+      setLocation(actorPath);
       return;
     }
-    if (item.postId && item.postAuthorId) {
-      setLocation(`/profile/${item.postAuthorId}/post/${item.postId}`);
-    } else if (item.actorId) {
-      setLocation(`/profile/${item.actorId}`);
+    if (item.postId) {
+      setLocation(postPath);
+    } else {
+      setLocation(actorPath);
     }
   };
 

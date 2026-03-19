@@ -96,8 +96,8 @@ export function registerMessageReactionsRoutes(
 ): void {
   app.post("/api/chats/:chatId/messages/:messageId/reactions", requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
-    const chatId = (req.params.chatId ?? "").trim();
-    const messageId = (req.params.messageId ?? "").trim();
+    const chatId = (Array.isArray(req.params.chatId) ? req.params.chatId[0] : req.params.chatId ?? "").trim();
+    const messageId = (Array.isArray(req.params.messageId) ? req.params.messageId[0] : req.params.messageId ?? "").trim();
     const emoji = typeof req.body?.emoji === "string" ? req.body.emoji.trim() : "";
     if (!chatId || !messageId) {
       res.status(400).json({ message: "chatId и messageId обязательны" });
@@ -135,8 +135,8 @@ export function registerMessageReactionsRoutes(
 
   app.delete("/api/chats/:chatId/messages/:messageId/reactions", requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
-    const chatId = (req.params.chatId ?? "").trim();
-    const messageId = (req.params.messageId ?? "").trim();
+    const chatId = (Array.isArray(req.params.chatId) ? req.params.chatId[0] : req.params.chatId ?? "").trim();
+    const messageId = (Array.isArray(req.params.messageId) ? req.params.messageId[0] : req.params.messageId ?? "").trim();
     if (!chatId || !messageId) {
       res.status(400).json({ message: "chatId и messageId обязательны" });
       return;

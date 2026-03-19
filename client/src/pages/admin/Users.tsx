@@ -37,6 +37,7 @@ const PAGE_SIZE = 20;
 export default function AdminUsers() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [actionUser, setActionUser] = useState<AdminUser | null>(null);
   const [actionType, setActionType] = useState<"ban" | "unban" | "delete" | null>(null);
   const [banReason, setBanReason] = useState("");
@@ -45,17 +46,19 @@ export default function AdminUsers() {
   const [editSurname, setEditSurname] = useState("");
   const [editStatus, setEditStatus] = useState("");
   const [editCity, setEditCity] = useState("");
+  const [editReferralLimit, setEditReferralLimit] = useState<string>("");
   const [editLoading, setEditLoading] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["admin", "users", page, search],
+    queryKey: ["admin", "users", page, search, showDeleted],
     queryFn: () =>
       fetchAdminUsers({
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
         search: search || undefined,
+        includeDeleted: showDeleted,
       }),
   });
 
@@ -102,17 +105,20 @@ export default function AdminUsers() {
     setEditSurname(u.surname ?? "");
     setEditStatus("");
     setEditCity("");
+    setEditReferralLimit(u.referralLimit != null ? String(u.referralLimit) : "");
   };
 
   const runEditSave = async () => {
     if (!editUser) return;
     setEditLoading(true);
     try {
+      const refLimit = editReferralLimit.trim();
       await updateAdminUser(editUser.id, {
         displayName: editDisplayName.trim() || null,
         surname: editSurname.trim() || null,
         status: editStatus.trim() || undefined,
         city: editCity.trim() || undefined,
+        referralLimit: refLimit === "" ? null : (parseInt(refLimit, 10) >= 0 ? parseInt(refLimit, 10) : null),
       });
       toast({ title: "Профиль обновлён" });
       setEditUser(null);
@@ -120,6 +126,7 @@ export default function AdminUsers() {
       setEditSurname("");
       setEditStatus("");
       setEditCity("");
+      setEditReferralLimit("");
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
     } catch (e) {
       toast({
@@ -135,8 +142,8 @@ export default function AdminUsers() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Пользователи</h1>
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Поиск по имени, телефону, ID..."
@@ -148,6 +155,16 @@ export default function AdminUsers() {
             className="pl-9"
           />
         </div>
+        <Button
+          variant={showDeleted ? "default" : "outline"}
+          size="sm"
+          onClick={() => {
+            setShowDeleted(!showDeleted);
+            setPage(0);
+          }}
+        >
+          {showDeleted ? "Скрыть удалённых" : "Показать удалённых"}
+        </Button>
       </div>
       <Card>
         <CardHeader>
@@ -262,6 +279,7 @@ export default function AdminUsers() {
             setEditSurname("");
             setEditStatus("");
             setEditCity("");
+            setEditReferralLimit("");
           }
         }}
       >
@@ -305,6 +323,19 @@ export default function AdminUsers() {
                 placeholder="Город"
               />
             </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Лимит приглашений</label>
+              <Input
+                type="number"
+                min={0}
+                value={editReferralLimit}
+                onChange={(e) => setEditReferralLimit(e.target.value)}
+                placeholder="3 (по умолчанию)"
+              />
+              <p className="text-xs text-muted-foreground">
+                Пусто = 3. Укажите число (0, 5, 10…) чтобы задать лимит. Админ может увеличить для активных пользователей.
+              </p>
+            </div>
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button
@@ -316,6 +347,7 @@ export default function AdminUsers() {
                 setEditSurname("");
                 setEditStatus("");
                 setEditCity("");
+                setEditReferralLimit("");
               }}
             >
               Отмена

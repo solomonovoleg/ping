@@ -6,6 +6,7 @@ import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 const PULL_THRESHOLD = 72;
 const RESISTANCE = 0.4;
 const SCROLL_TO_TOP_SHOW_AFTER_PX = 400;
+const HOLD_TO_REFRESH_MS = 2000;
 
 interface PullToRefreshProps {
   onRefresh: () => Promise<unknown> | void;
@@ -15,7 +16,7 @@ interface PullToRefreshProps {
   /** Показывать кнопку «Наверх» после скролла вниз (аудит п.26) */
   showScrollToTop?: boolean;
   /** Внешний ref на скролл-контейнер, если нужно управлять scrollTop извне (например, сохранять позицию ленты). */
-  scrollRef?: React.RefObject<HTMLDivElement>;
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -29,6 +30,7 @@ export function PullToRefresh({ onRefresh, children, className, disabled, showSc
   const effectiveScrollRef = scrollRef ?? internalScrollRef;
   const startYRef = useRef(0);
   const startScrollTopRef = useRef(0);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!showScrollToTop) return;
@@ -39,6 +41,27 @@ export function PullToRefresh({ onRefresh, children, className, disabled, showSc
     check();
     return () => el.removeEventListener("scroll", check);
   }, [showScrollToTop]);
+
+  /** При удержании тяги вниз 2 сек — обновление без отпускания */
+  useEffect(() => {
+    if (refreshing || pullY < PULL_THRESHOLD) {
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      return;
+    }
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null;
+      triggerSelectionHaptic();
+      setPullY(0);
+      setRefreshing(true);
+      Promise.resolve(onRefresh()).finally(() => setRefreshing(false));
+    }, HOLD_TO_REFRESH_MS);
+    return () => {
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    };
+  }, [pullY, refreshing, onRefresh]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (disabled) return;

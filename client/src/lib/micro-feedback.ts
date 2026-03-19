@@ -24,7 +24,19 @@ let audioContext: AudioContext | null = null;
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
-  if (!audioContext) audioContext = new AudioContext();
+  if (!audioContext) {
+    try {
+      const Win = window as unknown as {
+        AudioContext?: new () => AudioContext;
+        webkitAudioContext?: new () => AudioContext;
+      };
+      const AudioCtxCtor = Win.AudioContext ?? Win.webkitAudioContext;
+      if (!AudioCtxCtor) return null;
+      audioContext = new AudioCtxCtor();
+    } catch {
+      return null;
+    }
+  }
   return audioContext;
 }
 

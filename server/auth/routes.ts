@@ -7,7 +7,13 @@ import { normalizeReferralCodeInput } from "../referrals/code-generator";
 import { createToken } from "./token";
 import { getUserId, requireAuth } from "./session";
 
-const REFERRAL_LIMIT = 3;
+const DEFAULT_REFERRAL_LIMIT = 3;
+
+function getInviterReferralLimit(inviter: { referralLimit?: number | null } | undefined): number {
+  const limit = inviter?.referralLimit;
+  if (limit != null && limit >= 0) return limit;
+  return DEFAULT_REFERRAL_LIMIT;
+}
 
 function isDbConnectionError(msg: string): boolean {
   return /password authentication failed|connection refused|ECONNREFUSED|connect ETIMEDOUT/i.test(msg);
@@ -48,10 +54,15 @@ export function registerAuthRoutes(app: Express): void {
         res.status(400).json({ message: "Код приглашения не найден, истёк или уже использован. Попросите новый код." });
         return;
       }
-      const usedCount = await storage.countReferralsByInviter(referral.inviterUserId);
-      if (usedCount >= REFERRAL_LIMIT) {
-        res.status(400).json({ message: "Пригласивший вас пользователь исчерпал лимит приглашений." });
-        return;
+      const inviter = await storage.getUser(referral.inviterUserId);
+      const isAdminInviter = inviter && ["admin", "moderator", "super_admin"].includes(inviter.platformRole ?? "user");
+      if (!isAdminInviter) {
+        const limit = getInviterReferralLimit(inviter);
+        const usedCount = await storage.countReferralsByInviter(referral.inviterUserId);
+        if (usedCount >= limit) {
+          res.status(400).json({ message: "Пригласивший вас пользователь исчерпал лимит приглашений." });
+          return;
+        }
       }
       invitedById = referral.inviterUserId;
       referralCodeId = referral.id;
@@ -102,8 +113,12 @@ export function registerAuthRoutes(app: Express): void {
         gender: user.gender ?? null,
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,
+        coverUrl: user.coverUrl ?? null,
+        showCover: (user as { showCover?: boolean }).showCover !== false,
+        profileLink: user.profileLink ?? null,
         platformRole: user.platformRole ?? "user",
         hideFromSearch: user.hideFromSearch ?? false,
+        bio: user.bio ?? null,
         token,
       });
     });
@@ -176,8 +191,12 @@ export function registerAuthRoutes(app: Express): void {
           gender: user.gender ?? null,
           birthDate: user.birthDate ?? null,
           avatarUrl: user.avatarUrl ?? null,
+          coverUrl: user.coverUrl ?? null,
+          showCover: (user as { showCover?: boolean }).showCover !== false,
+          profileLink: user.profileLink ?? null,
           platformRole: user.platformRole ?? "user",
           hideFromSearch: user.hideFromSearch ?? false,
+          bio: user.bio ?? null,
           token,
         });
       });
@@ -246,6 +265,7 @@ export function registerAuthRoutes(app: Express): void {
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,
         coverUrl: user.coverUrl ?? null,
+        showCover: (user as { showCover?: boolean }).showCover !== false,
         profileLink: user.profileLink ?? null,
         platformRole: user.platformRole ?? "user",
         hideFromSearch: user.hideFromSearch ?? false,

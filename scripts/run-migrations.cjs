@@ -56,6 +56,9 @@ const scripts = [
   "scripts/migrate-stories.cjs",      // сначала stories, потом story_views (REFERENCES stories)
   "scripts/migrate-story-views.cjs",
   "scripts/migrate-notifications-and-more.cjs",
+  "scripts/migrate-tracks.cjs",
+  "scripts/migrate-chat-folders.cjs",
+  "scripts/migrate-scheduled-messages.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

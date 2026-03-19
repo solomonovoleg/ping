@@ -1,26 +1,65 @@
 /**
- * Токены для мобильного приложения (Expo/React Native).
- * В браузере используется сессия (cookie), в приложении — Bearer token.
+ * Токены для мобильного приложения:
+ * - stateless HMAC-подпись (переживает рестарты PM2/деплой),
+ * - TTL 7 дней,
+ * - без хранения в памяти процесса.
  */
-const tokens = new Map<string, { userId: string; exp: number }>();
-const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+import { createHmac, timingSafeEqual } from "crypto";
 
-function prune() {
-  const now = Date.now();
-  Array.from(tokens.entries()).forEach(([token, data]) => {
-    if (data.exp < now) tokens.delete(token);
-  });
+const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+const AUTH_TOKEN_SECRET =
+  process.env.AUTH_TOKEN_SECRET ||
+  process.env.SESSION_SECRET ||
+  "ping-moot-auth-secret-change-in-production";
+
+type TokenPayload = {
+  u: string; // userId
+  e: number; // expiresAt (unix ms)
+};
+
+function toBase64Url(input: Buffer | string): string {
+  const raw = Buffer.isBuffer(input) ? input : Buffer.from(input, "utf8");
+  return raw
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function fromBase64Url(input: string): Buffer {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, "base64");
+}
+
+function sign(payloadB64: string): string {
+  return toBase64Url(createHmac("sha256", AUTH_TOKEN_SECRET).update(payloadB64).digest());
 }
 
 export function createToken(userId: string): string {
-  prune();
-  const token = `pm_${Date.now()}_${Math.random().toString(36).slice(2, 15)}`;
-  tokens.set(token, { userId, exp: Date.now() + TTL_MS });
-  return token;
+  const payload: TokenPayload = { u: userId, e: Date.now() + TTL_MS };
+  const payloadB64 = toBase64Url(JSON.stringify(payload));
+  const signature = sign(payloadB64);
+  return `pm.${payloadB64}.${signature}`;
 }
 
 export function getUserIdByToken(token: string): string | null {
-  const data = tokens.get(token);
-  if (!data || data.exp < Date.now()) return null;
-  return data.userId;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3 || parts[0] !== "pm") return null;
+    const payloadB64 = parts[1];
+    const signature = parts[2];
+    const expectedSignature = sign(payloadB64);
+    const signatureBuf = Buffer.from(signature, "utf8");
+    const expectedBuf = Buffer.from(expectedSignature, "utf8");
+    if (signatureBuf.length !== expectedBuf.length) return null;
+    if (!timingSafeEqual(signatureBuf, expectedBuf)) return null;
+
+    const parsed = JSON.parse(fromBase64Url(payloadB64).toString("utf8")) as Partial<TokenPayload>;
+    if (!parsed || typeof parsed.u !== "string" || typeof parsed.e !== "number") return null;
+    if (parsed.e < Date.now()) return null;
+    return parsed.u;
+  } catch {
+    return null;
+  }
 }

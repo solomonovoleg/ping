@@ -58,7 +58,9 @@ export async function createComment(
   };
 }
 
-/** Форматирует ISO дату в короткий вид "только что" / "5 мин" / "1 ч" */
+import { formatDateShortLocal } from "@/lib/timezone";
+
+/** Форматирует ISO дату в короткий вид "только что" / "5 мин" / "1 ч" (локальное время) */
 export function formatCommentTime(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -68,5 +70,5 @@ export function formatCommentTime(iso: string): string {
   if (sec < 3600) return `${Math.floor(sec / 60)} мин`;
   if (sec < 86400) return `${Math.floor(sec / 3600)} ч`;
   if (sec < 604800) return `${Math.floor(sec / 86400)} д`;
-  return d.toLocaleDateString();
+  return formatDateShortLocal(d);
 }

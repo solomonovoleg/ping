@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { ListEmptyState } from "@/components/ui/empty";
 import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
+import { buildProfilePath } from "@/lib/profile-route";
 
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
 import avatarMom from "@/assets/images/avatar-mom.png";
@@ -86,7 +87,15 @@ export default function Subscribers() {
                 <TapScaleDiv
                   key={user.id}
                   className="flex items-center justify-between p-3 rounded-2xl hover:bg-secondary/50 transition-colors cursor-pointer"
-                  onClick={() => setLocation(`/profile/${(user as { publicId?: number }).publicId ?? user.id}`)}
+                  onClick={() =>
+                    setLocation(
+                      buildProfilePath({
+                        publicId: (user as { publicId?: number }).publicId,
+                        userId: user.id,
+                        fallbackPath: "/posts",
+                      })
+                    )
+                  }
                 >
                   <div className="flex items-center gap-3">
                     <div className="relative">

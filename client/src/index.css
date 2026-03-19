@@ -320,59 +320,6 @@
   @apply bg-card/60 backdrop-blur-2xl border border-white/10 shadow-lg dark:border-white/5;
 }
 
-/* ========== Nav logo: пульсация, волны, переход в профиль (motion system) ========== */
-@keyframes nav-logo-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
-@keyframes nav-logo-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.08); opacity: 0.92; }
-}
-@keyframes nav-logo-wave {
-  0% { transform: scale(0.85); opacity: 0.35; }
-  100% { transform: scale(2); opacity: 0; }
-}
-
-.nav-logo-btn {
-  animation: nav-logo-float 2.8s ease-in-out infinite;
-}
-.nav-logo-pulse {
-  animation: nav-logo-pulse 2s ease-in-out infinite;
-}
-.nav-logo-btn::before {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  background: radial-gradient(circle, hsl(var(--primary) / 0.2) 0%, transparent 70%);
-  animation: nav-logo-wave 2.2s ease-out infinite;
-  pointer-events: none;
-}
-.nav-logo-btn::after {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  background: radial-gradient(circle, hsl(var(--primary) / 0.15) 0%, transparent 70%);
-  animation: nav-logo-wave 2.2s ease-out infinite 0.6s;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .nav-logo-btn {
-    animation: none;
-  }
-  .nav-logo-pulse {
-    animation: none;
-  }
-  .nav-logo-btn::before,
-  .nav-logo-btn::after {
-    animation: none;
-    display: none;
-  }
-}
-
 /* Логотип на экране входа: плавное появление + лёгкое плавание вверх-вниз */
 @keyframes login-logo-fade-in {
   from { opacity: 0; transform: translateY(10px); }
@@ -403,6 +350,46 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .pinned-chat-accent {
+    animation: none;
+  }
+}
+
+/* Сториз-ободок: мягкая "живая" пульсация как в мессенджерах */
+@keyframes story-ring-pulse {
+  0%, 100% {
+    filter: saturate(1);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.22);
+  }
+  50% {
+    filter: saturate(1.1);
+    box-shadow: 0 0 0 6px hsl(var(--primary) / 0.08);
+  }
+}
+.animate-story-ring {
+  animation: story-ring-pulse 2.3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-story-ring {
+    animation: none;
+  }
+}
+
+/* Центральный логотип в нижнем навбаре: мягкое "дыхание" без лишнего визуального круга */
+@keyframes ping-logo-breathe {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 4px 10px hsl(var(--primary) / 0.2));
+  }
+  50% {
+    transform: translateY(-1px) scale(1.04);
+    filter: drop-shadow(0 7px 16px hsl(var(--primary) / 0.28));
+  }
+}
+.animate-ping-logo {
+  animation: ping-logo-breathe 2.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-ping-logo {
     animation: none;
   }
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2 } from "lucide-react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,8 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, type FeedPost, type ReactionUser } from "@/lib/posts";
 import { PostMedia } from "@/components/PostMedia";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
+import { startDm } from "@/lib/search";
+import { sendMessage } from "@/lib/chat";
 import { useToast } from "@/hooks/use-toast";
 import { resolveUrl } from "@/lib/api-base";
 import { fetchStoriesFeed, recordStoryView } from "@/lib/stories";
@@ -18,6 +20,8 @@ import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { PageTitle } from "@/components/PageTitle";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ShatterEffect } from "@/components/ShatterEffect";
+import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
+import { FeedHeader } from "@/features/feed/components/FeedHeader";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -49,6 +53,7 @@ export default function Posts() {
   const [shatteringPostIds, setShatteringPostIds] = useState<Set<string>>(new Set());
   const [hashtagFilter, setHashtagFilter] = useState<string | null>(null);
   const [expandedPostIds, setExpandedPostIds] = useState<Set<string>>(new Set());
+  const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(new Set());
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -69,6 +74,7 @@ export default function Posts() {
     data: feedData,
     isLoading,
     isError,
+    error: feedError,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -83,6 +89,10 @@ export default function Posts() {
     },
   });
   const feedPosts: FeedPost[] = Array.isArray(feedData?.pages) ? feedData.pages.flat() : [];
+  const feedErrorText =
+    feedError instanceof Error && feedError.message.trim()
+      ? feedError.message
+      : "Проверьте интернет и попробуйте снова";
 
   // Подгрузка следующей страницы при скролле до конца списка (после useInfiniteQuery)
   useEffect(() => {
@@ -129,6 +139,15 @@ export default function Posts() {
     enabled: !!user,
   });
 
+  const handleFeedRefresh = useCallback(async () => {
+    await Promise.allSettled([
+      refetch(),
+      refetchStories(),
+      queryClient.invalidateQueries({ queryKey: ["posts", "feed"] }),
+      queryClient.invalidateQueries({ queryKey: ["stories", "feed"] }),
+    ]);
+  }, [queryClient, refetch, refetchStories]);
+
   const reactionMutation = useMutation({
     mutationFn: async ({ postId, emoji }: { postId: string; emoji: string | null }) => {
       if (emoji) await addReaction(postId, emoji);
@@ -169,24 +188,51 @@ export default function Posts() {
   const storyCircles = !user || (storiesError && storiesFeed.length === 0)
     ? []
     : storiesFeed.length > 0
-    ? storiesFeed.map((a) => {
-        const author = a.author ?? { id: a.authorId, publicId: 0, displayName: null, avatarUrl: null };
-        const stories = Array.isArray(a.stories) ? a.stories : [];
-        return {
-          id: a.authorId,
-          name: author.displayName || `ID ${author.publicId}`,
-          avatar: author.avatarUrl ? resolveUrl(author.avatarUrl) : avatarMain,
-          isMe: user ? a.authorId === user.id : false,
-          hasUnseen: true,
-          image: stories[0]?.mediaUrl ? resolveUrl(stories[0].mediaUrl) : "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop",
-          time: stories[0]?.createdAt ? formatPostTime(stories[0].createdAt) : "",
-          stories,
-          author,
-        };
-      })
+    ? (() => {
+        const mapped = storiesFeed.map((a) => {
+          const author = a.author ?? { id: a.authorId, publicId: 0, displayName: null, avatarUrl: null };
+          const stories = Array.isArray(a.stories) ? a.stories : [];
+          const hasLocalUnseen = stories.some((s) => !viewedStoryIds.has(s.id) && s.isViewed !== true);
+          const isMe = user ? a.authorId === user.id : false;
+          return {
+            id: a.authorId,
+            name: isMe ? "Моя история" : author.displayName || `ID ${author.publicId}`,
+            avatar: author.avatarUrl ? resolveUrl(author.avatarUrl) : avatarMain,
+            isMe,
+            hasActive: stories.length > 0,
+            hasUnseen: isMe ? false : hasLocalUnseen || a.hasUnseen === true,
+            image: stories[0]?.mediaUrl ? resolveUrl(stories[0].mediaUrl) : "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop",
+            time: stories[0]?.createdAt ? formatPostTime(stories[0].createdAt) : "",
+            stories,
+            author,
+          };
+        });
+
+        const myIndex = mapped.findIndex((s) => s.isMe);
+        if (myIndex >= 0) {
+          const [me] = mapped.splice(myIndex, 1);
+          return [me, ...mapped];
+        }
+
+        return [
+          {
+            id: "me",
+            name: "Моя история",
+            avatar: myStoryAvatar,
+            isMe: true,
+            hasActive: false,
+            hasUnseen: false,
+            image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop",
+            time: "",
+            stories: [],
+            author: null,
+          },
+          ...mapped,
+        ];
+      })()
     : [
-        { id: "me", name: "Моя история", avatar: myStoryAvatar, isMe: true, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", views: 128, stories: [], author: null },
-        ...OTHER_STORIES.map((s) => ({ ...s, stories: [], author: null })),
+        { id: "me", name: "Моя история", avatar: myStoryAvatar, isMe: true, hasActive: false, hasUnseen: false, image: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&h=1200&fit=crop", time: "5м", views: 128, stories: [], author: null },
+        ...OTHER_STORIES.map((s) => ({ ...s, hasActive: true, stories: [], author: null })),
       ];
 
   const getViewerStoriesForIndex = (idx: number) => {
@@ -194,7 +240,7 @@ export default function Posts() {
     if (!item || !("stories" in item) || !Array.isArray(item.stories) || item.stories.length === 0) {
       return [{ id: item?.id ?? idx, image: (item as { image?: string })?.image ?? "", userName: (item as { name?: string })?.name ?? "", userAvatar: (item as { avatar?: string })?.avatar ?? "", time: (item as { time?: string })?.time ?? "" }];
     }
-    const author = (item as { author?: { displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
+    const author = (item as { author?: { id?: string; displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
     const name = author?.displayName || (item as { name?: string }).name || `ID ${author?.publicId ?? ""}`;
     const avatar = author?.avatarUrl ? resolveUrl(author.avatarUrl) : (item as { avatar?: string }).avatar ?? avatarMain;
     return (item.stories as { id: string; mediaUrl: string; createdAt: string }[]).map((s) => ({
@@ -203,7 +249,22 @@ export default function Posts() {
       userName: name,
       userAvatar: avatar,
       time: formatPostTime(s.createdAt),
+      authorId: author?.id ?? (item as { authorId?: string }).authorId,
     }));
+  };
+
+  const handleStoryReply = async (payload: { storyId: string; authorId: string; text: string }) => {
+    if (!user?.id) {
+      toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
+      return;
+    }
+    if (!payload.authorId || payload.authorId === user.id) {
+      toast({ title: "Нельзя отправить ответ на свой сториз", variant: "destructive" });
+      return;
+    }
+    const chat = await startDm(payload.authorId);
+    await sendMessage(chat.id, { type: "text", content: payload.text.trim() });
+    toast({ title: "Ответ на сториз отправлен" });
   };
 
   return (
@@ -211,31 +272,15 @@ export default function Posts() {
       <PageTitle title="Лента" />
       <div className="w-full max-w-full min-w-0 flex-1 min-h-0 flex flex-col bg-background">
         
-        {/* Header */}
-        <div className="uix-content-x-tight py-4 glass z-10 sticky top-0 relative flex items-center gap-2">
-          <span className="uix-text-title font-semibold flex-shrink-0">Лента</span>
-          <div className="flex-1 min-w-0 flex justify-center">
-            <button
-              onClick={() => setLocation("/profile/me")}
-              title={currentUserName}
-              className="font-semibold text-[17px] hover:text-primary transition-colors px-3 py-1 rounded-full hover:bg-primary/5 active:bg-primary/10 truncate max-w-full"
-            >
-              {currentUserName}
-            </button>
-          </div>
-          <div className="flex-shrink-0">
-            <button
-              onClick={() => setLocation("/create-post")}
-              className="p-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-            >
-              <PenSquare className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
+        <FeedHeader
+          displayName={currentUserName}
+          onOpenProfile={() => setLocation("/profile/me")}
+          onOpenCreatePost={() => setLocation("/create-post")}
+        />
 
         {/* Feed Content */}
         <PullToRefresh
-          onRefresh={() => { refetch(); refetchStories(); }}
+          onRefresh={handleFeedRefresh}
           showScrollToTop
           className="min-w-0"
           scrollRef={feedScrollRef}
@@ -262,9 +307,11 @@ export default function Posts() {
                   <div className="relative">
                     <div className={cn(
                       "w-16 h-16 rounded-full p-[2px] transition-transform duration-200 group-active:scale-95",
-                      (story as { hasUnseen?: boolean }).hasUnseen !== false
-                        ? "bg-gradient-to-tr from-primary to-purple-500" 
-                        : "bg-border"
+                      (story as { hasUnseen?: boolean }).hasUnseen
+                        ? "bg-gradient-to-tr from-primary via-fuchsia-500 to-purple-500 animate-story-ring"
+                        : (story as { hasActive?: boolean }).hasActive
+                          ? "bg-gradient-to-tr from-primary/80 to-purple-400/70"
+                          : "bg-border"
                     )}>
                       <img 
                         src={(story as { avatar?: string }).avatar ?? avatarMain} 
@@ -297,6 +344,9 @@ export default function Posts() {
                   </span>
                 </div>
               ))}
+              {storiesLoading && storyCircles.length === 0 && (
+                <div className="flex-shrink-0 text-xs text-muted-foreground">Загрузка сториз...</div>
+              )}
             </div>
           </div>
 
@@ -316,14 +366,14 @@ export default function Posts() {
 
           {/* Posts List */}
           <div className="flex flex-col min-h-[40vh]">
-            {isLoading ? (
+            {isLoading && feedPosts.length === 0 ? (
               <LoadingProgress loading minHeight="280px" className="rounded-lg">
                 <div className="min-h-[280px]" />
               </LoadingProgress>
-            ) : isError ? (
+            ) : isError && feedPosts.length === 0 ? (
               <ErrorWithRetry
                 title="Не удалось загрузить ленту"
-                description="Проверьте интернет и попробуйте снова"
+                description={feedErrorText}
                 onRetry={() => refetch()}
               />
             ) : feedPosts.length === 0 ? (
@@ -338,7 +388,19 @@ export default function Posts() {
               feedPosts.map((post: FeedPost) => {
                 const isShattering = shatteringPostIds.has(post.id);
                 const safeText = post.text ?? "";
-                const authorPublicId = post.author?.publicId ?? post.authorId;
+                const authorProfilePath = buildProfilePath({
+                  isMe: post.authorId === user?.id,
+                  publicId: post.author?.publicId,
+                  userId: post.authorId,
+                  fallbackPath: "/posts",
+                });
+                const postDetailPath = buildProfilePostPath({
+                  postId: post.id,
+                  isMe: post.authorId === user?.id,
+                  publicId: post.author?.publicId,
+                  userId: post.authorId,
+                  fallbackPath: "/posts",
+                });
                 const latestComments = Array.isArray(post.latestComments) ? post.latestComments : [];
                 const latestTwoComments = latestComments
                   .slice(0, 2)
@@ -348,11 +410,11 @@ export default function Posts() {
                 <div className="flex items-center justify-between mb-3">
                   <div
                     className="flex items-center gap-3 cursor-pointer group"
-                    onClick={() => setLocation(post.authorId === user?.id ? "/profile/me" : `/profile/${authorPublicId}`)}
+                    onClick={() => setLocation(authorProfilePath)}
                   >
                     <UserAvatar
                       avatarUrl={post.author?.avatarUrl ?? undefined}
-                      displayName={post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${authorPublicId}`}
+                      displayName={post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${post.author?.publicId ?? post.authorId}`}
                       seed={String(post.authorId)}
                       size={40}
                       className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity flex-shrink-0"
@@ -362,16 +424,16 @@ export default function Posts() {
                         className="font-semibold text-[15px] group-hover:text-primary transition-colors truncate"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setLocation(post.authorId === user?.id ? `/profile/me/post/${post.id}` : `/profile/${authorPublicId}/post/${post.id}`);
+                          setLocation(postDetailPath);
                         }}
                       >
-                        {post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${authorPublicId}`}
+                        {post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${post.author?.publicId ?? post.authorId}`}
                       </h3>
                       <p
                         className="text-xs text-muted-foreground cursor-pointer hover:text-foreground"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setLocation(post.authorId === user?.id ? `/profile/me/post/${post.id}` : `/profile/${authorPublicId}/post/${post.id}`);
+                          setLocation(postDetailPath);
                         }}
                       >
                         {formatPostTime(post.createdAt)}
@@ -632,6 +694,20 @@ export default function Posts() {
                 return article;
               })
             )}
+            {isError && feedPosts.length > 0 && (
+              <div className="px-4 pb-2">
+                <div className="rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 flex items-center justify-between gap-3">
+                  <p className="text-xs text-destructive/90">Не удалось обновить ленту: {feedErrorText}</p>
+                  <button
+                    type="button"
+                    onClick={() => refetch()}
+                    className="text-xs font-medium text-destructive underline underline-offset-2"
+                  >
+                    Повторить
+                  </button>
+                </div>
+              </div>
+            )}
             {feedPosts.length > 0 && (
               <>
                 <div ref={loadMoreRef} className="h-2 flex-shrink-0" aria-hidden />
@@ -649,8 +725,20 @@ export default function Posts() {
           <StoryViewer 
             stories={getViewerStoriesForIndex(activeStoryIndex)} 
             initialIndex={0} 
-            onClose={() => setActiveStoryIndex(null)} 
-            onStoryView={recordStoryView}
+            onClose={() => {
+              setActiveStoryIndex(null);
+              void refetchStories();
+            }} 
+            onStoryView={(storyId) => {
+              setViewedStoryIds((prev) => {
+                const next = new Set(prev);
+                next.add(storyId);
+                return next;
+              });
+              void recordStoryView(storyId);
+            }}
+            onReply={handleStoryReply}
+            canReply
           />
         )}
 

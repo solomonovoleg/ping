@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PhoneOff, Phone, Mic, MicOff, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallState } from "@/hooks/useCall";
@@ -44,6 +44,7 @@ export function CallModal({
 }: Props) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const [remoteNeedsTapToPlay, setRemoteNeedsTapToPlay] = useState(false);
 
   useEffect(() => {
     const el = localVideoRef.current;
@@ -58,8 +59,19 @@ export function CallModal({
     const el = remoteVideoRef.current;
     if (!el || !remoteStream) return;
     el.srcObject = remoteStream;
+    const tryPlay = async () => {
+      try {
+        await el.play();
+        setRemoteNeedsTapToPlay(false);
+      } catch {
+        // iOS Safari/WebView иногда блокирует autoplay удалённого аудио до явного user gesture.
+        setRemoteNeedsTapToPlay(true);
+      }
+    };
+    tryPlay();
     return () => {
       el.srcObject = null;
+      setRemoteNeedsTapToPlay(false);
     };
   }, [remoteStream, state]);
 
@@ -120,6 +132,25 @@ export function CallModal({
 
       {/* Кнопки */}
       <div className="shrink-0 p-6 flex justify-center gap-6 items-center">
+        {state === "in-call" && remoteNeedsTapToPlay && (
+          <TapScaleButton
+            type="button"
+            onClick={async () => {
+              const el = remoteVideoRef.current;
+              if (!el) return;
+              try {
+                await el.play();
+                setRemoteNeedsTapToPlay(false);
+              } catch {
+                setRemoteNeedsTapToPlay(true);
+              }
+            }}
+            className="px-4 py-2 rounded-xl bg-primary/90 text-primary-foreground text-sm font-medium"
+            aria-label="Включить звук собеседника"
+          >
+            Включить звук
+          </TapScaleButton>
+        )}
         {state === "ringing" && (
           <>
             <TapScaleButton

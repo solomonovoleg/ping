@@ -14,3 +14,7 @@ vite.config.ts.*
 
 # Android: путь к SDK у каждого свой
 android/local.properties
+
+# Локальные бэкапы и состояние
+.env.bak
+.local/

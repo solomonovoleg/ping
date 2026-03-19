@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
-import { eq, and, desc, sql, gt, lt, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, gt, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
 import type { IStorage } from "./types";
 import type { User, InsertUser, UpdateProfile, Chat, ChatMember, InsertChat, InsertChatMember, Message, InsertMessage } from "@shared/schema";
-import { users, referralCodes, chats, chatMembers, messages, contacts, follows, userBlocks, savedMessages } from "@shared/schema";
+import { users, referralCodes, chats, chatMembers, messages, contacts, follows, userBlocks, savedMessages, tracks, trackItems, chatFolders, scheduledMessages } from "@shared/schema";
 import { getDb, ensureUserColumns } from "../db";
 import { normalizePhone } from "../auth/phone";
 
@@ -260,6 +260,15 @@ export class DbStorage implements IStorage {
     return row;
   }
 
+  async getChatMember(chatId: string, userId: string): Promise<ChatMember | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(chatMembers)
+      .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)))
+      .limit(1);
+    return row;
+  }
+
   async getChatMemberIds(chatId: string): Promise<string[]> {
     const rows = await this.db.select({ userId: chatMembers.userId }).from(chatMembers).where(eq(chatMembers.chatId, chatId));
     return rows.map((r) => r.userId);
@@ -308,6 +317,22 @@ export class DbStorage implements IStorage {
     return row;
   }
 
+  async removeChatMember(chatId: string, userId: string): Promise<boolean> {
+    const result = await this.db
+      .delete(chatMembers)
+      .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async updateChat(chatId: string, data: { name?: string; avatarUrl?: string }): Promise<Chat | undefined> {
+    const updates: Record<string, unknown> = {};
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.avatarUrl !== undefined) updates.avatarUrl = data.avatarUrl;
+    if (Object.keys(updates).length === 0) return this.getChatById(chatId);
+    const [row] = await this.db.update(chats).set(updates).where(eq(chats.id, chatId)).returning();
+    return row;
+  }
+
   async updateLastRead(chatId: string, userId: string): Promise<void> {
     await this.db
       .update(chatMembers)
@@ -331,22 +356,51 @@ export class DbStorage implements IStorage {
       .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)))
       .limit(1);
     const since = member?.lastReadAt ?? null;
+    const fromOthers = or(ne(messages.senderId, userId), isNull(messages.senderId));
     if (!since) {
       const [r] = await this.db
         .select({ count: sql<number>`count(*)::int` })
         .from(messages)
-        .where(eq(messages.chatId, chatId));
+        .where(and(eq(messages.chatId, chatId), fromOthers));
       return r?.count ?? 0;
     }
     const [r] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(messages)
-      .where(and(eq(messages.chatId, chatId), gt(messages.createdAt, since)));
+      .where(and(eq(messages.chatId, chatId), gt(messages.createdAt, since), fromOthers));
     return r?.count ?? 0;
   }
 
-  async getMessagesByChatId(chatId: string, limit = 100, beforeMessageId?: string): Promise<Message[]> {
+  async getUnreadCountByFolder(chatId: string, folderId: string | null, userId: string): Promise<number> {
+    const [member] = await this.db
+      .select({ lastReadAt: chatMembers.lastReadAt })
+      .from(chatMembers)
+      .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)))
+      .limit(1);
+    const since = member?.lastReadAt ?? null;
+    const fromOthers = or(ne(messages.senderId, userId), isNull(messages.senderId));
+    const folderCond = folderId == null ? isNull(messages.folderId) : eq(messages.folderId, folderId);
+    if (!since) {
+      const [r] = await this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), folderCond, fromOthers));
+      return r?.count ?? 0;
+    }
+    const [r] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), folderCond, gt(messages.createdAt, since), fromOthers));
+    return r?.count ?? 0;
+  }
+
+  async getMessagesByChatId(chatId: string, limit = 100, beforeMessageId?: string, folderId?: string | null): Promise<Message[]> {
     const conditions = [eq(messages.chatId, chatId)];
+    if (folderId != null) {
+      conditions.push(eq(messages.folderId, folderId));
+    } else {
+      conditions.push(isNull(messages.folderId));
+    }
     if (beforeMessageId) {
       const [beforeMsg] = await this.db
         .select({ createdAt: messages.createdAt })
@@ -361,7 +415,107 @@ export class DbStorage implements IStorage {
       .where(and(...conditions))
       .orderBy(desc(messages.createdAt))
       .limit(Math.min(limit, 200));
-    return rows.reverse();
+    return rows.reverse() as Message[];
+  }
+
+  async getMediaMessages(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string): Promise<Message[]> {
+    const conditions = [
+      eq(messages.chatId, chatId),
+      inArray(messages.type, ["image", "video", "voice", "video_note"]),
+    ];
+    if (folderId != null) conditions.push(eq(messages.folderId, folderId));
+    else conditions.push(isNull(messages.folderId));
+    if (beforeMessageId) {
+      const [beforeMsg] = await this.db
+        .select({ createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), eq(messages.id, beforeMessageId)))
+        .limit(1);
+      if (beforeMsg) conditions.push(lt(messages.createdAt, beforeMsg.createdAt));
+    }
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(and(...conditions))
+      .orderBy(desc(messages.createdAt))
+      .limit(Math.min(limit, 100));
+    return rows.reverse() as Message[];
+  }
+
+  async getTextMessagesForLinks(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string): Promise<Pick<Message, "id" | "content" | "createdAt">[]> {
+    const conditions = [eq(messages.chatId, chatId), eq(messages.type, "text")];
+    if (folderId != null) conditions.push(eq(messages.folderId, folderId));
+    else conditions.push(isNull(messages.folderId));
+    if (beforeMessageId) {
+      const [beforeMsg] = await this.db
+        .select({ createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), eq(messages.id, beforeMessageId)))
+        .limit(1);
+      if (beforeMsg) conditions.push(lt(messages.createdAt, beforeMsg.createdAt));
+    }
+    const rows = await this.db
+      .select({ id: messages.id, content: messages.content, createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(...conditions))
+      .orderBy(desc(messages.createdAt))
+      .limit(Math.min(limit, 200));
+    return rows.reverse() as Pick<Message, "id" | "content" | "createdAt">[];
+  }
+
+  async listChatFolders(chatId: string): Promise<import("@shared/schema").ChatFolder[]> {
+    const rows = await this.db
+      .select()
+      .from(chatFolders)
+      .where(eq(chatFolders.chatId, chatId))
+      .orderBy(asc(chatFolders.orderIndex), asc(chatFolders.createdAt));
+    return rows as import("@shared/schema").ChatFolder[];
+  }
+
+  async getOrCreateMainFolder(chatId: string): Promise<import("@shared/schema").ChatFolder> {
+    const [existing] = await this.db
+      .select()
+      .from(chatFolders)
+      .where(and(eq(chatFolders.chatId, chatId), eq(chatFolders.isMain, true)))
+      .limit(1);
+    if (existing) return existing as import("@shared/schema").ChatFolder;
+    const [row] = await this.db
+      .insert(chatFolders)
+      .values({ chatId, name: "Общий", isMain: true, orderIndex: 0 })
+      .returning();
+    if (!row) throw new Error("Create main folder failed");
+    return row as import("@shared/schema").ChatFolder;
+  }
+
+  async createChatFolder(chatId: string, name: string, orderIndex: number): Promise<import("@shared/schema").ChatFolder> {
+    const [row] = await this.db
+      .insert(chatFolders)
+      .values({ chatId, name: name.trim(), isMain: false, orderIndex })
+      .returning();
+    if (!row) throw new Error("Create folder failed");
+    return row as import("@shared/schema").ChatFolder;
+  }
+
+  async getChatFolder(folderId: string): Promise<import("@shared/schema").ChatFolder | undefined> {
+    const [row] = await this.db.select().from(chatFolders).where(eq(chatFolders.id, folderId)).limit(1);
+    return row as import("@shared/schema").ChatFolder | undefined;
+  }
+
+  async updateChatFolder(folderId: string, data: { name?: string }): Promise<import("@shared/schema").ChatFolder | undefined> {
+    if (!data.name?.trim()) return this.getChatFolder(folderId);
+    const [row] = await this.db
+      .update(chatFolders)
+      .set({ name: data.name.trim() })
+      .where(eq(chatFolders.id, folderId))
+      .returning();
+    return row as import("@shared/schema").ChatFolder | undefined;
+  }
+
+  async deleteChatFolder(folderId: string): Promise<boolean> {
+    const [folder] = await this.db.select().from(chatFolders).where(eq(chatFolders.id, folderId)).limit(1);
+    if (!folder || folder.isMain) return false;
+    const r = await this.db.delete(chatFolders).where(eq(chatFolders.id, folderId));
+    return (r.rowCount ?? 0) > 0;
   }
 
   async getLastMessage(chatId: string): Promise<Message | undefined> {
@@ -371,13 +525,15 @@ export class DbStorage implements IStorage {
       .where(eq(messages.chatId, chatId))
       .orderBy(desc(messages.createdAt))
       .limit(1);
-    return row;
+    return row as Message | undefined;
   }
 
   async createMessage(data: InsertMessage): Promise<Message> {
-    const [row] = await this.db.insert(messages).values(data).returning();
+    const result = await this.db.insert(messages).values(data).returning();
+    const rows = Array.isArray(result) ? result : [];
+    const [row] = rows;
     if (!row) throw new Error("Insert message failed");
-    return row;
+    return row as Message;
   }
 
   async getMessage(chatId: string, messageId: string): Promise<Message | undefined> {
@@ -386,7 +542,7 @@ export class DbStorage implements IStorage {
       .from(messages)
       .where(and(eq(messages.chatId, chatId), eq(messages.id, messageId)))
       .limit(1);
-    return row;
+    return row as Message | undefined;
   }
 
   async deleteMessage(chatId: string, messageId: string): Promise<boolean> {
@@ -402,7 +558,57 @@ export class DbStorage implements IStorage {
       .set({ content: content.trim() })
       .where(and(eq(messages.chatId, chatId), eq(messages.id, messageId)))
       .returning();
-    return row;
+    return row as Message | undefined;
+  }
+
+  async createScheduledMessage(data: {
+    chatId: string;
+    folderId?: string | null;
+    senderId: string;
+    type: string;
+    content: string;
+    replyToId?: string | null;
+    scheduledAt: Date;
+  }): Promise<{ id: string; scheduledAt: Date }> {
+    const [row] = await this.db
+      .insert(scheduledMessages)
+      .values({
+        chatId: data.chatId,
+        folderId: data.folderId ?? undefined,
+        senderId: data.senderId,
+        type: data.type,
+        content: data.content,
+        replyToId: data.replyToId ?? undefined,
+        scheduledAt: data.scheduledAt,
+      })
+      .returning({ id: scheduledMessages.id, scheduledAt: scheduledMessages.scheduledAt });
+    if (!row) throw new Error("Insert scheduled message failed");
+    return row as { id: string; scheduledAt: Date };
+  }
+
+  async getScheduledMessagesDue(limit: number): Promise<
+    { id: string; chatId: string; folderId: string | null; senderId: string | null; type: string; content: string; replyToId: string | null }[]
+  > {
+    const now = new Date();
+    const rows = await this.db
+      .select({
+        id: scheduledMessages.id,
+        chatId: scheduledMessages.chatId,
+        folderId: scheduledMessages.folderId,
+        senderId: scheduledMessages.senderId,
+        type: scheduledMessages.type,
+        content: scheduledMessages.content,
+        replyToId: scheduledMessages.replyToId,
+      })
+      .from(scheduledMessages)
+      .where(lte(scheduledMessages.scheduledAt, now))
+      .limit(limit);
+    return rows as { id: string; chatId: string; folderId: string | null; senderId: string | null; type: string; content: string; replyToId: string | null }[];
+  }
+
+  async deleteScheduledMessage(id: string): Promise<boolean> {
+    const r = await this.db.delete(scheduledMessages).where(eq(scheduledMessages.id, id));
+    return (r.rowCount ?? 0) > 0;
   }
 
   async searchMessages(
@@ -534,6 +740,192 @@ export class DbStorage implements IStorage {
     return !!row;
   }
 
+  async createTrack(userId: string, name: string): Promise<{ id: string; name: string; createdAt: Date }> {
+    const [row] = await this.db.insert(tracks).values({ userId, name: name.trim() || "Новый трек" }).returning();
+    if (!row) throw new Error("Create track failed");
+    return { id: row.id, name: row.name, createdAt: row.createdAt };
+  }
+
+  async listTracks(userId: string): Promise<{ id: string; name: string; createdAt: Date; totalItems: number; activeItems: number; doneItems: number }[]> {
+    const trackRows = await this.db
+      .select({ id: tracks.id, name: tracks.name, createdAt: tracks.createdAt })
+      .from(tracks)
+      .where(eq(tracks.userId, userId))
+      .orderBy(desc(tracks.createdAt));
+    const counts = await this.db
+      .select({
+        trackId: trackItems.trackId,
+        total: sql<number>`count(*)::int`,
+        active: sql<number>`count(*) filter (where ${trackItems.doneAt} is null)::int`,
+        done: sql<number>`count(*) filter (where ${trackItems.doneAt} is not null)::int`,
+      })
+      .from(trackItems)
+      .groupBy(trackItems.trackId);
+    const countMap = new Map(counts.map((c) => [c.trackId, { total: c.total, active: c.active, done: c.done }]));
+    return trackRows.map((t) => {
+      const c = countMap.get(t.id) ?? { total: 0, active: 0, done: 0 };
+      return { ...t, totalItems: c.total, activeItems: c.active, doneItems: c.done };
+    });
+  }
+
+  async getTrack(userId: string, trackId: string): Promise<{ id: string; name: string; createdAt: Date } | undefined> {
+    const [row] = await this.db
+      .select({ id: tracks.id, name: tracks.name, createdAt: tracks.createdAt })
+      .from(tracks)
+      .where(and(eq(tracks.id, trackId), eq(tracks.userId, userId)))
+      .limit(1);
+    return row;
+  }
+
+  async addMessageToTrack(userId: string, trackId: string, messageId: string, chatId: string): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    const memberIds = await this.getChatMemberIds(chatId);
+    if (!memberIds.includes(userId)) throw new Error("Нет доступа к чату");
+    const msg = await this.getMessage(chatId, messageId);
+    if (!msg) throw new Error("Сообщение не найдено");
+    await this.db
+      .insert(trackItems)
+      .values({ trackId, messageId, chatId })
+      .onConflictDoNothing({ target: [trackItems.trackId, trackItems.messageId] });
+  }
+
+  async removeTrackItem(userId: string, trackId: string, itemId: string): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    const [item] = await this.db
+      .select()
+      .from(trackItems)
+      .where(and(eq(trackItems.trackId, trackId), eq(trackItems.id, itemId)))
+      .limit(1);
+    if (!item) throw new Error("Элемент не найден");
+    await this.db.delete(trackItems).where(eq(trackItems.id, itemId));
+  }
+
+  async setTrackItemDone(userId: string, trackId: string, itemId: string, done: boolean): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    const [item] = await this.db
+      .select()
+      .from(trackItems)
+      .where(and(eq(trackItems.trackId, trackId), eq(trackItems.id, itemId)))
+      .limit(1);
+    if (!item) throw new Error("Элемент не найден");
+    await this.db
+      .update(trackItems)
+      .set({ doneAt: done ? new Date() : null })
+      .where(eq(trackItems.id, itemId));
+  }
+
+  async updateTrack(userId: string, trackId: string, data: { name: string }): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    await this.db
+      .update(tracks)
+      .set({ name: data.name.trim() || track.name })
+      .where(and(eq(tracks.id, trackId), eq(tracks.userId, userId)));
+  }
+
+  async deleteTrack(userId: string, trackId: string): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    await this.db.delete(tracks).where(and(eq(tracks.id, trackId), eq(tracks.userId, userId)));
+  }
+
+  async getTracksStats(userId: string): Promise<{ totalTracks: number; activeItemsCount: number; doneItemsCount: number; lastAddedAt: Date | null }> {
+    const [totalRow] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(tracks)
+      .where(eq(tracks.userId, userId));
+    const [activeRow] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(trackItems)
+      .innerJoin(tracks, eq(tracks.id, trackItems.trackId))
+      .where(and(eq(tracks.userId, userId), isNull(trackItems.doneAt)));
+    const [doneRow] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(trackItems)
+      .innerJoin(tracks, eq(tracks.id, trackItems.trackId))
+      .where(and(eq(tracks.userId, userId), isNotNull(trackItems.doneAt)));
+    const [lastRow] = await this.db
+      .select({ lastAdded: sql<Date>`max(${trackItems.addedAt})` })
+      .from(trackItems)
+      .innerJoin(tracks, eq(tracks.id, trackItems.trackId))
+      .where(eq(tracks.userId, userId));
+    return {
+      totalTracks: totalRow?.count ?? 0,
+      activeItemsCount: activeRow?.count ?? 0,
+      doneItemsCount: doneRow?.count ?? 0,
+      lastAddedAt: lastRow?.lastAdded ?? null,
+    };
+  }
+
+  async listTrackItems(
+    userId: string,
+    trackId: string
+  ): Promise<
+    {
+      id: string;
+      messageId: string;
+      chatId: string;
+      chatName: string;
+      content: string;
+      type: string;
+      messageCreatedAt: Date;
+      addedAt: Date;
+      doneAt: Date | null;
+    }[]
+  > {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) return [];
+    const rows = await this.db
+      .select({
+        id: trackItems.id,
+        messageId: trackItems.messageId,
+        chatId: trackItems.chatId,
+        content: messages.content,
+        type: messages.type,
+        messageCreatedAt: messages.createdAt,
+        addedAt: trackItems.addedAt,
+        doneAt: trackItems.doneAt,
+      })
+      .from(trackItems)
+      .innerJoin(messages, eq(messages.id, trackItems.messageId))
+      .where(eq(trackItems.trackId, trackId))
+      .orderBy(desc(trackItems.addedAt));
+    const chatNames = new Map<string, string>();
+    for (const row of rows) {
+      if (chatNames.has(row.chatId)) continue;
+      const chat = await this.getChatById(row.chatId);
+      if (!chat) {
+        chatNames.set(row.chatId, "Чат");
+        continue;
+      }
+      if (chat.type === "dm") {
+        const memberIds = await this.getChatMemberIds(chat.id);
+        const otherId = memberIds.find((id) => id !== userId);
+        const other = otherId ? await this.getUser(otherId) : null;
+        chatNames.set(
+          row.chatId,
+          other ? [other.displayName, other.surname].filter(Boolean).join(" ").trim() || `ID ${other.publicId}` : "Диалог"
+        );
+      } else {
+        chatNames.set(row.chatId, chat.name || "Группа");
+      }
+    }
+    return rows.map((r) => ({
+      id: r.id,
+      messageId: r.messageId,
+      chatId: r.chatId,
+      chatName: chatNames.get(r.chatId) || "Чат",
+      content: r.type === "text" ? r.content.slice(0, 200) : r.type,
+      type: r.type,
+      messageCreatedAt: r.messageCreatedAt,
+      addedAt: r.addedAt,
+      doneAt: r.doneAt,
+    }));
+  }
+
   async updateUserProfile(userId: string, data: UpdateProfile): Promise<User | undefined> {
     const update: Record<string, unknown> = {};
     if (data.displayName !== undefined) update.displayName = data.displayName;
@@ -544,6 +936,7 @@ export class DbStorage implements IStorage {
     if (data.hideFromSearch !== undefined) update.hideFromSearch = data.hideFromSearch;
     if (data.bio !== undefined) update.bio = data.bio;
     if (data.coverUrl !== undefined) update.coverUrl = data.coverUrl;
+    if (data.showCover !== undefined) update.showCover = data.showCover;
     if (data.profileLink !== undefined) update.profileLink = data.profileLink;
     if (data.city !== undefined) update.city = data.city;
     if (data.status !== undefined) update.status = data.status;
@@ -551,6 +944,10 @@ export class DbStorage implements IStorage {
     if (data.profileVisibility !== undefined) update.profileVisibility = data.profileVisibility;
     if (data.showOnlineTo !== undefined) update.showOnlineTo = data.showOnlineTo;
     if (data.pushEnabled !== undefined) update.pushEnabled = data.pushEnabled;
+    if ((data as { referralLimit?: number | null }).referralLimit !== undefined) {
+      const v = (data as { referralLimit?: number | null }).referralLimit;
+      update.referralLimit = v === null || v === "" ? null : (typeof v === "number" ? v : parseInt(String(v), 10));
+    }
     if (Object.keys(update).length === 0) return this.getUser(userId);
     const [row] = await this.db.update(users).set(update).where(eq(users.id, userId)).returning();
     return row;

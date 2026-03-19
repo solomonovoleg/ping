@@ -33,34 +33,54 @@ export function GlobalSearch({
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const requestSeqRef = useRef(0);
+  const activeControllerRef = useRef<AbortController | null>(null);
 
   const runSearch = (q: string) => {
     if (!q.trim()) return;
+    requestSeqRef.current += 1;
+    const requestSeq = requestSeqRef.current;
+    activeControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
     setLoading(true);
     setSearchError(false);
-    searchUsers(q)
+    searchUsers(q, controller.signal)
       .then((list) => {
+        if (requestSeq !== requestSeqRef.current) return;
         setResults(list);
         setOpen(true);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (requestSeq !== requestSeqRef.current) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setResults([]);
         setSearchError(true);
         setOpen(true);
         toast({ title: "Ошибка поиска", variant: "destructive" });
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestSeq !== requestSeqRef.current) return;
+        setLoading(false);
+      });
   };
 
   useEffect(() => {
     if (!query.trim()) {
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = null;
       setResults([]);
       setSearchError(false);
       setOpen(false);
+      setLoading(false);
       return;
     }
     const t = setTimeout(() => runSearch(query), DEBOUNCE_MS);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = null;
+    };
   }, [query, toast]);
 
   useEffect(() => {

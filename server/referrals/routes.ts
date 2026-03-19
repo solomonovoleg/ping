@@ -3,21 +3,29 @@ import { storage } from "../storage";
 import { requireAuth, getUserId } from "../auth/session";
 import { generateReferralCode, normalizeReferralCodeInput } from "./code-generator";
 
-const REFERRAL_LIMIT = 3;
+const DEFAULT_REFERRAL_LIMIT = 3;
 const CODE_TTL_HOURS = 12;
 
+async function getReferralLimit(userId: string): Promise<number> {
+  const user = await storage.getUser(userId);
+  const limit = user?.referralLimit;
+  if (limit != null && limit >= 0) return limit;
+  return DEFAULT_REFERRAL_LIMIT;
+}
+
 export function registerReferralRoutes(app: Express): void {
-  /** Создать пригласительный код (только для авторизованных, лимит 3 приглашённых). Тело: { format?: "phrase" | "digits" } — фраза или 4 цифры. */
+  /** Создать пригласительный код (только для авторизованных). Лимит по умолчанию 3, админ может увеличить для пользователя. */
   app.post("/api/referrals/create", async (req: Request, res: Response) => {
     const userId = getUserId(req);
     if (!userId) {
       res.status(401).json({ message: "Войдите, чтобы создать приглашение" });
       return;
     }
+    const limit = await getReferralLimit(userId);
     const count = await storage.countReferralsByInviter(userId);
-    if (count >= REFERRAL_LIMIT) {
+    if (count >= limit) {
       res.status(403).json({
-        message: `Вы уже пригласили максимальное число пользователей (${REFERRAL_LIMIT}). Лимит пока не увеличиваем.`,
+        message: `Вы уже пригласили максимальное число пользователей (${limit}).`,
       });
       return;
     }
@@ -89,6 +97,7 @@ export function registerReferralRoutes(app: Express): void {
       res.status(401).json({ message: "Войдите в аккаунт" });
       return;
     }
+    const limit = await getReferralLimit(userId);
     const list = await storage.listActiveReferralCodesByInviter(userId);
     const count = await storage.countReferralsByInviter(userId);
     res.json({
@@ -98,8 +107,8 @@ export function registerReferralRoutes(app: Express): void {
         expiresAt: c.expiresAt.toISOString(),
       })),
       usedCount: count,
-      limit: REFERRAL_LIMIT,
-      remaining: Math.max(0, REFERRAL_LIMIT - count),
+      limit,
+      remaining: Math.max(0, limit - count),
     });
   });
 }

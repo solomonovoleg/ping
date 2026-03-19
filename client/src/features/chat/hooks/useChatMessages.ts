@@ -6,10 +6,11 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCallContext } from "@/contexts/CallContext";
-import { getMessages } from "@/lib/chat";
+import { getMessages, listChatFolders } from "@/lib/chat";
 import { getDraft } from "@/lib/chat-drafts";
 import { API, apiFetch } from "@/lib/api-base";
 import { isUuid } from "../utils/format";
+import { parseMessageDate } from "../utils/format";
 import { MESSAGES_PAGE, CHAT_LOAD_TIMEOUT_MS } from "../constants";
 import type { ApiChat, ApiMessage } from "../types";
 import { useChatVisibilityRefresh } from "./useChatVisibilityRefresh";
@@ -44,6 +45,8 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [typingDisplay, setTypingDisplay] = useState<string | null>(null);
   const [voiceRecordingDisplay, setVoiceRecordingDisplay] = useState<string | null>(null);
+  const [folders, setFolders] = useState<{ id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[]>([]);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -128,7 +131,11 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
           const draft = getDraft(cId) ?? "";
           onDraftRestoreRef.current?.(cId, draft);
-          apiFetch(`${API}/chats/${encodeURIComponent(cId)}/read`, { method: "PUT" }).catch(() => {});
+          apiFetch(`${API}/chats/${encodeURIComponent(cId)}/read`, { method: "PUT" })
+            .then(() => {
+              setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
+            })
+            .catch(() => {});
         })
         .catch((e) => {
           if (currentChatIdRef.current === id) {
@@ -146,13 +153,15 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const base = `${API}/chats/${encodeURIComponent(id)}`;
     Promise.all([
       apiFetch(`${base}`, { cache: "no-store" }),
-      apiFetch(`${base}/messages?limit=${MESSAGES_PAGE}`, { cache: "no-store" }),
+      apiFetch(`${base}/folders`, { cache: "no-store" }),
     ])
-      .then(async ([chatRes, messagesRes]) => {
+      .then(async ([chatRes, foldersRes]) => {
         if (currentChatIdRef.current !== id) return;
         if (!chatRes.ok) {
           setChat(null);
           setMessages([]);
+          setFolders([]);
+          setCurrentFolderId(null);
           setError(chatRes.status === 404 ? "Чат не найден" : "Не удалось загрузить чат");
           setLoading(false);
           return;
@@ -161,7 +170,32 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current !== id) return;
         setResolvedChatId(id);
         setChat(chatData);
-        apiFetch(`${base}/read`, { method: "PUT" }).catch(() => {});
+        const foldersResData = foldersRes.ok ? await foldersRes.json() : [];
+        const foldersList = Array.isArray(foldersResData)
+          ? (foldersResData as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+          : [];
+        setFolders(foldersList);
+        const mainFolder = foldersList.find((f) => f.isMain) ?? foldersList[0];
+        const folderId = mainFolder?.id ?? null;
+        setCurrentFolderId(folderId);
+        apiFetch(`${base}/read`, { method: "PUT" })
+          .then(async () => {
+            setTimeout(() => window.dispatchEvent(new CustomEvent("ping:chat-list-update")), 120);
+            if (chatData.type === "group") {
+              const foldersRes2 = await apiFetch(`${base}/folders`, { cache: "no-store" });
+              if (foldersRes2.ok && currentChatIdRef.current === id) {
+                const list2 = await foldersRes2.json();
+                const foldersList2 = Array.isArray(list2)
+                  ? (list2 as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+                  : [];
+                setFolders(foldersList2);
+              }
+            }
+          })
+          .catch(() => {});
+        const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+        if (folderId) msgParams.set("folderId", folderId);
+        const messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
         const list: ApiMessage[] = messagesRes.ok ? await messagesRes.json() : [];
         if (currentChatIdRef.current === id) {
           setMessages(Array.isArray(list) ? list : []);
@@ -187,7 +221,11 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const oldHeight = container?.scrollHeight ?? 0;
     const oldTop = container?.scrollTop ?? 0;
     try {
-      const older = await getMessages(chatId, { limit: 50, before: oldest.id });
+      const older = await getMessages(chatId, {
+        limit: 50,
+        before: oldest.id,
+        ...(currentFolderId && { folderId: currentFolderId }),
+      });
       if (currentChatIdRef.current !== chatId) return;
       setMessages((prev) => [...(older as ApiMessage[]), ...prev]);
       setHasMoreMessages(older.length >= 50);
@@ -195,7 +233,45 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     } finally {
       if (currentChatIdRef.current === chatId) setLoadingMoreMessages(false);
     }
-  }, [chatId, messages, loadingMoreMessages, hasMoreMessages]);
+  }, [chatId, currentFolderId, messages, loadingMoreMessages, hasMoreMessages]);
+
+  const refreshFolders = useCallback(async () => {
+    if (!chatId || !chat || chat.type !== "group") return;
+    try {
+      const list = await listChatFolders(chatId);
+      const foldersList = Array.isArray(list)
+        ? (list as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+        : [];
+      if (currentChatIdRef.current === chatId) setFolders(foldersList);
+    } catch {
+      // ignore
+    }
+  }, [chatId, chat?.type]);
+
+  const loadMessagesForFolder = useCallback(
+    async (folderId: string | null) => {
+      if (!chatId || !chat || chat.type !== "group") return;
+      setLoading(true);
+      setCurrentFolderId(folderId);
+      try {
+        const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+        if (folderId) msgParams.set("folderId", folderId);
+        const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?${msgParams}`, {
+          cache: "no-store",
+        });
+        const list: ApiMessage[] = res.ok ? await res.json() : [];
+        if (currentChatIdRef.current === chatId) {
+          setMessages(Array.isArray(list) ? list : []);
+          setHasMoreMessages(list.length >= MESSAGES_PAGE);
+        }
+      } catch {
+        if (currentChatIdRef.current === chatId) setError("Не удалось загрузить сообщения");
+      } finally {
+        if (currentChatIdRef.current === chatId) setLoading(false);
+      }
+    },
+    [chatId, chat]
+  );
 
   useEffect(() => {
     loadChatAndMessages();
@@ -240,14 +316,28 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     }
   }, [messages, chatId]);
 
+  const currentFolderIdRef = useRef(currentFolderId);
+  currentFolderIdRef.current = currentFolderId;
+
   useEffect(() => {
     if (!chatId || !chat) return;
     const unsub = subscribeChat(chatId, (message) => {
+      const msgFolderId = (message as ApiMessage & { folderId?: string | null }).folderId ?? null;
+      const folderId = currentFolderIdRef.current;
+      const msgInOtherFolder = chat.type === "group" && ((folderId != null && msgFolderId !== folderId) || (folderId == null && msgFolderId != null));
+      if (msgInOtherFolder) {
+        listChatFolders(chatId).then((list) => {
+          if (Array.isArray(list) && currentChatIdRef.current === chatId) {
+            setFolders(list as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[]);
+          }
+        }).catch(() => {});
+        return;
+      }
       flushSync(() => {
         setMessages((prev) => {
           const byId = new Map(prev.map((m) => [m.id, m]));
           if (message.senderId === user?.id) {
-            for (const [id, m] of byId.entries()) {
+            for (const [id, m] of Array.from(byId.entries())) {
               if (id.startsWith("temp-") && m.senderId === message.senderId) {
                 byId.delete(id);
                 break;
@@ -255,16 +345,17 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
             }
           }
           const existing = byId.get(message.id);
-          const merged = { ...message, myReaction: message.myReaction ?? existing?.myReaction ?? null };
+          const msg = message as ApiMessage & { myReaction?: string | null };
+          const merged = { ...message, myReaction: msg.myReaction ?? existing?.myReaction ?? null };
           byId.set(message.id, merged);
           return Array.from(byId.values()).sort(
-            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+            (a, b) => parseMessageDate(a.createdAt).getTime() - parseMessageDate(b.createdAt).getTime()
           );
         });
       });
     });
     return unsub;
-  }, [chatId, chat, subscribeChat, user?.id]);
+  }, [chatId, chat?.type, subscribeChat, user?.id]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -321,23 +412,34 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
 
   useEffect(() => () => { if (typingIntervalRef.current) clearInterval(typingIntervalRef.current); typingIntervalRef.current = null; }, [chatId]);
 
+  /** Обновление lastReadAt по WebSocket (chat-read) — прочитанность в реальном времени.
+   * Refetch чата с сервера, чтобы гарантированно получить актуальный lastReadAt
+   * независимо от подписки/закрытия вкладки. */
   useEffect(() => {
-    if (!chatId || !chat) return;
-    const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      apiFetch(`${API}/chats/${encodeURIComponent(chatId)}`, { cache: "no-store" })
-        .then((r) => r.ok ? r.json() : null)
-        .then((data: ApiChat | null) => { if (data) setChat(data); })
+    const handler = (e: Event) => {
+      const { chatId: evChatId } = (e as CustomEvent<{ chatId: string; lastReadAt?: string }>).detail ?? {};
+      if (!evChatId || evChatId !== chatId) return;
+      const base = `${API}/chats/${encodeURIComponent(chatId)}`;
+      apiFetch(base)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: ApiChat | null) => {
+          if (data?.id === currentChatIdRef.current) setChat(data);
+        })
         .catch(() => {});
     };
-    const id = setInterval(refresh, 30000);
-    return () => clearInterval(id);
-  }, [chatId, chat]);
+    window.addEventListener("ping:chat-read", handler);
+    return () => window.removeEventListener("ping:chat-read", handler);
+  }, [chatId]);
+
   useChatVisibilityRefresh(chatId, currentChatIdRef, setChat);
   return {
     chatId,
     chat,
     setChat,
+    folders,
+    currentFolderId,
+    loadMessagesForFolder,
+    refreshFolders,
     messages,
     setMessages,
     loading,

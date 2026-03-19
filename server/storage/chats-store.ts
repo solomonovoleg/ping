@@ -8,6 +8,8 @@ export interface ChatsStore {
   getDmBetween(userId1: string, userId2: string): Chat | undefined;
   create(data: InsertChat): Chat;
   addMember(data: InsertChatMember): ChatMember;
+  removeMember(chatId: string, userId: string): boolean;
+  update(chatId: string, data: { name?: string; avatarUrl?: string }): Chat | undefined;
   getMember(chatId: string, userId: string): ChatMember | undefined;
   getMemberIds(chatId: string): string[];
   setLastRead(chatId: string, userId: string, at: Date): void;
@@ -48,6 +50,7 @@ export function createChatsStore(): ChatsStore {
         id,
         type: data.type ?? "dm",
         name: data.name ?? null,
+        avatarUrl: null,
         createdAt: new Date(),
       };
       chats.set(id, chat);
@@ -68,6 +71,21 @@ export function createChatsStore(): ChatsStore {
       list.push(member);
       members.set(data.chatId, list);
       return member;
+    },
+    removeMember(chatId: string, userId: string) {
+      const list = members.get(chatId);
+      if (!list) return false;
+      const idx = list.findIndex((m) => m.userId === userId);
+      if (idx < 0) return false;
+      list.splice(idx, 1);
+      return true;
+    },
+    update(chatId: string, data: { name?: string; avatarUrl?: string }) {
+      const chat = chats.get(chatId);
+      if (!chat) return undefined;
+      if (data.name !== undefined) (chat as Chat).name = data.name;
+      if (data.avatarUrl !== undefined) (chat as Chat & { avatarUrl?: string }).avatarUrl = data.avatarUrl;
+      return chat;
     },
     getMember(chatId: string, userId: string) {
       return members.get(chatId)?.find((m) => m.userId === userId);

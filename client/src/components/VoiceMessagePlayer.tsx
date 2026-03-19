@@ -2,6 +2,17 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-base";
+import { TapScaleButton } from "@/components/ui/tap-scale";
+
+const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
+const SPEED_STORAGE_KEY = "ping:voice-speed";
+
+function getStoredSpeed(): number {
+  if (typeof window === "undefined") return 1;
+  const v = localStorage.getItem(SPEED_STORAGE_KEY);
+  const n = parseFloat(v ?? "1");
+  return PLAYBACK_SPEEDS.includes(n as (typeof PLAYBACK_SPEEDS)[number]) ? n : 1;
+}
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -10,13 +21,59 @@ function formatTime(seconds: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
+type BubbleColorPreset = "primary" | "slate" | "violet" | "sky";
+
+const VOICE_ME_COLORS: Record<
+  BubbleColorPreset,
+  { container: string; button: string; time: string; track: string; bar: string; thumb: string }
+> = {
+  primary: {
+    container: "bg-primary/15 dark:bg-primary/30 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    button: "bg-primary text-primary-foreground hover:bg-primary/90",
+    time: "text-primary-700 dark:text-primary-200",
+    track: "bg-primary/25 dark:bg-white/20",
+    bar: "bg-primary",
+    thumb: "bg-primary border-primary/90 dark:border-primary-foreground/30",
+  },
+  slate: {
+    container: "bg-slate-200/90 dark:bg-slate-700/90 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    button: "bg-slate-600 text-white hover:bg-slate-700 dark:bg-slate-500 dark:hover:bg-slate-400",
+    time: "text-slate-700 dark:text-slate-300",
+    track: "bg-slate-400/25 dark:bg-white/20",
+    bar: "bg-slate-600 dark:bg-slate-500",
+    thumb: "bg-slate-600 border-slate-700/50 dark:bg-slate-500 dark:border-slate-400/50",
+  },
+  violet: {
+    container: "bg-violet-200/90 dark:bg-violet-900/50 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    button: "bg-violet-600 text-white hover:bg-violet-700 dark:bg-violet-500 dark:hover:bg-violet-400",
+    time: "text-violet-700 dark:text-violet-200",
+    track: "bg-violet-500/25 dark:bg-white/20",
+    bar: "bg-violet-600 dark:bg-violet-500",
+    thumb: "bg-violet-600 border-violet-700/50 dark:bg-violet-500 dark:border-violet-400/50",
+  },
+  sky: {
+    container: "bg-sky-200/90 dark:bg-sky-900/50 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+    button: "bg-sky-600 text-white hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-400",
+    time: "text-sky-700 dark:text-sky-200",
+    track: "bg-sky-500/25 dark:bg-white/20",
+    bar: "bg-sky-600 dark:bg-sky-500",
+    thumb: "bg-sky-600 border-sky-700/50 dark:bg-sky-500 dark:border-sky-400/50",
+  },
+};
+
 type Props = {
   src: string;
   isMe?: boolean;
+  bubbleColorPreset?: BubbleColorPreset;
+  transcript?: string | null;
   className?: string;
+  /** Вызывается при завершении воспроизведения (для «слушать следующее») */
+  onEnded?: () => void;
+  /** Автозапуск воспроизведения (например, при переходе с предыдущего голосового) */
+  autoPlay?: boolean;
 };
 
-export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
+export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "primary", transcript, className, onEnded: onEndedProp, autoPlay }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const blobUrlRef = useRef<string | null>(null);
   const hasSetSrcRef = useRef(false);
@@ -27,6 +84,10 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
   const [duration, setDuration] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [speed, setSpeed] = useState(getStoredSpeed);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const onEndedPropRef = useRef(onEndedProp);
+  onEndedPropRef.current = onEndedProp;
 
   useEffect(() => {
     setLoadError(false);
@@ -50,6 +111,7 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
     const onEnded = () => {
       setPlaying(false);
       setCurrentTime(0);
+      onEndedPropRef.current?.();
     };
     const tryBlobFallback = async () => {
       if (!src || blobFallbackTriedRef.current || blobFallbackLoadingRef.current) {
@@ -124,11 +186,42 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
     }
     const ok = await setAudioSrc();
     if (!ok) return;
+    el.playbackRate = speed;
     el.play().catch(() => setLoadError(true));
     setPlaying(true);
-  }, [playing, setAudioSrc]);
+  }, [playing, setAudioSrc, speed]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el) el.playbackRate = speed;
+  }, [speed]);
+
+  /** Автозапуск при переходе с предыдущего голосового («слушать следующее») */
+  useEffect(() => {
+    if (!autoPlay || playing) return;
+    const start = async () => {
+      const ok = await setAudioSrc();
+      if (!ok) return;
+      const el = audioRef.current;
+      if (!el) return;
+      el.playbackRate = speed;
+      el.play().catch(() => setLoadError(true));
+      setPlaying(true);
+    };
+    void start();
+  }, [autoPlay, playing, setAudioSrc, speed]);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const cycleSpeed = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const idx = PLAYBACK_SPEEDS.indexOf(speed as (typeof PLAYBACK_SPEEDS)[number]);
+    const next = PLAYBACK_SPEEDS[(idx + 1) % PLAYBACK_SPEEDS.length];
+    setSpeed(next);
+    try {
+      localStorage.setItem(SPEED_STORAGE_KEY, String(next));
+    } catch {}
+  }, [speed]);
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = audioRef.current;
@@ -140,12 +233,14 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
     setCurrentTime(el.currentTime);
   };
 
+  const meColors = isMe ? VOICE_ME_COLORS[bubbleColorPreset] : null;
+
   if (loadError) {
     return (
       <div
         className={cn(
-          "rounded-lg px-2 py-1.5 min-h-[32px] flex items-center gap-1.5 text-muted-foreground text-[11px]",
-          isMe ? "bg-white/15" : "bg-muted/70 border border-border/50",
+          "rounded-xl px-3 py-2 min-h-[40px] flex items-center gap-2 text-muted-foreground text-[12px]",
+          isMe && meColors ? meColors.container : !isMe ? "bg-muted/70 border border-border/50" : "bg-white/15",
           className
         )}
       >
@@ -157,34 +252,31 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
   return (
     <div
       className={cn(
-        "inline-flex flex-col min-w-[100px] max-w-[220px] w-fit",
+        // Делаем голосовые визуально сопоставимыми с телеграм-стилем: не «узкие таблетки».
+        "inline-flex flex-col w-[clamp(170px,58vw,260px)] max-w-[72vw]",
         className
       )}
     >
       <audio ref={audioRef} preload="none" playsInline />
       <div
         className={cn(
-          "flex items-center gap-1.5 rounded-lg px-2 py-1.5 min-h-[32px]",
-          isMe
-            ? "bg-[#E7FCE0] dark:bg-[#1D3B1D] shadow-[0_1px_1px_rgba(0,0,0,0.06)]"
-            : "bg-muted/70 border border-border/50 shadow-sm"
+          "flex items-center gap-2 rounded-xl px-2.5 py-2 min-h-[42px]",
+          isMe && meColors ? meColors.container : !isMe ? "bg-muted/70 border border-border/50 shadow-sm" : ""
         )}
       >
         <button
           type="button"
           onClick={togglePlay}
           className={cn(
-            "flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-transform active:scale-95",
-            isMe
-              ? "bg-[#2E7D32] text-white hover:bg-[#1B5E20] dark:bg-[#4CAF50] dark:hover:bg-[#66BB6A]"
-              : "bg-primary text-primary-foreground hover:bg-primary/90"
+            "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-transform active:scale-95",
+            isMe && meColors ? meColors.button : "bg-primary text-primary-foreground hover:bg-primary/90"
           )}
           aria-label={playing ? "Пауза" : "Воспроизвести"}
         >
           {playing ? (
-            <Pause className="w-3 h-3 fill-current" />
+            <Pause className="w-4 h-4 fill-current" />
           ) : (
-            <Play className="w-3 h-3 fill-current ml-0.5" />
+            <Play className="w-4 h-4 fill-current ml-0.5" />
           )}
         </button>
         <div className="flex-1 min-w-0">
@@ -198,45 +290,67 @@ export function VoiceMessagePlayer({ src, isMe = true, className }: Props) {
           >
             <span
               className={cn(
-                "text-[10px] font-medium tabular-nums flex-shrink-0 w-6",
-                isMe ? "text-[#2E7D32] dark:text-[#A5D6A7]" : "text-foreground/90"
+                "text-[12px] font-medium tabular-nums flex-shrink-0 w-9",
+                isMe && meColors ? meColors.time : "text-foreground/90"
               )}
             >
               {formatTime(currentTime)}
             </span>
-            <div className="flex-1 relative h-0.5 rounded-full overflow-visible min-w-[40px]">
+            <div className="flex-1 relative h-1 rounded-full overflow-visible min-w-[58px]">
               <div
                 className={cn(
                   "absolute inset-0 rounded-full",
-                  isMe ? "bg-[#2E7D32]/25 dark:bg-white/20" : "bg-muted-foreground/20"
+                  isMe && meColors ? meColors.track : "bg-muted-foreground/20"
                 )}
               />
               <div
                 className={cn(
                   "absolute left-0 top-0 h-full rounded-full transition-[width] duration-75",
-                  isMe ? "bg-[#2E7D32] dark:bg-[#81C784]" : "bg-primary"
+                  isMe && meColors ? meColors.bar : "bg-primary"
                 )}
                 style={{ width: `${progress}%` }}
               />
               <div
                 className={cn(
-                  "absolute top-1/2 left-0 w-1.5 h-1.5 rounded-full border border-current transition-[left] duration-75 -translate-y-1/2 -translate-x-1/2",
-                  isMe ? "bg-[#2E7D32] border-[#1B5E20]/50 dark:bg-[#81C784] dark:border-[#4CAF50]/50" : "bg-primary border-primary-foreground/30"
+                  "absolute top-1/2 left-0 w-2.5 h-2.5 rounded-full border border-current transition-[left] duration-75 -translate-y-1/2 -translate-x-1/2",
+                  isMe && meColors ? meColors.thumb : "bg-primary border-primary-foreground/30"
                 )}
                 style={{ left: `${progress}%` }}
               />
             </div>
-            <span
+            <TapScaleButton
+              type="button"
+              onClick={cycleSpeed}
               className={cn(
-                "text-[10px] font-medium tabular-nums flex-shrink-0 w-6 text-right",
-                isMe ? "text-[#2E7D32] dark:text-[#A5D6A7]" : "text-muted-foreground"
+                "text-[12px] font-medium tabular-nums flex-shrink-0 text-right min-w-[2.25rem]",
+                isMe && meColors ? meColors.time : "text-muted-foreground"
               )}
+              title={`Скорость: ${speed}x. Тап — смена`}
+              aria-label={`Скорость воспроизведения ${speed}x`}
             >
               {loaded && Number.isFinite(duration) ? formatTime(duration) : "0:00"}
-            </span>
+              {speed !== 1 && <span className="ml-0.5 opacity-70 text-[10px]">·{speed}x</span>}
+            </TapScaleButton>
           </div>
         </div>
       </div>
+      {transcript?.trim() && (
+        <div className="mt-1">
+          <button
+            type="button"
+            onClick={() => setTranscriptOpen((prev) => !prev)}
+            className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+            aria-expanded={transcriptOpen}
+          >
+            {transcriptOpen ? "Скрыть текст" : "Показать текст"}
+          </button>
+          {transcriptOpen && (
+            <p className="mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
+              {transcript.trim()}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

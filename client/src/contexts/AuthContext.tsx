@@ -40,7 +40,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return u ?? null;
     } catch {
       setUser((prev) => (prev ? prev : null));
-      setAuthToken(null);
       return null;
     } finally {
       if (isInitialLoad) {

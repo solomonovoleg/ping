@@ -23,7 +23,9 @@ import { registerCoverUploadRoutes } from "./upload/cover";
 import { registerCallRoutes } from "./calls/routes";
 import { attachCallWebSocket } from "./calls/ws";
 import { registerSavedMessagesRoutes } from "./saved-messages/routes";
+import { registerTracksRoutes } from "./tracks/routes";
 import { registerAiChatRoutes } from "./ai-chat/routes";
+import { registerSpellcheckRoutes } from "./spellcheck/routes";
 import { ensureUserColumns } from "./db";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -80,7 +82,9 @@ export async function registerRoutes(
   registerChatsRoutes(app);
   registerMessagesRoutes(app);
   registerAiChatRoutes(app);
+  registerSpellcheckRoutes(app);
   registerSavedMessagesRoutes(app);
+  registerTracksRoutes(app);
   registerVoiceUploadRoutes(app);
   registerPostMediaUploadRoutes(app);
   registerChatMediaUploadRoutes(app);

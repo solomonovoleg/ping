@@ -4,16 +4,18 @@
  * - square — квадрат (1:1);
  * - story — вертикальное сториз (9:16 и уже).
  *
- * Пороговая логика: по соотношению сторон (width/height) без привязки к «ближайшему» канону,
- * чтобы горизонтальные фото не уезжали в сториз.
+ * Логика выбора: по ближайшему каноническому ratio.
+ * Каноны:
+ * - story: 9/16
+ * - square: 1/1
+ * - horizontal: 16/9
  */
 
 export type MediaDisplayFormat = "horizontal" | "square" | "story";
 
-/** Ниже этого ratio считаем сториз (вертикаль). */
-const RATIO_STORY_MAX = 0.85;
-/** Выше этого ratio считаем горизонталь. */
-const RATIO_HORIZONTAL_MIN = 1.15;
+const STORY_RATIO = 9 / 16;
+const SQUARE_RATIO = 1;
+const HORIZONTAL_RATIO = 16 / 9;
 
 /**
  * Возвращает формат по соотношению сторон (width/height).
@@ -24,10 +26,15 @@ export function getMediaDisplayFormat(width: number, height: number): MediaDispl
     return "square";
   }
   const ratio = width / height;
+  const distance = (target: number) => Math.abs(Math.log(ratio) - Math.log(target));
 
-  if (ratio <= RATIO_STORY_MAX) return "story";
-  if (ratio >= RATIO_HORIZONTAL_MIN) return "horizontal";
-  return "square";
+  const distances: Array<{ format: MediaDisplayFormat; d: number }> = [
+    { format: "story", d: distance(STORY_RATIO) },
+    { format: "square", d: distance(SQUARE_RATIO) },
+    { format: "horizontal", d: distance(HORIZONTAL_RATIO) },
+  ];
+  distances.sort((a, b) => a.d - b.d);
+  return distances[0]?.format ?? "square";
 }
 
 /**

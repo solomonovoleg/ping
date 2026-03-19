@@ -84,8 +84,12 @@ export function createUsersStore(): UsersStore {
       if (data.hideFromSearch !== undefined) (user as User).hideFromSearch = data.hideFromSearch;
       if (data.bio !== undefined) (user as User).bio = data.bio;
       if (data.coverUrl !== undefined) (user as User).coverUrl = data.coverUrl;
+      if (data.showCover !== undefined) (user as User).showCover = data.showCover;
       if (data.profileLink !== undefined) (user as User).profileLink = data.profileLink;
       if (data.pushEnabled !== undefined) (user as User).pushEnabled = data.pushEnabled;
+      if ((data as { referralLimit?: number | null }).referralLimit !== undefined) {
+        (user as User).referralLimit = (data as { referralLimit?: number | null }).referralLimit;
+      }
     },
     getAdminStats() {
       const all = Array.from(users.values());
