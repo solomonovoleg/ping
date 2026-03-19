@@ -13,6 +13,7 @@ import {
   unsavePost,
   updateOwnPost,
 } from "./service";
+import { isPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
 
 export function registerPostsRoutes(app: Express): void {
   /** Создать пост (текст и опционально одно или несколько фото/видео). */
@@ -24,6 +25,8 @@ export function registerPostsRoutes(app: Express): void {
     const mediaUrls = Array.isArray(mediaUrlsRaw)
       ? (mediaUrlsRaw as unknown[]).filter((u): u is string => typeof u === "string" && u.trim() !== "").map((u) => u.trim()).slice(0, 10)
       : null;
+    const mediaLayoutRaw = req.body?.mediaLayout;
+    const mediaLayout: PostMediaLayout | null = isPostMediaLayout(mediaLayoutRaw) ? mediaLayoutRaw : null;
     const firstUrl = mediaUrls?.length ? mediaUrls[0] : imageUrl;
     const isDraft = req.body?.isDraft === true;
     const visibility = typeof req.body?.visibility === "string" && (req.body.visibility === "public" || req.body.visibility === "followers")
@@ -40,6 +43,7 @@ export function registerPostsRoutes(app: Express): void {
         text,
         imageUrl: firstUrl ?? null,
         mediaUrls: mediaUrls ?? (imageUrl ? [imageUrl] : null),
+        mediaLayout,
         isDraft: !!isDraft,
         visibility,
       });
@@ -159,6 +163,8 @@ export function registerPostsRoutes(app: Express): void {
     const mediaUrls = Array.isArray(mediaUrlsRaw)
       ? (mediaUrlsRaw as unknown[]).filter((u): u is string => typeof u === "string" && u.trim() !== "").map((u) => u.trim()).slice(0, 10)
       : undefined;
+    const mediaLayoutRaw = req.body?.mediaLayout;
+    const mediaLayout = mediaLayoutRaw === null ? null : isPostMediaLayout(mediaLayoutRaw) ? mediaLayoutRaw : undefined;
     if (!postId) {
       res.status(400).json({ message: "postId required" });
       return;
@@ -172,6 +178,7 @@ export function registerPostsRoutes(app: Express): void {
         text,
         imageUrl,
         mediaUrls,
+        mediaLayout,
         isDraft: typeof isDraft === "boolean" ? isDraft : undefined,
         visibility: visibility === "public" || visibility === "followers" ? visibility : undefined,
       });

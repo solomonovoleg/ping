@@ -23,7 +23,7 @@ async function callYandexSpeller(text: string): Promise<SpellError[]> {
   const truncated = text.slice(0, MAX_TEXT_LENGTH);
   const params = new URLSearchParams({
     text: truncated,
-    lang: "ru,en",
+    lang: "ru",
     options: "0",
   });
   const controller = new AbortController();

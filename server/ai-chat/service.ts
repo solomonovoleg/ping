@@ -7,8 +7,8 @@ import {
 } from "./repository";
 import { toAiMessageDto, type AiMessageDto } from "./serializers";
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "openai/gpt-3.5-turbo";
+import { callOpenRouter as callOpenRouterShared } from "../lib/openrouter";
+
 const CONTEXT_MESSAGES_COUNT = 10;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -142,28 +142,7 @@ async function buildScopedChatSearchReply(userId: string, content: string): Prom
 }
 
 async function callOpenRouter(messages: { role: "user" | "assistant" | "system"; content: string }[]): Promise<string> {
-  const key = process.env.OPENROUTER_API_KEY?.trim();
-  if (!key) throw new Error("OPENROUTER_API_KEY is not set");
-  const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_MODEL;
-  const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      max_tokens: 2048,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OpenRouter: ${res.status} ${errText}`);
-  }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = data.choices?.[0]?.message?.content ?? "";
-  return content;
+  return callOpenRouterShared(messages);
 }
 
 function buildCapabilityHelpReply(userInput: string): string {

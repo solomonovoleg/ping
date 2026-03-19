@@ -1,5 +1,6 @@
+import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
 import { storage } from "../storage";
-import { notifyNewMessage } from "../realtime/chat";
+import { notifyNewMessage, notifyMessageDeleted, notifyMessageEdited } from "../realtime/chat";
 import { notifyChatListUpdate } from "../calls/ws";
 import { sendPushToUser } from "../push/send";
 import { enrichMessagesWithReply } from "./reply";
@@ -17,12 +18,16 @@ export class MessagesServiceError extends Error {
   }
 }
 
-function normalizeMessageType(type: unknown): "system" | "voice" | "image" | "video" | "video_note" | "text" {
+function normalizeMessageType(
+  type: unknown
+): "system" | "voice" | "image" | "video" | "video_note" | "text" | "post_share" | "story_reply" {
   if (type === "system") return "system";
   if (type === "voice") return "voice";
   if (type === "image") return "image";
   if (type === "video") return "video";
   if (type === "video_note") return "video_note";
+  if (type === "post_share") return "post_share";
+  if (type === "story_reply") return "story_reply";
   return "text";
 }
 
@@ -49,7 +54,10 @@ export async function listChatMessages(
     resolvedFolderId = mainFolder.id;
   }
   const raw = await storage.getMessagesByChatId(chatId, limit, beforeMessageId, resolvedFolderId);
-  const withReply = await enrichMessagesWithReply(raw, (c, m) => storage.getMessage(c, m));
+  const hiddenIds = await storage.getHiddenMessageIdsForUserInChat(userId, chatId);
+  const hiddenSet = new Set(hiddenIds);
+  const filtered = raw.filter((m) => !hiddenSet.has(m.id));
+  const withReply = await enrichMessagesWithReply(filtered, (c, m) => storage.getMessage(c, m));
   const msgIds = withReply.map((m) => m.id);
   const reactionMap = process.env.DATABASE_URL
     ? await getReactionsForMessageIds(msgIds)
@@ -156,6 +164,10 @@ export async function sendChatMessage(input: SendMessageInput) {
   };
   notifyNewMessage(chatId, payload);
 
+  if (chat?.type === "dm") {
+    import("../vibe/state-engine").then((m) => m.processNewMessage(chatId)).catch(() => {});
+  }
+
   for (const memberId of memberIds) {
     notifyChatListUpdate(memberId);
   }
@@ -220,7 +232,12 @@ export async function createScheduledMessage(input: CreateScheduledInput) {
   };
 }
 
-export async function deleteOwnMessage(userId: string, chatId: string, messageId: string) {
+export async function deleteOwnMessage(
+  userId: string,
+  chatId: string,
+  messageId: string,
+  forEveryone?: boolean,
+) {
   const msg = await storage.getMessage(chatId, messageId);
   if (!msg) {
     throw new MessagesServiceError(404, "Сообщение не найдено");
@@ -228,9 +245,16 @@ export async function deleteOwnMessage(userId: string, chatId: string, messageId
   if (msg.senderId !== userId) {
     throw new MessagesServiceError(403, "Можно удалить только своё сообщение");
   }
-  const deleted = await storage.deleteMessage(chatId, messageId);
-  if (!deleted) {
-    throw new MessagesServiceError(500, "Не удалось удалить");
+  const createdAt = msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt);
+  const ageMinutes = (Date.now() - createdAt.getTime()) / 60_000;
+  if (forEveryone && ageMinutes <= DELETE_FOR_EVERYONE_MINUTES) {
+    const deleted = await storage.deleteMessage(chatId, messageId);
+    if (!deleted) {
+      throw new MessagesServiceError(500, "Не удалось удалить");
+    }
+    notifyMessageDeleted(chatId, messageId);
+  } else {
+    await storage.addMessageHidden(userId, chatId, messageId);
   }
 }
 
@@ -306,5 +330,6 @@ export async function editOwnTextMessage(
   if (!updated) {
     throw new MessagesServiceError(500, "Не удалось обновить");
   }
+  notifyMessageEdited(chatId, updated.id, updated.content);
   return updated;
 }

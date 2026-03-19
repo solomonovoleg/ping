@@ -87,8 +87,10 @@ export function registerMessagesRoutes(app: Express): void {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "chatId");
     const messageId = param(req.params, "messageId");
+    const forParam = typeof req.query.for === "string" ? req.query.for : undefined;
+    const forEveryone = forParam === "everyone";
     try {
-      await deleteOwnMessage(userId, chatId, messageId);
+      await deleteOwnMessage(userId, chatId, messageId, forEveryone);
       res.status(204).end();
     } catch (error) {
       if (error instanceof MessagesServiceError) {

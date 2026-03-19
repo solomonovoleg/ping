@@ -22,6 +22,7 @@ export class ChatsServiceError extends Error {
 function formatLastMessagePreview(msg: { type: string; content: string }): string {
   if (msg.type === "missed_call") return "Пропущенный звонок";
   if (msg.type === "post_share") return "Пересланный пост";
+  if (msg.type === "story_reply") return "Ответ на сториз";
   if (msg.type === "voice") return "Голосовое сообщение";
   if (msg.type === "image") return "Фото";
   if (msg.type === "video") return "Видео";
@@ -144,8 +145,7 @@ export async function listChatsForUser(userId: string) {
           createdAt: lastMsg.createdAt instanceof Date ? lastMsg.createdAt.toISOString() : String(lastMsg.createdAt),
         }
       : null;
-    const lastMsgTime = lastMessage ? new Date(lastMessage.createdAt).getTime() : 0;
-    const hasUnread = !!lastMessage && (myLastReadAt == null || lastMsgTime > myLastReadAt.getTime());
+    const hasUnread = unreadCount > 0;
     if (chat.type === "dm" && !chat.name) {
       const memberIds = await storage.getChatMemberIds(chat.id);
       const otherId = memberIds.find((id) => id !== userId);
@@ -270,12 +270,13 @@ export async function getChatByIdForUser(userId: string, chatId: string) {
   return chat;
 }
 
-export async function markChatRead(chatId: string, userId: string): Promise<void> {
+export async function markChatRead(chatId: string, userId: string, messageId?: string): Promise<void> {
   const chat = await storage.getChatById(chatId);
   if (!chat) {
     throw new ChatsServiceError(404, "Chat not found");
   }
-  await storage.updateLastRead(chatId, userId);
+  if (!messageId) return;
+  await storage.updateLastReadByMessageId(chatId, userId, messageId);
   const lastReadAt = await storage.getChatMemberLastReadAt(chatId, userId);
   if (lastReadAt) {
     notifyChatRead(chatId, userId, lastReadAt.toISOString());

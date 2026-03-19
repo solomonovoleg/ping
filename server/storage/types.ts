@@ -10,7 +10,11 @@ import type {
   InsertMessage,
   ChatFolder,
   InsertChatFolder,
+  ChatVibeState,
+  ChatVibeBatch,
+  ChatVibeHistoryEntry,
 } from "@shared/schema";
+import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -84,7 +88,9 @@ export interface IStorage {
   addChatMember(data: InsertChatMember): Promise<ChatMember>;
   removeChatMember(chatId: string, userId: string): Promise<boolean>;
   updateChat(chatId: string, data: { name?: string; avatarUrl?: string }): Promise<Chat | undefined>;
-  updateLastRead(chatId: string, userId: string): Promise<void>;
+  updateLastRead(chatId: string, userId: string, readUpTo?: Date): Promise<void>;
+  /** Обновить lastReadAt напрямую из messages.created_at (сохраняет микросекундную точность PostgreSQL). */
+  updateLastReadByMessageId(chatId: string, userId: string, messageId: string): Promise<void>;
   getChatMemberLastReadAt(chatId: string, userId: string): Promise<Date | null>;
   getUnreadCount(chatId: string, userId: string): Promise<number>;
   /** Непрочитанные в папке: folderId=null для основной папки (сообщения без folderId). */
@@ -102,6 +108,11 @@ export interface IStorage {
   getMessage(chatId: string, messageId: string): Promise<Message | undefined>;
   deleteMessage(chatId: string, messageId: string): Promise<boolean>;
   updateMessage(chatId: string, messageId: string, content: string): Promise<Message | undefined>;
+
+  /** «Удалено для себя»: скрыть сообщение для пользователя. */
+  addMessageHidden(userId: string, chatId: string, messageId: string): Promise<void>;
+  /** ID сообщений, скрытых пользователем в чате. */
+  getHiddenMessageIdsForUserInChat(userId: string, chatId: string): Promise<string[]>;
 
   /** Отложенная отправка: создать запись, получить просроченные, удалить. */
   createScheduledMessage(data: {
@@ -178,4 +189,35 @@ export interface IStorage {
       doneAt: Date | null;
     }[]
   >;
+
+  /** Chat Vibe: текущее состояние вайба DM-чата */
+  getVibeState(chatId: string): Promise<ChatVibeState | undefined>;
+  upsertVibeState(
+    chatId: string,
+    data: {
+      theme: VibeThemeCode;
+      confidence: number;
+      axes: VibeAxes;
+      messageCounter: number;
+      themeVersion?: number;
+    }
+  ): Promise<ChatVibeState>;
+  createVibeBatch(data: {
+    chatId: string;
+    windowSize: number;
+    dominantPattern: VibeThemeCode;
+    secondaryPattern?: VibeThemeCode;
+    confidence: number;
+    axes: VibeAxes;
+    toxicityFlag?: boolean;
+  }): Promise<ChatVibeBatch>;
+  getRecentVibeBatches(chatId: string, limit: number): Promise<ChatVibeBatch[]>;
+  createVibeHistoryEntry(data: {
+    chatId: string;
+    oldTheme: string;
+    newTheme: string;
+    oldConfidence: number;
+    newConfidence: number;
+    triggerType: string;
+  }): Promise<ChatVibeHistoryEntry>;
 }

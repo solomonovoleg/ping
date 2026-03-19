@@ -58,6 +58,7 @@ export function createMessagesStore(): MessagesStore {
         : d.type === "video_note" ? "video_note"
         : d.type === "missed_call" ? "missed_call"
         : d.type === "post_share" ? "post_share"
+        : d.type === "story_reply" ? "story_reply"
         : "text";
       const message: Message = {
         id,

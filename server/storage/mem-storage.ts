@@ -1,5 +1,6 @@
 import type { IStorage } from "./types";
-import type { ChatFolder } from "@shared/schema";
+import type { ChatFolder, ChatVibeState, ChatVibeBatch, ChatVibeHistoryEntry } from "@shared/schema";
+import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { createUsersStore } from "./users-store";
 import { createChatsStore } from "./chats-store";
 import { createMessagesStore } from "./messages-store";
@@ -17,6 +18,9 @@ const followsMap = new Map<string, Set<string>>();
 
 /** In-memory blocks: blockerId -> Set of blockedId */
 const blocksMap = new Map<string, Set<string>>();
+
+/** «Удалено для себя»: key = `${userId}:${chatId}` -> Set<messageId> */
+const messageHiddenMap = new Map<string, Set<string>>();
 
 export class MemStorage implements IStorage {
   private users = createUsersStore();
@@ -427,6 +431,22 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.messages.update(chatId, messageId, content));
   }
 
+  async addMessageHidden(userId: string, chatId: string, messageId: string): Promise<void> {
+    const key = `${userId}:${chatId}`;
+    let set = messageHiddenMap.get(key);
+    if (!set) {
+      set = new Set();
+      messageHiddenMap.set(key, set);
+    }
+    set.add(messageId);
+  }
+
+  async getHiddenMessageIdsForUserInChat(userId: string, chatId: string): Promise<string[]> {
+    const key = `${userId}:${chatId}`;
+    const set = messageHiddenMap.get(key);
+    return Promise.resolve(set ? Array.from(set) : []);
+  }
+
   async createScheduledMessage(data: {
     chatId: string;
     folderId?: string | null;
@@ -450,8 +470,19 @@ export class MemStorage implements IStorage {
     return Promise.resolve(true);
   }
 
-  async updateLastRead(chatId: string, userId: string): Promise<void> {
-    this.chats.setLastRead(chatId, userId, new Date());
+  async updateLastRead(chatId: string, userId: string, readUpTo?: Date): Promise<void> {
+    if (!readUpTo) return;
+    const newAt = readUpTo;
+    const current = await this.getChatMemberLastReadAt(chatId, userId);
+    const at = !current || newAt > current ? newAt : current;
+    this.chats.setLastRead(chatId, userId, at instanceof Date ? at : new Date(at));
+  }
+
+  async updateLastReadByMessageId(chatId: string, userId: string, messageId: string): Promise<void> {
+    const msg = await this.getMessage(chatId, messageId);
+    if (msg?.createdAt) {
+      await this.updateLastRead(chatId, userId, msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt));
+    }
   }
 
   async getChatMemberLastReadAt(chatId: string, userId: string): Promise<Date | null> {
@@ -561,5 +592,81 @@ export class MemStorage implements IStorage {
     }[]
   > {
     return [];
+  }
+
+  // ── Chat Vibe (in-memory stubs) ───────────────────────────
+
+  private vibeStates = new Map<string, ChatVibeState>();
+
+  async getVibeState(chatId: string): Promise<ChatVibeState | undefined> {
+    return this.vibeStates.get(chatId);
+  }
+
+  async upsertVibeState(
+    chatId: string,
+    data: { theme: VibeThemeCode; confidence: number; axes: VibeAxes; messageCounter: number; themeVersion?: number }
+  ): Promise<ChatVibeState> {
+    const now = new Date();
+    const existing = this.vibeStates.get(chatId);
+    const row: ChatVibeState = {
+      id: existing?.id ?? crypto.randomUUID(),
+      chatId,
+      theme: data.theme,
+      confidence: String(data.confidence),
+      warmth: data.axes.warmth,
+      tension: data.axes.tension,
+      playfulness: data.axes.playfulness,
+      intimacy: data.axes.intimacy,
+      formality: data.axes.formality,
+      energy: data.axes.energy,
+      messageCounter: data.messageCounter,
+      themeVersion: data.themeVersion ?? (existing?.themeVersion ?? 1),
+      lastBatchAt: now,
+      updatedAt: now,
+    };
+    this.vibeStates.set(chatId, row);
+    return row;
+  }
+
+  async createVibeBatch(data: {
+    chatId: string; windowSize: number; dominantPattern: VibeThemeCode;
+    secondaryPattern?: VibeThemeCode; confidence: number; axes: VibeAxes; toxicityFlag?: boolean;
+  }): Promise<ChatVibeBatch> {
+    return {
+      id: crypto.randomUUID(),
+      chatId: data.chatId,
+      windowSize: data.windowSize,
+      dominantPattern: data.dominantPattern,
+      secondaryPattern: data.secondaryPattern ?? null,
+      confidence: String(data.confidence),
+      warmth: data.axes.warmth,
+      tension: data.axes.tension,
+      playfulness: data.axes.playfulness,
+      intimacy: data.axes.intimacy,
+      formality: data.axes.formality,
+      energy: data.axes.energy,
+      toxicityFlag: data.toxicityFlag ?? false,
+      createdAt: new Date(),
+    };
+  }
+
+  async getRecentVibeBatches(_chatId: string, _limit: number): Promise<ChatVibeBatch[]> {
+    return [];
+  }
+
+  async createVibeHistoryEntry(data: {
+    chatId: string; oldTheme: string; newTheme: string;
+    oldConfidence: number; newConfidence: number; triggerType: string;
+  }): Promise<ChatVibeHistoryEntry> {
+    return {
+      id: crypto.randomUUID(),
+      chatId: data.chatId,
+      oldTheme: data.oldTheme,
+      newTheme: data.newTheme,
+      oldConfidence: String(data.oldConfidence),
+      newConfidence: String(data.newConfidence),
+      triggerType: data.triggerType,
+      createdAt: new Date(),
+    };
   }
 }

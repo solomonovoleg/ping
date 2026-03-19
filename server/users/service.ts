@@ -165,7 +165,26 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
   const current = await storage.getUser(userId);
   if (!current) throw new UsersServiceError(404, "User not found");
 
-  const { displayName, surname, gender, birthDate, avatarUrl, hideFromSearch, bio, coverUrl, showCover, profileLink, city, status, pinnedPostId, profileVisibility, showOnlineTo, pushEnabled } = body ?? {};
+  const {
+    displayName,
+    surname,
+    gender,
+    birthDate,
+    avatarUrl,
+    hideFromSearch,
+    bio,
+    coverUrl,
+    showCover,
+    profileLink,
+    city,
+    status,
+    pinnedPostId,
+    profileVisibility,
+    showOnlineTo,
+    pushEnabled,
+    vibeEnabled,
+    vibeShareWithPartner,
+  } = body ?? {};
   let name = typeof displayName === "string" ? displayName.trim() : (current.displayName ?? "");
   let fam = typeof surname === "string" ? surname.trim() : (current.surname ?? "");
   name = name.slice(0, NAME_MAX_LENGTH);
@@ -198,6 +217,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ...(profileVisibility === "all" || profileVisibility === "followers" ? { profileVisibility } : {}),
     ...(showOnlineTo === "all" || showOnlineTo === "followers" ? { showOnlineTo } : {}),
     ...(typeof pushEnabled === "boolean" && { pushEnabled }),
+    ...(typeof vibeEnabled === "boolean" && { vibeEnabled }),
+    ...(typeof vibeShareWithPartner === "boolean" && { vibeShareWithPartner }),
   });
   if (!user) throw new UsersServiceError(404, "User not found");
 
@@ -221,6 +242,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     profileVisibility: (user as { profileVisibility?: string }).profileVisibility ?? "all",
     showOnlineTo: (user as { showOnlineTo?: string }).showOnlineTo ?? "all",
     pushEnabled: (user as { pushEnabled?: boolean }).pushEnabled !== false,
+    vibeEnabled: (user as { vibeEnabled?: boolean }).vibeEnabled === true,
+    vibeShareWithPartner: (user as { vibeShareWithPartner?: boolean }).vibeShareWithPartner === true,
   };
 }
 
@@ -232,7 +255,7 @@ export async function getProfilePage(viewerId: string, idParam: string, postsLim
   const [profile, profilePosts, profileStories] = await Promise.all([
     buildProfileForViewer(viewerId, target),
     getAuthorWall(viewerId, target.id, postsLimit),
-    getStoriesByAuthorId(target.id),
+    getStoriesByAuthorId(target.id, viewerId),
   ]);
   return { profile, posts: profilePosts, stories: profileStories };
 }

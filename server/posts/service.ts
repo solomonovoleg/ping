@@ -5,6 +5,7 @@ import { notifyChatListUpdate } from "../calls/ws";
 import { storage } from "../storage";
 import { extractHashtags, postComments, postReactions, postShares, postViews, posts, savedPosts, users } from "@shared/schema";
 import { getFeedAlgoConfig } from "../feed/config";
+import type { PostMediaLayout } from "@shared/post-media-layout";
 
 export class PostsServiceError extends Error {
   status: number;
@@ -19,12 +20,13 @@ type CreatePostInput = {
   text: string;
   imageUrl: string | null;
   mediaUrls: string[] | null;
+  mediaLayout: PostMediaLayout | null;
   isDraft: boolean;
   visibility: "public" | "followers";
 };
 
 export async function createPost(input: CreatePostInput) {
-  const { userId, text, imageUrl, mediaUrls, isDraft, visibility } = input;
+  const { userId, text, imageUrl, mediaUrls, mediaLayout, isDraft, visibility } = input;
   const firstUrl = mediaUrls?.length ? mediaUrls[0] : imageUrl;
   const hashtags = extractHashtags(text);
   const db = getDb();
@@ -35,6 +37,7 @@ export async function createPost(input: CreatePostInput) {
       text,
       imageUrl: firstUrl ?? null,
       mediaUrls: mediaUrls ?? (imageUrl ? [imageUrl] : null),
+      mediaLayout,
       hashtags: hashtags.length > 0 ? hashtags : null,
       isDraft: !!isDraft,
       visibility,
@@ -53,6 +56,7 @@ export async function createPost(input: CreatePostInput) {
     text: row.text,
     imageUrl: row.imageUrl ?? null,
     mediaUrls: urls,
+    mediaLayout: (row.mediaLayout as PostMediaLayout | null) ?? null,
     isDraft: row.isDraft ?? false,
     visibility: row.visibility ?? "public",
     createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
@@ -82,12 +86,13 @@ type UpdatePostInput = {
   text?: string;
   imageUrl?: string | null;
   mediaUrls?: string[];
+  mediaLayout?: PostMediaLayout | null;
   isDraft?: boolean;
   visibility?: "public" | "followers";
 };
 
 export async function updateOwnPost(input: UpdatePostInput) {
-  const { postId, userId, text, imageUrl, mediaUrls, isDraft, visibility } = input;
+  const { postId, userId, text, imageUrl, mediaUrls, mediaLayout, isDraft, visibility } = input;
   const db = getDb();
   const [existing] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);
   if (!existing) {
@@ -100,6 +105,7 @@ export async function updateOwnPost(input: UpdatePostInput) {
     text?: string;
     imageUrl?: string | null;
     mediaUrls?: string[] | null;
+    mediaLayout?: PostMediaLayout | null;
     hashtags?: string[] | null;
     isDraft?: boolean;
     visibility?: string;
@@ -111,6 +117,7 @@ export async function updateOwnPost(input: UpdatePostInput) {
   }
   if (typeof isDraft === "boolean") updates.isDraft = isDraft;
   if (visibility === "public" || visibility === "followers") updates.visibility = visibility;
+  if (mediaLayout !== undefined) updates.mediaLayout = mediaLayout;
   if (mediaUrls !== undefined) {
     updates.mediaUrls = mediaUrls.length ? mediaUrls : null;
     updates.imageUrl = mediaUrls.length ? mediaUrls[0] : null;
@@ -129,6 +136,7 @@ export async function updateOwnPost(input: UpdatePostInput) {
       text: existing.text,
       imageUrl: existing.imageUrl ?? null,
       mediaUrls: urls,
+      mediaLayout: (existing.mediaLayout as PostMediaLayout | null) ?? null,
       createdAt: existing.createdAt?.toISOString?.(),
     };
   }
@@ -142,6 +150,7 @@ export async function updateOwnPost(input: UpdatePostInput) {
     text: row.text,
     imageUrl: row.imageUrl ?? null,
     mediaUrls: urls,
+    mediaLayout: (row.mediaLayout as PostMediaLayout | null) ?? null,
     createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -204,6 +213,7 @@ type FeedRow = {
   text: string;
   imageUrl: string | null;
   mediaUrls: string[] | null;
+  mediaLayout: PostMediaLayout | null;
   hashtags: string[] | null;
   isDraft: boolean;
   visibility: string;
@@ -230,6 +240,7 @@ export async function listPostsForViewer(params: {
     text: posts.text,
     imageUrl: posts.imageUrl,
     mediaUrls: posts.mediaUrls,
+    mediaLayout: posts.mediaLayout,
     hashtags: posts.hashtags,
     isDraft: posts.isDraft,
     visibility: posts.visibility,
@@ -456,6 +467,7 @@ export async function listPostsForViewer(params: {
       text: r.text,
       imageUrl: r.imageUrl ?? null,
       mediaUrls: urls,
+      mediaLayout: (r.mediaLayout as PostMediaLayout | null) ?? null,
       hashtags: (r.hashtags && Array.isArray(r.hashtags)) ? r.hashtags : [],
       reactions: reactionsByPost[r.id] ?? [],
       reactionUsers: reactionUsersByPost[r.id] ?? {},
@@ -553,6 +565,7 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
       text: posts.text,
       imageUrl: posts.imageUrl,
       mediaUrls: posts.mediaUrls,
+      mediaLayout: posts.mediaLayout,
       hashtags: posts.hashtags,
       createdAt: posts.createdAt,
       authorDisplayName: users.displayName,
@@ -617,6 +630,7 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
     text: row.text,
     imageUrl: row.imageUrl ?? null,
     mediaUrls,
+    mediaLayout: (row.mediaLayout as PostMediaLayout | null) ?? null,
     hashtags: (row.hashtags && Array.isArray(row.hashtags)) ? row.hashtags : [],
     reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
     reactionUsers: reactionUsersByPost,
@@ -654,6 +668,7 @@ export async function listSavedPostsDetailed(userId: string, limit: number, offs
       text: posts.text,
       imageUrl: posts.imageUrl,
       mediaUrls: posts.mediaUrls,
+      mediaLayout: posts.mediaLayout,
       hashtags: posts.hashtags,
       createdAt: posts.createdAt,
       authorDisplayName: users.displayName,
@@ -712,6 +727,7 @@ export async function listSavedPostsDetailed(userId: string, limit: number, offs
       text: r.text,
       imageUrl: r.imageUrl ?? null,
       mediaUrls: urls,
+      mediaLayout: (r.mediaLayout as PostMediaLayout | null) ?? null,
       hashtags: (r.hashtags && Array.isArray(r.hashtags)) ? r.hashtags : [],
       reactions: reactionsByPost[r.id] ?? [],
       reactionUsers: {},

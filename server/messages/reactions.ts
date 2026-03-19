@@ -8,6 +8,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { messageReactions } from "@shared/schema";
 import { requireAuth, getUserId } from "../auth/session";
+import { notifyMessageReaction } from "../realtime/chat";
 
 export const ALLOWED_EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔", "😮", "😢"];
 
@@ -126,6 +127,8 @@ export function registerMessageReactionsRoutes(
           target: [messageReactions.messageId, messageReactions.userId],
           set: { emoji },
         });
+      const map = await getReactionsForMessageIds([messageId]);
+      notifyMessageReaction(chatId, messageId, map.get(messageId) ?? [], userId, emoji);
       res.status(204).end();
     } catch (e) {
       console.error("Message reaction add error:", e);
@@ -156,6 +159,8 @@ export function registerMessageReactionsRoutes(
       await db
         .delete(messageReactions)
         .where(and(eq(messageReactions.messageId, messageId), eq(messageReactions.userId, userId)));
+      const map = await getReactionsForMessageIds([messageId]);
+      notifyMessageReaction(chatId, messageId, map.get(messageId) ?? [], userId, null);
       res.status(204).end();
     } catch (e) {
       console.error("Message reaction delete error:", e);

@@ -87,8 +87,11 @@ export function createUsersStore(): UsersStore {
       if (data.showCover !== undefined) (user as User).showCover = data.showCover;
       if (data.profileLink !== undefined) (user as User).profileLink = data.profileLink;
       if (data.pushEnabled !== undefined) (user as User).pushEnabled = data.pushEnabled;
+      if (data.vibeEnabled !== undefined) (user as User).vibeEnabled = data.vibeEnabled;
+      if (data.vibeShareWithPartner !== undefined) (user as User).vibeShareWithPartner = data.vibeShareWithPartner;
       if ((data as { referralLimit?: number | null }).referralLimit !== undefined) {
-        (user as User).referralLimit = (data as { referralLimit?: number | null }).referralLimit;
+        const v = (data as { referralLimit?: number | null }).referralLimit;
+        (user as User).referralLimit = v == null ? null : v;
       }
     },
     getAdminStats() {

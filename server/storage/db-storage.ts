@@ -2,7 +2,9 @@ import { randomUUID } from "crypto";
 import { eq, and, desc, asc, sql, gt, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
 import type { IStorage } from "./types";
 import type { User, InsertUser, UpdateProfile, Chat, ChatMember, InsertChat, InsertChatMember, Message, InsertMessage } from "@shared/schema";
-import { users, referralCodes, chats, chatMembers, messages, contacts, follows, userBlocks, savedMessages, tracks, trackItems, chatFolders, scheduledMessages } from "@shared/schema";
+import { users, referralCodes, chats, chatMembers, messages, contacts, follows, userBlocks, savedMessages, messageHidden, tracks, trackItems, chatFolders, scheduledMessages, chatVibeState, chatVibeBatches, chatVibeHistory } from "@shared/schema";
+import type { ChatVibeState, ChatVibeBatch, ChatVibeHistoryEntry } from "@shared/schema";
+import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getDb, ensureUserColumns } from "../db";
 import { normalizePhone } from "../auth/phone";
 
@@ -333,11 +335,34 @@ export class DbStorage implements IStorage {
     return row;
   }
 
-  async updateLastRead(chatId: string, userId: string): Promise<void> {
+  async updateLastRead(chatId: string, userId: string, readUpTo?: Date): Promise<void> {
+    if (!readUpTo) return;
+    const newAt = readUpTo;
+    const [member] = await this.db
+      .select({ lastReadAt: chatMembers.lastReadAt })
+      .from(chatMembers)
+      .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)))
+      .limit(1);
+    const current = member?.lastReadAt;
+    const at = !current || newAt > current ? newAt : current;
     await this.db
       .update(chatMembers)
-      .set({ lastReadAt: new Date() })
+      .set({ lastReadAt: at })
       .where(and(eq(chatMembers.chatId, chatId), eq(chatMembers.userId, userId)));
+  }
+
+  async updateLastReadByMessageId(chatId: string, userId: string, messageId: string): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE chat_members
+      SET last_read_at = GREATEST(
+        COALESCE(last_read_at, '1970-01-01'::timestamptz),
+        COALESCE(
+          (SELECT created_at FROM messages WHERE id = ${messageId} AND chat_id = ${chatId}),
+          last_read_at
+        )
+      )
+      WHERE chat_id = ${chatId} AND user_id = ${userId}
+    `);
   }
 
   async getChatMemberLastReadAt(chatId: string, userId: string): Promise<Date | null> {
@@ -559,6 +584,21 @@ export class DbStorage implements IStorage {
       .where(and(eq(messages.chatId, chatId), eq(messages.id, messageId)))
       .returning();
     return row as Message | undefined;
+  }
+
+  async addMessageHidden(userId: string, chatId: string, messageId: string): Promise<void> {
+    await this.db
+      .insert(messageHidden)
+      .values({ userId, chatId, messageId })
+      .onConflictDoNothing({ target: [messageHidden.userId, messageHidden.chatId, messageHidden.messageId] });
+  }
+
+  async getHiddenMessageIdsForUserInChat(userId: string, chatId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ messageId: messageHidden.messageId })
+      .from(messageHidden)
+      .where(and(eq(messageHidden.userId, userId), eq(messageHidden.chatId, chatId)));
+    return rows.map((r) => r.messageId);
   }
 
   async createScheduledMessage(data: {
@@ -944,9 +984,11 @@ export class DbStorage implements IStorage {
     if (data.profileVisibility !== undefined) update.profileVisibility = data.profileVisibility;
     if (data.showOnlineTo !== undefined) update.showOnlineTo = data.showOnlineTo;
     if (data.pushEnabled !== undefined) update.pushEnabled = data.pushEnabled;
+    if (data.vibeEnabled !== undefined) update.vibeEnabled = data.vibeEnabled;
+    if (data.vibeShareWithPartner !== undefined) update.vibeShareWithPartner = data.vibeShareWithPartner;
     if ((data as { referralLimit?: number | null }).referralLimit !== undefined) {
       const v = (data as { referralLimit?: number | null }).referralLimit;
-      update.referralLimit = v === null || v === "" ? null : (typeof v === "number" ? v : parseInt(String(v), 10));
+      update.referralLimit = v == null ? null : v;
     }
     if (Object.keys(update).length === 0) return this.getUser(userId);
     const [row] = await this.db.update(users).set(update).where(eq(users.id, userId)).returning();
@@ -1124,5 +1166,113 @@ export class DbStorage implements IStorage {
     asBlocker.forEach((r) => set.add(r.blockedId));
     asBlocked.forEach((r) => set.add(r.blockerId));
     return Array.from(set);
+  }
+
+  // ── Chat Vibe ──────────────────────────────────────────────
+
+  async getVibeState(chatId: string): Promise<ChatVibeState | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(chatVibeState)
+      .where(eq(chatVibeState.chatId, chatId))
+      .limit(1);
+    return row;
+  }
+
+  async upsertVibeState(
+    chatId: string,
+    data: {
+      theme: VibeThemeCode;
+      confidence: number;
+      axes: VibeAxes;
+      messageCounter: number;
+      themeVersion?: number;
+    }
+  ): Promise<ChatVibeState> {
+    const now = new Date();
+    const values = {
+      chatId,
+      theme: data.theme,
+      confidence: String(data.confidence),
+      warmth: data.axes.warmth,
+      tension: data.axes.tension,
+      playfulness: data.axes.playfulness,
+      intimacy: data.axes.intimacy,
+      formality: data.axes.formality,
+      energy: data.axes.energy,
+      messageCounter: data.messageCounter,
+      ...(data.themeVersion !== undefined && { themeVersion: data.themeVersion }),
+      lastBatchAt: now,
+      updatedAt: now,
+    };
+    const [row] = await this.db
+      .insert(chatVibeState)
+      .values(values)
+      .onConflictDoUpdate({
+        target: chatVibeState.chatId,
+        set: { ...values },
+      })
+      .returning();
+    return row;
+  }
+
+  async createVibeBatch(data: {
+    chatId: string;
+    windowSize: number;
+    dominantPattern: VibeThemeCode;
+    secondaryPattern?: VibeThemeCode;
+    confidence: number;
+    axes: VibeAxes;
+    toxicityFlag?: boolean;
+  }): Promise<ChatVibeBatch> {
+    const [row] = await this.db
+      .insert(chatVibeBatches)
+      .values({
+        chatId: data.chatId,
+        windowSize: data.windowSize,
+        dominantPattern: data.dominantPattern,
+        secondaryPattern: data.secondaryPattern ?? null,
+        confidence: String(data.confidence),
+        warmth: data.axes.warmth,
+        tension: data.axes.tension,
+        playfulness: data.axes.playfulness,
+        intimacy: data.axes.intimacy,
+        formality: data.axes.formality,
+        energy: data.axes.energy,
+        toxicityFlag: data.toxicityFlag ?? false,
+      })
+      .returning();
+    return row;
+  }
+
+  async getRecentVibeBatches(chatId: string, limit: number): Promise<ChatVibeBatch[]> {
+    return this.db
+      .select()
+      .from(chatVibeBatches)
+      .where(eq(chatVibeBatches.chatId, chatId))
+      .orderBy(desc(chatVibeBatches.createdAt))
+      .limit(limit);
+  }
+
+  async createVibeHistoryEntry(data: {
+    chatId: string;
+    oldTheme: string;
+    newTheme: string;
+    oldConfidence: number;
+    newConfidence: number;
+    triggerType: string;
+  }): Promise<ChatVibeHistoryEntry> {
+    const [row] = await this.db
+      .insert(chatVibeHistory)
+      .values({
+        chatId: data.chatId,
+        oldTheme: data.oldTheme,
+        newTheme: data.newTheme,
+        oldConfidence: String(data.oldConfidence),
+        newConfidence: String(data.newConfidence),
+        triggerType: data.triggerType,
+      })
+      .returning();
+    return row;
   }
 }

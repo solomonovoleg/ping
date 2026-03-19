@@ -26,6 +26,9 @@ import { registerSavedMessagesRoutes } from "./saved-messages/routes";
 import { registerTracksRoutes } from "./tracks/routes";
 import { registerAiChatRoutes } from "./ai-chat/routes";
 import { registerSpellcheckRoutes } from "./spellcheck/routes";
+import { registerLinkPreviewRoutes } from "./link-preview/routes";
+import { registerTranslateRoutes } from "./translate/routes";
+import { registerVibeRoutes } from "./vibe/routes";
 import { ensureUserColumns } from "./db";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -75,6 +78,12 @@ export async function registerRoutes(
     });
   });
 
+  app.get("/api/time", (_req, res) => {
+    const now = new Date();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ serverTime: now.toISOString(), serverTimeMs: now.getTime() });
+  });
+
   registerAuthRoutes(app);
   registerAdminRoutes(app);
   registerReferralRoutes(app);
@@ -83,6 +92,9 @@ export async function registerRoutes(
   registerMessagesRoutes(app);
   registerAiChatRoutes(app);
   registerSpellcheckRoutes(app);
+  registerLinkPreviewRoutes(app);
+  registerTranslateRoutes(app);
+  registerVibeRoutes(app);
   registerSavedMessagesRoutes(app);
   registerTracksRoutes(app);
   registerVoiceUploadRoutes(app);

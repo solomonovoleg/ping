@@ -271,6 +271,8 @@ export function registerAuthRoutes(app: Express): void {
         hideFromSearch: user.hideFromSearch ?? false,
         bio: user.bio ?? null,
         pushEnabled: (user as { pushEnabled?: boolean }).pushEnabled !== false,
+        vibeEnabled: (user as { vibeEnabled?: boolean }).vibeEnabled === true,
+        vibeShareWithPartner: (user as { vibeShareWithPartner?: boolean }).vibeShareWithPartner === true,
       });
     } catch (err) {
       console.error("[auth/me]", err);

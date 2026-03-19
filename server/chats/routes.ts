@@ -65,8 +65,10 @@ export function registerChatsRoutes(app: Express): void {
   app.put("/api/chats/:id/read", requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
+    const body = (req.body ?? {}) as { messageId?: string };
+    const messageId = typeof body.messageId === "string" && body.messageId ? body.messageId : undefined;
     try {
-      await markChatRead(chatId, userId);
+      await markChatRead(chatId, userId, messageId);
       res.json({ ok: true });
     } catch (error) {
       if (error instanceof ChatsServiceError) {

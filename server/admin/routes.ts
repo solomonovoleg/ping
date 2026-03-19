@@ -6,6 +6,7 @@ import { registerAdminAdminsRoutes } from "./admins/routes";
 import { registerAdminAuditRoutes } from "./audit/routes";
 import { registerAdminFeedRoutes } from "./feed/routes";
 import { registerAdminReferralRoutes } from "./referrals/routes";
+import { registerAdminContentIngestRoutes } from "./content-ingest/routes";
 
 export function registerAdminRoutes(app: Express): void {
   app.use("/api/admin", requireAdmin);
@@ -15,4 +16,5 @@ export function registerAdminRoutes(app: Express): void {
   registerAdminAuditRoutes(app);
   registerAdminFeedRoutes(app);
   registerAdminReferralRoutes(app);
+  registerAdminContentIngestRoutes(app);
 }

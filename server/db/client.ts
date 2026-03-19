@@ -64,6 +64,8 @@ export async function ensureUserColumns(): Promise<void> {
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS show_online_to VARCHAR(20) DEFAULT 'all'");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_enabled BOOLEAN NOT NULL DEFAULT true");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_limit INTEGER");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS vibe_enabled BOOLEAN NOT NULL DEFAULT false");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS vibe_share_with_partner BOOLEAN NOT NULL DEFAULT false");
     userColumnsEnsured = true;
     const { ensureReplySchema } = await import("../messages/reply");
     await ensureReplySchema(p);
