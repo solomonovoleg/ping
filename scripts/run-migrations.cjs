@@ -53,12 +53,18 @@ const scripts = [
   "scripts/migrate-missed-calls.cjs",
   "scripts/migrate-referrals.cjs",
   "scripts/migrate-follows.cjs",
+  "scripts/migrate-designated-follows.cjs", // Леха (/profile/5) + первый сид → все seed_social_* (идемпотентно)
   "scripts/migrate-stories.cjs",      // сначала stories, потом story_views (REFERENCES stories)
   "scripts/migrate-story-views.cjs",
+  "scripts/migrate-story-likes.cjs",
   "scripts/migrate-notifications-and-more.cjs",
   "scripts/migrate-tracks.cjs",
   "scripts/migrate-chat-folders.cjs",
   "scripts/migrate-scheduled-messages.cjs",
+  "scripts/migrate-message-hidden.cjs",
+  "scripts/migrate-messages-timestamptz.cjs",
+  "scripts/migrate-message-translations.cjs",
+  "scripts/migrate-chat-vibe.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

@@ -31,8 +31,11 @@ while IFS= read -r line; do
   line="${line#export }"
   [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && eval "$line"
 done < deploy.env 2>/dev/null || true
-# В окружение экспортируем только то, что нужно дочерним процессам (npm, sshpass)
-export VITE_WS_URL 2>/dev/null || true
+# В окружение экспортируем только то, что нужно дочерним процессам (npm, sshpass).
+# Важно: Vite читает только экспортированные переменные.
+for v in ${!VITE_@}; do
+  export "$v" 2>/dev/null || true
+done
 export SSHPASS 2>/dev/null || true
 [ -f scripts/pre-deploy-check.sh ] && . scripts/pre-deploy-check.sh 2>/dev/null || true
 
@@ -41,7 +44,7 @@ SERVER_USER="${2:-${SERVER_USER:-${VPS_USER:-root}}}"
 REMOTE_PORT="${PORT:-3080}"
 REMOTE_DIR="${REMOTE_DIR:-${VPS_PATH:-/var/www/ping-moot}}"
 
-if [ -n "${VPS_PASSWORD}" ]; then
+if [ -n "${VPS_PASSWORD}" ] && [ "${DEPLOY_USE_SSHPASS:-1}" = "1" ]; then
   export SSHPASS="$VPS_PASSWORD"
   if ! command -v sshpass >/dev/null 2>&1; then
     echo "Установи sshpass: brew install sshpass (или настрой SSH-ключ)"
@@ -49,13 +52,13 @@ if [ -n "${VPS_PASSWORD}" ]; then
   fi
 fi
 
-run_ssh() { if [ -n "$SSHPASS" ]; then sshpass -e ssh -o StrictHostKeyChecking=accept-new "$@"; else ssh "$@"; fi; }
-run_rsync() { if [ -n "$SSHPASS" ]; then sshpass -e rsync -e "ssh -o StrictHostKeyChecking=accept-new" "$@"; else rsync "$@"; fi; }
+run_ssh() { if [ -n "$SSHPASS" ]; then sshpass -e ssh -T -o RequestTTY=no -o StrictHostKeyChecking=accept-new "$@"; else ssh -T -o RequestTTY=no -o StrictHostKeyChecking=accept-new "$@"; fi; }
+run_rsync() { if [ -n "$SSHPASS" ]; then sshpass -e rsync -e "ssh -T -o RequestTTY=no -o StrictHostKeyChecking=accept-new" "$@"; else rsync -e "ssh -T -o RequestTTY=no -o StrictHostKeyChecking=accept-new" "$@"; fi; }
 
 echo "=== Сборка ==="
-npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps
-# Для звонков: если в deploy.env задан VITE_WS_URL (например https://pingos.ru), подхватываем при сборке
-[ -n "${VITE_WS_URL:-}" ] && export VITE_WS_URL
+# tsx/vite/typescript в devDependencies. Если в deploy.env задан NODE_ENV=production, без флага npm ci их не ставит → «tsx: command not found».
+NPM_CONFIG_PRODUCTION=false npm ci --legacy-peer-deps 2>/dev/null || NPM_CONFIG_PRODUCTION=false npm install --legacy-peer-deps
+# Для звонков/клиента: переменные VITE_* уже экспортированы выше.
 npm run build
 
 echo "=== Загрузка на $SERVER_USER@$SERVER_HOST ==="
@@ -103,6 +106,10 @@ if [ -f deploy.env ] && [ -n "${DATABASE_URL:-}" ]; then
     put "$FCM_SERVER_KEY" "FCM_SERVER_KEY"
     put "$OPENROUTER_API_KEY" "OPENROUTER_API_KEY"
     put "$OPENROUTER_MODEL" "OPENROUTER_MODEL"
+    put "$CALLS_DEBUG" "CALLS_DEBUG"
+    put "$CALLS_RING_TIMEOUT_MS" "CALLS_RING_TIMEOUT_MS"
+    put "$CALLS_CALLER_WAIT_MS" "CALLS_CALLER_WAIT_MS"
+    put "$CALLS_PENDING_TTL_MS" "CALLS_PENDING_TTL_MS"
     put "$S3_ENDPOINT" "S3_ENDPOINT"
     put "$S3_BUCKET" "S3_BUCKET"
     put "$S3_REGION" "S3_REGION"
@@ -127,4 +134,5 @@ fi
 run_ssh "$SERVER_USER@$SERVER_HOST" "test -f $REMOTE_DIR/.env && sed -i.bak -e 's/@base/@localhost/g' -e 's/:base:5432/:localhost:5432/g' $REMOTE_DIR/.env && echo 'OK: .env (base->localhost)' || true"
 
 echo "=== Установка зависимостей, миграции, рестарт на сервере ==="
-run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && PORT=$REMOTE_PORT bash scripts/server-setup.sh" || { echo "Ошибка на сервере"; exit 1; }
+PM2_APP_NAME_ESC="${PM2_APP_NAME:-ping-moot}"
+run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && PORT=$REMOTE_PORT PM2_APP_NAME=\"$PM2_APP_NAME_ESC\" bash scripts/server-setup.sh" || { echo "Ошибка на сервере"; exit 1; }

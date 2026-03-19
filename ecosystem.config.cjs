@@ -1,12 +1,15 @@
 /**
- * PM2 для деплоя на VPS: отдельная папка, порт 3080, своя БД.
- * Запуск из папки проекта: pm2 start ecosystem.config.cjs
- * Заполни SESSION_SECRET и DATABASE_URL (отдельная БД ping_moot).
+ * PM2 для деплоя на VPS: отдельная папка, свой порт, своя БД.
+ * Запуск из папки проекта: PORT=3081 PM2_APP_NAME=ping-moot-staging pm2 start ecosystem.config.cjs
+ * На одном VPS второй инстанс: другой PM2_APP_NAME и PORT (см. deploy.env.example).
  */
+const port = Number(process.env.PORT) || 3080;
+const name = process.env.PM2_APP_NAME || "ping-moot";
+
 module.exports = {
   apps: [
     {
-      name: "ping-moot",
+      name,
       script: "dist/index.cjs",
       cwd: __dirname,
       instances: 1,
@@ -15,7 +18,7 @@ module.exports = {
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
-        PORT: 3080,
+        PORT: port,
         // DATABASE_URL и SESSION_SECRET берутся из .env в папке проекта (dotenv/config)
       },
     },

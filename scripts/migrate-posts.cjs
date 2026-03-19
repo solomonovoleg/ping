@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS posts (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_urls jsonb;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_layout jsonb;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS hashtags jsonb;
 
 CREATE TABLE IF NOT EXISTS post_reactions (

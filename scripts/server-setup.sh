@@ -91,11 +91,12 @@ if ! command -v pm2 &>/dev/null; then
 fi
 
 cd "$(dirname "$0")/.."
-pm2 delete ping-moot 2>/dev/null || true
-PORT="$PORT" pm2 start ecosystem.config.cjs
+PM2_APP_NAME="${PM2_APP_NAME:-ping-moot}"
+pm2 delete "$PM2_APP_NAME" 2>/dev/null || true
+PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup 2>/dev/null || true
 
 echo ""
-echo "Приложение запущено на порту $PORT (PM2). Проверка: http://$(hostname -I | awk '{print $1}'):$PORT"
-echo "Команды: pm2 status | pm2 logs ping-moot | pm2 restart ping-moot"
+echo "Приложение запущено на порту $PORT (PM2, имя процесса: $PM2_APP_NAME). Проверка: http://$(hostname -I | awk '{print $1}'):$PORT"
+echo "Команды: pm2 status | pm2 logs $PM2_APP_NAME | pm2 restart $PM2_APP_NAME"

@@ -5,8 +5,9 @@
  */
 import "dotenv/config";
 import { hashPassword } from "../server/auth/password";
-import { getDb } from "../server/db";
+import { ensureUserColumns, getDb } from "../server/db";
 import { users, posts, stories, contacts } from "../shared/schema";
+import { insertFollowsDesignatedToSeeds } from "./seed-auto-follow";
 import { eq } from "drizzle-orm";
 
 const TEST_PASSWORD = "test1234";
@@ -245,6 +246,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 async function main() {
+  await ensureUserColumns();
   const db = getDb();
   const hashed = hashPassword(TEST_PASSWORD);
 
@@ -322,6 +324,11 @@ async function main() {
     }
   }
   console.log(`Создано контактов: ${contactsCount}`);
+
+  const autoFollow = await insertFollowsDesignatedToSeeds(db, insertedUserIds);
+  console.log(
+    `Подписки (твой номер + «Леха прогер» на всех test_seed_*): подписчиков ${autoFollow.followerCount}, попыток follows ${autoFollow.attempted}`
+  );
 
   console.log("Готово. Логин: test_seed_1 … test_seed_20, пароль: test1234");
 }
