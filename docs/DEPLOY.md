@@ -4,6 +4,19 @@
 
 **Деплой одной командой:** заполни `deploy.env` (VPS_HOST, VPS_USER, VPS_PASSWORD, **DATABASE_URL**) и выполни `npm run deploy`. Правила про .env и DATABASE_URL — в `docs/DEPLOY_RULES.md`.
 
+### Staging на том же VPS
+
+Отдельная папка, порт, БД и имя PM2 — иначе staging перезапишет production.
+
+| Переменная | Пример staging |
+|------------|----------------|
+| `VPS_PATH` | `/var/www/ping-moot-staging` |
+| `PORT` | `3081` |
+| `PM2_APP_NAME` | `ping-moot-staging` |
+| `DATABASE_URL` | `postgresql://ping_moot_staging:…@localhost:5432/ping_moot_staging` |
+
+На сервере: отдельный пользователь и БД PostgreSQL, nginx (если нужен) — прокси на `127.0.0.1:3081`. Удобно держать второй файл, например `deploy.staging.env`, и перед деплоем `cp deploy.staging.env deploy.env` или вызывать скрипт с подстановкой переменных.
+
 ---
 
 ## Где документация

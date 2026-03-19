@@ -18,6 +18,8 @@
 | Дублирование subscribe-chat при нескольких слушателях | useCall | Отправка только при первом слушателе на чат; unsubscribe только при удалении последнего. |
 | Дублирование сообщений при отправке (гонка WebSocket/API) | useSendMessage | Проверка `prev.some(m => m.id === sent.id)` перед добавлением медиа/видеокружка/голос. |
 | Двойной клик по реакции | useMessageActions | reactionLockRef предотвращает повторную отправку. |
+| Ложные «две галочки»: сообщение «прочитано», хотя собеседник не открывал | Сервер `updateLastRead`, веб `PUT /read` без тела, mobile `markChatRead` | Без `messageId` сервер больше не ставит `lastReadAt = now()`. Клиенты шлют только `PUT /read` с `messageId`; visibility/unmount не делают «пустой» read. |
+| Реакция на сообщение видна только у того, кто поставил | Не было WS после POST/DELETE реакции | Событие `message-reaction` в `realtime/chat` + `ping:message-reaction` в `useChatMessages`. |
 
 ### Оставшиеся тихие сбои (низкий приоритет)
 

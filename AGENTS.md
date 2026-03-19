@@ -42,6 +42,7 @@
 - `docs/OPTIMIZATIONS.md` — что оптимизировано (code splitting, memo, chunks).  
 - `docs/DEPLOY_RULES.md` — правила деплоя и DATABASE_URL.  
 - **`docs/CHAT_DETAIL_RULES.md`** — при изменении страницы чата или хуков чата (ChatDetail, useChatMessages, useSendMessage, useMessageActions) обязательно читать: три хука, только `send.*` и `actions.*`, без голых переменных.
+- **`docs/CALL_REALTIME_IMPROVEMENT_PLAN.md`** — план доработок звонков и общего WebSocket (onclose, stale handlers, peer factory, error vs status, вынос chat realtime). См. также `docs/CALLS_MODULE_AUDIT.md`.
 
 ---
 
@@ -51,6 +52,7 @@
 - Общая схема/типы: `shared/schema/`.
 - Сервер: `server/` — маршруты по доменам (auth, chats, messages, posts, calls, ws, upload и т.д.).
 - Деплой и окружение: `scripts/deploy.sh`, `deploy.env.example`, `docs/DEPLOY_RULES.md`.
+- **Подписки на сидов в ленту:** при деплое `scripts/run-migrations.cjs` вызывает `migrate-designated-follows.cjs` — в таблицу `follows` идемпотентно добавляются строки: кто с `public_id = 5` (Леха) и кто с телефоном `+79956012736` подписаны на всех пользователей с `phone LIKE 'seed_social_%'` (результат `seed:social-content`). Отдельный `seed:auto-follow` для этого на проде не обязателен; локально при необходимости: `node scripts/migrate-designated-follows.cjs`.
 
 ---
 

@@ -2,13 +2,15 @@
 
 Взгляд архитектора фронтенда и бэкенда: что не так сейчас и что улучшить до идеала.
 
+**Актуальный пошаговый план правок (onclose, refs, фабрика peer, error vs status):** [`CALL_REALTIME_IMPROVEMENT_PLAN.md`](./CALL_REALTIME_IMPROVEMENT_PLAN.md).
+
 ---
 
 ## 1. Обзор архитектуры
 
 | Слой | Компоненты |
 |------|------------|
-| **Клиент** | `useCall`, `CallContext`, `CallModal`, `lib/calls`, `lib/incoming-call-alert` |
+| **Клиент** | `useCall`, `useRealtimeSocket`, `useCallSignaling`, `useWebRtcPeer`, `CallContext`, `CallModal`, `lib/calls`, `lib/incoming-call-alert` |
 | **Сигналинг** | WebSocket `/calls?token=...` (один сокет на чаты + звонки) |
 | **Сервер** | `server/calls/` (token, routes, ws.ts, missed.ts) |
 | **Медиа** | WebRTC P2P (simple-peer), только STUN (Google) |
