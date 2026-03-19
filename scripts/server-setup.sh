@@ -77,9 +77,12 @@ fi
 
 # На VPS БД всегда localhost: правим .env и передаём миграциям гарантированно localhost
 if grep -q '^DATABASE_URL=.\+' .env 2>/dev/null; then
+  sed -i.bak 's/\r$//g' .env 2>/dev/null || true
   sed -i.bak 's/@base/@localhost/g; s/:base:5432/:localhost:5432/g' .env 2>/dev/null || true
-  DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
-  export DATABASE_URL=$(echo "$DB_URL_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
+  DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | head -n1 | sed 's/^DATABASE_URL=//' | tr -d '\r' | sed "s/^[\"']//;s/[\"']$//")
+  while [ "${DB_URL_RAW}" != "${DB_URL_RAW%\"}" ]; do DB_URL_RAW="${DB_URL_RAW%\"}"; done
+  while [ "${DB_URL_RAW}" != "${DB_URL_RAW#\"}" ]; do DB_URL_RAW="${DB_URL_RAW#\"}"; done
+  export DATABASE_URL=$(echo "$DB_URL_RAW" | tr -d '\r' | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
   echo "Схема Drizzle (push, пустая БД)..."
   # npx: на сервере часто npm install --omit=dev — локального drizzle-kit нет
   DATABASE_URL="$DATABASE_URL" npx --yes drizzle-kit push --force || true

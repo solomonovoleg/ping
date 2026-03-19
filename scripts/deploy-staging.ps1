@@ -101,9 +101,10 @@ Add-Kv "S3_REGION"
 Add-Kv "S3_ACCESS_KEY"
 Add-Kv "S3_SECRET_KEY"
 Add-Kv "S3_PUBLIC_ACL"
-# UTF-8 без BOM — иначе на Linux в первой строке .env может остаться BOM и ломать парсинг
+# UTF-8 без BOM + только LF — CRLF даёт \r в конце значения на Linux (grep/sed не снимут " → ломается DATABASE_URL)
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-[System.IO.File]::WriteAllLines($tmpServerEnv, $lines, $utf8NoBom)
+$payload = ($lines -join "`n") + "`n"
+[System.IO.File]::WriteAllText($tmpServerEnv, $payload, $utf8NoBom)
 
 Write-Host "== Upload + remote setup (non-interactive, password from deploy.staging.env) =="
 node scripts/deploy-staging-upload.mjs $tmpTar $tmpServerEnv
