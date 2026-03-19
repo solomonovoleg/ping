@@ -1,0 +1,53 @@
+# Автодеплой стенда при пуше в feature/dev (без мержа в main).
+# Секреты: см. docs/DEPLOY_STAGING_CI.md
+
+name: Deploy staging
+
+on:
+  push:
+    branches:
+      - feature/dev
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install sshpass (password SSH for deploy.sh)
+        run: sudo apt-get update && sudo apt-get install -y sshpass openssh-client rsync
+
+      - name: Write deploy.env from secret
+        env:
+          STAGING_DEPLOY_ENV: ${{ secrets.STAGING_DEPLOY_ENV }}
+        run: |
+          if [ -z "${STAGING_DEPLOY_ENV}" ]; then
+            echo "::error::В GitHub → Settings → Secrets → Actions добавь секрет STAGING_DEPLOY_ENV"
+            echo "Содержимое — как в локальном deploy.staging.env (см. deploy.staging.env.example и docs/DEPLOY_STAGING_CI.md)"
+            exit 1
+          fi
+          python3 << 'PY'
+          import os
+          body = os.environ.get("STAGING_DEPLOY_ENV", "")
+          with open("deploy.env", "w", encoding="utf-8", newline="\n") as f:
+              f.write(body)
+              if not body.endswith("\n"):
+                  f.write("\n")
+          PY
+
+      - name: Build and deploy (same as npm run deploy)
+        env:
+          DEPLOY_USE_SSHPASS: "1"
+        run: bash scripts/deploy.sh

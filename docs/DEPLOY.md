@@ -17,6 +17,8 @@
 
 На сервере: отдельный пользователь и БД PostgreSQL, nginx (если нужен) — прокси на `127.0.0.1:3081`. Удобно держать второй файл, например `deploy.staging.env`, и перед деплоем `cp deploy.staging.env deploy.env` или вызывать скрипт с подстановкой переменных.
 
+**Автодеплой staging с GitHub:** push в `feature/dev` — см. **`docs/DEPLOY_STAGING_CI.md`** (секрет `STAGING_DEPLOY_ENV`, шаблон `deploy.staging.env.example`). Мерж в `main` не требуется.
+
 ---
 
 ## Где документация

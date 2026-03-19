@@ -5,6 +5,8 @@ dist
 .env.*.local
 deploy.env
 deploy.env.tmp
+# Локальный staging с паролями — не коммитить (секреты в GitHub Actions)
+deploy.staging.env
 docs/CREDENTIALS.md
 .DS_Store
 server/public
