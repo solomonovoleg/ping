@@ -38,6 +38,7 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname, "client"),
   define: {
+    global: "globalThis",
     __BUILD_VERSION__: JSON.stringify(
       process.env.BUILD_VERSION || "0"
     ),

@@ -8,6 +8,9 @@ import { createToken } from "./token";
 import { getUserId, requireAuth } from "./session";
 
 const DEFAULT_REFERRAL_LIMIT = 3;
+const LOCAL_DEV_PHONE = process.env.LOCAL_DEV_PHONE?.trim() || "+79956012736";
+const LOCAL_DEV_PASSWORD = process.env.LOCAL_DEV_PASSWORD?.trim() || "123456";
+let ensureLocalDevUserPromise: Promise<void> | null = null;
 
 function getInviterReferralLimit(inviter: { referralLimit?: number | null } | undefined): number {
   const limit = inviter?.referralLimit;
@@ -19,7 +22,36 @@ function isDbConnectionError(msg: string): boolean {
   return /password authentication failed|connection refused|ECONNREFUSED|connect ETIMEDOUT/i.test(msg);
 }
 
+function shouldEnsureLocalDevUser(): boolean {
+  return !process.env.DATABASE_URL && process.env.NODE_ENV !== "production";
+}
+
+async function ensureLocalDevUser(): Promise<void> {
+  if (!shouldEnsureLocalDevUser()) return;
+  const existing = await storage.getUserByPhone(LOCAL_DEV_PHONE);
+  if (existing) return;
+  const publicId = await storage.getNextPublicId();
+  await storage.createUser({
+    phone: LOCAL_DEV_PHONE,
+    password: hashPassword(LOCAL_DEV_PASSWORD),
+    publicId,
+  });
+  console.log(`[auth/dev] Local user ready: ${LOCAL_DEV_PHONE}`);
+}
+
+async function ensureLocalDevUserOnce(): Promise<void> {
+  if (!shouldEnsureLocalDevUser()) return;
+  if (!ensureLocalDevUserPromise) {
+    ensureLocalDevUserPromise = ensureLocalDevUser().catch((err) => {
+      console.warn("[auth/dev] failed to ensure local user:", err);
+    });
+  }
+  await ensureLocalDevUserPromise;
+}
+
 export function registerAuthRoutes(app: Express): void {
+  void ensureLocalDevUserOnce();
+
   app.post("/api/auth/register", registerLimiter, async (req: Request, res: Response) => {
     try {
     const { phone: rawPhone, password, referralCode: rawReferralCode } = req.body ?? {};
@@ -135,6 +167,7 @@ export function registerAuthRoutes(app: Express): void {
 
   app.post("/api/auth/login", loginLimiter, async (req: Request, res: Response) => {
     try {
+      await ensureLocalDevUserOnce();
       const { phone: rawPhone, password } = req.body ?? {};
       const raw = typeof rawPhone === "string" ? rawPhone.trim().toLowerCase() : "";
       const phone = raw === "admin" ? "admin" : normalizePhone(rawPhone);

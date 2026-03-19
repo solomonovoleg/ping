@@ -14,6 +14,7 @@ export const DURATION_NORMAL_MS = 280;
 /** То же в секундах для Framer Motion (transition.duration) */
 export const DURATION_FAST_S = DURATION_FAST_MS / 1000;
 export const DURATION_NORMAL_S = DURATION_NORMAL_MS / 1000;
+export const DURATION_TOAST_AUTO_DISMISS_MS = 2200;
 
 /** Акцентные анимации (рассыпание, «магические» эффекты) */
 export const DURATION_EMPHASIS_MS = 420;
