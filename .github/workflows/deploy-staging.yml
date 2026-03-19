@@ -47,6 +47,22 @@ jobs:
                   f.write("\n")
           PY
 
+      # deploy.sh читает только PM2_APP_NAME; старый APP_NAME из секрета иначе даёт дефолт ping-moot → риск пересечься с prod.
+      - name: PM2_APP_NAME из APP_NAME (если забыли переименовать)
+        run: |
+          if grep -q '^PM2_APP_NAME=' deploy.env; then
+            echo "PM2_APP_NAME уже задан"
+            exit 0
+          fi
+          line=$(grep '^APP_NAME=' deploy.env | head -1 || true)
+          if [ -n "$line" ]; then
+            val="${line#APP_NAME=}"
+            echo "PM2_APP_NAME=${val}" >> deploy.env
+            echo "OK: добавлен PM2_APP_NAME из APP_NAME"
+          else
+            echo "::warning::В STAGING_DEPLOY_ENV нет PM2_APP_NAME — проверь, что на сервере не используется дефолт ping-moot"
+          fi
+
       # Только этот workflow (push в feature/dev). Production (npm run deploy с твоим deploy.env) этот шаг НЕ выполняет.
       # Без этого заход по http://IP:3081 не сохраняет сессию при SESSION_SECURE=true в секрете → лента /posts и посты «мертвые».
       - name: Staging HTTP — сессионная кука без Secure
