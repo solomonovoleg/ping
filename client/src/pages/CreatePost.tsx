@@ -140,26 +140,30 @@ export default function CreatePost() {
     return () => clearTimeout(t);
   }, [selectionToast]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files?.length) {
-      console.warn("[create-post] handleFileChange: no files selected");
+  /**
+   * Обязательно принимает уже скопированный File[]: после выбора файла в модалке
+   * нельзя сначала вызывать setShowMediaPicker(false) — React размонтирует input,
+   * и в Chrome/Edge FileList в change часто становится пустым.
+   */
+  const processPickedFiles = async (fileArray: File[]) => {
+    if (!fileArray.length) {
+      console.warn("[create-post] processPickedFiles: no files");
       return;
     }
-    e.target.value = "";
     const currentLen = mediaCountRef.current;
-    const toAdd = Math.min(files.length, MAX_MEDIA - currentLen);
+    const toAdd = Math.min(fileArray.length, MAX_MEDIA - currentLen);
     if (toAdd <= 0) {
       toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
       return;
     }
-    if (files.length > toAdd) {
+    if (fileArray.length > toAdd) {
       toast({ title: `Можно добавить ещё только ${toAdd} медиа` });
     }
     setError("");
     const acceptedFiles: Array<{ file: File; kind: MediaKind; aspectRatio: number | null }> = [];
     for (let i = 0; i < toAdd; i++) {
-      const f = files[i];
+      const f = fileArray[i];
+      if (!f) continue;
       const kind = detectKindFromFile(f);
       if (!kind) {
         console.warn("[create-post] file rejected (unknown kind):", f.name, f.type);
@@ -213,6 +217,20 @@ export default function CreatePost() {
         }
       }
     })();
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = "";
+    void processPickedFiles(list);
+  };
+
+  /** Выбор из модалки: сначала копируем файлы, потом закрываем (иначе input снимается с DOM). */
+  const handleModalFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = "";
+    void processPickedFiles(list);
+    queueMicrotask(() => setShowMediaPicker(false));
   };
 
   const removeMedia = (index: number) => {
@@ -695,10 +713,10 @@ export default function CreatePost() {
               <label className="relative flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary min-h-[var(--uix-touch-min)] cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*,video/*"
+                  accept="image/*,video/*,audio/*,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.mp4,.mov,.webm,.m4a,.mp3,.aac,.wav"
                   multiple
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                  onChange={(e) => void handleFileChange(e)}
+                  className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                  onChange={handleFileInputChange}
                   aria-label="Выбрать фото или видео"
                 />
                 <Plus className="h-4 w-4" />
@@ -777,13 +795,10 @@ export default function CreatePost() {
               <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif"
                   multiple
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                  onChange={(e) => {
-                    setShowMediaPicker(false);
-                    void handleFileChange(e);
-                  }}
+                  className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                  onChange={handleModalFileInputChange}
                   aria-label="Выбрать фото"
                 />
                 <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
@@ -796,13 +811,10 @@ export default function CreatePost() {
             <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
               <input
                 type="file"
-                accept="video/*"
+                accept="video/*,.mp4,.mov,.webm,.m4v"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                onChange={handleModalFileInputChange}
                 aria-label="Выбрать видео"
               />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
@@ -814,13 +826,10 @@ export default function CreatePost() {
             <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
               <input
                 type="file"
-                accept="audio/*"
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                onChange={handleModalFileInputChange}
                 aria-label="Выбрать аудио"
               />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
@@ -832,13 +841,10 @@ export default function CreatePost() {
             <label className="relative mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
               <input
                 type="file"
-                accept="image/*,video/*"
+                accept="image/*,video/*,audio/*,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.mp4,.mov,.webm,.m4a,.mp3,.aac,.wav"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                onChange={handleModalFileInputChange}
                 aria-label="Выбрать файлы медиа"
               />
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
