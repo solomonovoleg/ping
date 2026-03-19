@@ -47,6 +47,20 @@ jobs:
                   f.write("\n")
           PY
 
+      # Только этот workflow (push в feature/dev). Production (npm run deploy с твоим deploy.env) этот шаг НЕ выполняет.
+      # Без этого заход по http://IP:3081 не сохраняет сессию при SESSION_SECURE=true в секрете → лента /posts и посты «мертвые».
+      - name: Staging HTTP — сессионная кука без Secure
+        env:
+          STAGING_HTTPS_COOKIE: ${{ vars.STAGING_HTTPS_COOKIE }}
+        run: |
+          if [ "${STAGING_HTTPS_COOKIE}" = "true" ]; then
+            echo "STAGING_HTTPS_COOKIE=true — не трогаем SESSION_SECURE из секрета (HTTPS-стенд)."
+            exit 0
+          fi
+          sed -i '/^SESSION_SECURE=/d' deploy.env
+          echo "SESSION_SECURE=false" >> deploy.env
+          echo "OK: для стенда по HTTP выставлено SESSION_SECURE=false"
+
       - name: Build and deploy (same as npm run deploy)
         env:
           DEPLOY_USE_SSHPASS: "1"

@@ -54,9 +54,8 @@ Workflow ставит **`sshpass`**, чтобы работал текущий `d
 
 Лента и посты ходят в **`GET /api/posts` с авторизацией** (сессионная кука).
 
-1. **`SESSION_SECURE=true` + открываешь сайт по HTTP** (`http://130.x.x.x:3081`) — браузер **не примет** куку `Secure`, сессии нет → **401**, лента не грузится, создание поста/медиа тоже.  
-   **Исправление:** в `STAGING_DEPLOY_ENV` поставь **`SESSION_SECURE=false`**, сохрани секрет и перезапусти деплой (push в `feature/dev` или Run workflow).  
-   Для **HTTPS**-домена стенда снова можно **`SESSION_SECURE=true`**.
+1. **`SESSION_SECURE=true` + HTTP** — в **workflow Deploy staging** после записи секрета автоматически подставляется **`SESSION_SECURE=false`**, пока не включён HTTPS-режим (см. ниже). Ручная правка секрета не обязательна.  
+   **HTTPS-стенд:** в репозитории GitHub → **Settings → Variables → Actions** создай **`STAGING_HTTPS_COOKIE`** = **`true`** — тогда workflow **не** перезапишет `SESSION_SECURE`, используй в секрете `SESSION_SECURE=true`.
 
 2. **`VITE_API_URL`** в секрете на **другой хост**, а открываешь приложение по **IP:3081** — запросы уйдут не на тот сервер. Для веба на том же хосте **не задавай** `VITE_API_URL` (будут относительные `/api/...`).
 
