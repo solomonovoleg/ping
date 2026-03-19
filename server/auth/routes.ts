@@ -39,6 +39,12 @@ async function ensureLocalDevUser(): Promise<void> {
   console.log(`[auth/dev] Local user ready: ${LOCAL_DEV_PHONE}`);
 }
 
+async function getLocalDevUser() {
+  if (!shouldEnsureLocalDevUser()) return undefined;
+  await ensureLocalDevUserOnce();
+  return storage.getUserByPhone(LOCAL_DEV_PHONE);
+}
+
 async function ensureLocalDevUserOnce(): Promise<void> {
   if (!shouldEnsureLocalDevUser()) return;
   if (!ensureLocalDevUserPromise) {
@@ -269,10 +275,18 @@ export function registerAuthRoutes(app: Express): void {
   /** Текущий пользователь. Без сессии/токена — 200 и {}, чтобы не засорять консоль 401. */
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     try {
-      const userId = getUserId(req);
+      let userId = getUserId(req);
       if (!userId) {
-        res.status(200).json({});
-        return;
+        // Dev convenience: in memory mode auto-login local test user
+        // so local stand doesn't bounce to registration on each restart.
+        const devUser = await getLocalDevUser();
+        if (devUser && req.session) {
+          req.session.userId = devUser.id;
+          userId = devUser.id;
+        } else {
+          res.status(200).json({});
+          return;
+        }
       }
       const user = await storage.getUser(userId);
       if (!user) {

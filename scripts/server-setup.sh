@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Установка и запуск на сервере через PM2 (порт 3080).
-# Использование: из корня проекта на сервере: PORT=3080 bash scripts/server-setup.sh
+# Установка и запуск на сервере через PM2 (поддерживает отдельный app name/порт для staging).
+# Использование: из корня проекта на сервере:
+#   APP_NAME=ping-moot-staging PORT=3081 bash scripts/server-setup.sh
 
 set -e
 cd "$(dirname "$0")/.."
 PORT="${PORT:-3080}"
+APP_NAME="${APP_NAME:-ping-moot}"
 
-echo "=== PING MOOT — установка и запуск на порту $PORT ==="
+echo "=== PING MOOT — установка и запуск $APP_NAME на порту $PORT ==="
 
 # Node.js (если ещё не установлен)
 if ! command -v node &>/dev/null; then
@@ -91,11 +93,11 @@ if ! command -v pm2 &>/dev/null; then
 fi
 
 cd "$(dirname "$0")/.."
-pm2 delete ping-moot 2>/dev/null || true
-PORT="$PORT" pm2 start ecosystem.config.cjs
+pm2 delete "$APP_NAME" 2>/dev/null || true
+APP_NAME="$APP_NAME" PORT="$PORT" pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup 2>/dev/null || true
 
 echo ""
 echo "Приложение запущено на порту $PORT (PM2). Проверка: http://$(hostname -I | awk '{print $1}'):$PORT"
-echo "Команды: pm2 status | pm2 logs ping-moot | pm2 restart ping-moot"
+echo "Команды: pm2 status | pm2 logs $APP_NAME | pm2 restart $APP_NAME"

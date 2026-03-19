@@ -6,21 +6,22 @@
 
 set -e
 cd "$(dirname "$0")/.."
+DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-deploy.env}"
 
 # Перезапуск с пустым окружением, иначе при большом deploy.env sed/ssh получают "Argument list too long"
-if [ -z "${DEPLOY_CLEAN_ENV:-}" ] && [ -f deploy.env ]; then
+if [ -z "${DEPLOY_CLEAN_ENV:-}" ] && [ -f "$DEPLOY_ENV_FILE" ]; then
   exec env -i "PATH=$PATH" "HOME=${HOME:-/tmp}" "TERM=${TERM:-dumb}" "DEPLOY_CLEAN_ENV=1" bash "$0" "$@"
 fi
 
-if [ ! -f deploy.env ]; then
+if [ ! -f "$DEPLOY_ENV_FILE" ]; then
   if [ ! -f deploy.env.example ]; then
-    echo "Нет deploy.env. Создай deploy.env с VPS_HOST, VPS_USER, VPS_PASSWORD."
+    echo "Нет $DEPLOY_ENV_FILE. Создай файл с VPS_HOST, VPS_USER, VPS_PASSWORD."
     exit 1
   fi
-  echo "=== Создаю deploy.env из примера ==="
-  cp deploy.env.example deploy.env
+  echo "=== Создаю $DEPLOY_ENV_FILE из примера ==="
+  cp deploy.env.example "$DEPLOY_ENV_FILE"
   SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n')
-  (grep -v '^SESSION_SECRET=' deploy.env 2>/dev/null; echo "SESSION_SECRET=$SECRET") > deploy.env.tmp && mv deploy.env.tmp deploy.env
+  (grep -v '^SESSION_SECRET=' "$DEPLOY_ENV_FILE" 2>/dev/null; echo "SESSION_SECRET=$SECRET") > "$DEPLOY_ENV_FILE.tmp" && mv "$DEPLOY_ENV_FILE.tmp" "$DEPLOY_ENV_FILE"
   echo "Готово. Заполни VPS_PASSWORD (и при необходимости DATABASE_URL для первого деплоя). Затем: npm run deploy"
   exit 0
 fi
@@ -30,7 +31,7 @@ while IFS= read -r line; do
   [[ "$line" =~ ^# ]] && continue
   line="${line#export }"
   [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && eval "$line"
-done < deploy.env 2>/dev/null || true
+done < "$DEPLOY_ENV_FILE" 2>/dev/null || true
 # В окружение экспортируем только то, что нужно дочерним процессам (npm, sshpass)
 export VITE_WS_URL 2>/dev/null || true
 export SSHPASS 2>/dev/null || true
@@ -40,6 +41,7 @@ SERVER_HOST="${1:-${SERVER_HOST:-${VPS_HOST:-130.49.150.92}}}"
 SERVER_USER="${2:-${SERVER_USER:-${VPS_USER:-root}}}"
 REMOTE_PORT="${PORT:-3080}"
 REMOTE_DIR="${REMOTE_DIR:-${VPS_PATH:-/var/www/ping-moot}}"
+APP_NAME="${APP_NAME:-ping-moot}"
 
 if [ -n "${VPS_PASSWORD}" ]; then
   export SSHPASS="$VPS_PASSWORD"
@@ -70,8 +72,8 @@ run_rsync -avz --delete \
 
 # .env на сервере: единственный источник правды — deploy.env. Если в deploy.env задан DATABASE_URL,
 # при каждом деплое перезаписываем .env на сервере, чтобы не править его вручную и не путаться.
-if [ -f deploy.env ] && [ -n "${DATABASE_URL:-}" ]; then
-  echo "=== Запись .env на сервер из deploy.env ==="
+if [ -f "$DEPLOY_ENV_FILE" ] && [ -n "${DATABASE_URL:-}" ]; then
+  echo "=== Запись .env на сервер из $DEPLOY_ENV_FILE ==="
   # Если SESSION_SECRET не задан в deploy.env — берём текущий с сервера, иначе после каждого деплоя все сессии сбрасываются
   if [ -z "${SESSION_SECRET:-}" ]; then
     existing=$(run_ssh "$SERVER_USER@$SERVER_HOST" "grep -E '^SESSION_SECRET=' $REMOTE_DIR/.env 2>/dev/null | head -1" 2>/dev/null) || true
@@ -116,10 +118,10 @@ if [ -f deploy.env ] && [ -n "${DATABASE_URL:-}" ]; then
   run_scp() { if [ -n "$SSHPASS" ]; then sshpass -e scp -o StrictHostKeyChecking=accept-new "$@"; else scp "$@"; fi; }
   run_scp "$ENV_TMP" "$SERVER_USER@$SERVER_HOST:$REMOTE_DIR/.env" || { echo "Ошибка записи .env"; exit 1; }
 else
-  if [ -f deploy.env ] && [ -z "${DATABASE_URL:-}" ]; then
-    echo "=== В deploy.env нет DATABASE_URL — .env на сервере не трогаем. Заполни DATABASE_URL в deploy.env для обновления. ==="
+  if [ -f "$DEPLOY_ENV_FILE" ] && [ -z "${DATABASE_URL:-}" ]; then
+    echo "=== В $DEPLOY_ENV_FILE нет DATABASE_URL — .env на сервере не трогаем. Заполни DATABASE_URL в $DEPLOY_ENV_FILE для обновления. ==="
   else
-    echo "=== deploy.env отсутствует или пуст — .env на сервере не трогаем ==="
+    echo "=== $DEPLOY_ENV_FILE отсутствует или пуст — .env на сервере не трогаем ==="
   fi
 fi
 
@@ -127,4 +129,4 @@ fi
 run_ssh "$SERVER_USER@$SERVER_HOST" "test -f $REMOTE_DIR/.env && sed -i.bak -e 's/@base/@localhost/g' -e 's/:base:5432/:localhost:5432/g' $REMOTE_DIR/.env && echo 'OK: .env (base->localhost)' || true"
 
 echo "=== Установка зависимостей, миграции, рестарт на сервере ==="
-run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && PORT=$REMOTE_PORT bash scripts/server-setup.sh" || { echo "Ошибка на сервере"; exit 1; }
+run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && APP_NAME=$APP_NAME PORT=$REMOTE_PORT bash scripts/server-setup.sh" || { echo "Ошибка на сервере"; exit 1; }

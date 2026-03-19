@@ -5,6 +5,9 @@ dist
 .env.*.local
 deploy.env
 deploy.env.tmp
+deploy.staging.env
+.deploy-staging.tar
+.deploy-staging.server.env
 docs/CREDENTIALS.md
 .DS_Store
 server/public

@@ -6,7 +6,7 @@
 module.exports = {
   apps: [
     {
-      name: "ping-moot",
+      name: process.env.APP_NAME || "ping-moot",
       script: "dist/index.cjs",
       cwd: __dirname,
       instances: 1,
@@ -15,7 +15,7 @@ module.exports = {
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
-        PORT: 3080,
+        PORT: Number(process.env.PORT || 3080),
         // DATABASE_URL и SESSION_SECRET берутся из .env в папке проекта (dotenv/config)
       },
     },

@@ -241,6 +241,32 @@ npm run deploy
 
 ---
 
+## Отдельный staging из ветки
+
+Чтобы не мешать `main` и второму разработчику, используй отдельный env-файл и отдельный PM2-процесс:
+
+1. Создай `deploy.staging.env` из примера:
+
+```bash
+cp deploy.staging.env.example deploy.staging.env
+```
+
+2. Заполни в `deploy.staging.env` (файл в `.gitignore`, не коммить):
+- `VPS_HOST`, `VPS_USER`, **`VPS_PASSWORD`** — для неинтерактивной заливки (`scripts/deploy-staging-upload.mjs` через `ssh2`, без запроса пароля в ssh/scp)
+- `APP_NAME=ping-moot-staging`
+- `PORT=3081`
+- `VPS_PATH=/var/www/ping-moot-staging`
+- отдельный `DATABASE_URL` (например `ping_moot_staging`)
+
+3. Запусти деплой staging:
+
+- Linux/macOS / WSL: `npm run deploy:staging`
+- **Windows (PowerShell):** `npm run deploy:staging:win` — собирает архив и вызывает `node scripts/deploy-staging-upload.mjs`
+
+Так staging будет изолирован: отдельная папка, порт, PM2-процесс и БД. Скрипт при необходимости создаёт роль/БД в PostgreSQL по `DATABASE_URL`.
+
+---
+
 ## Кратко
 
 - **Папка**: отдельная (например `/var/www/ping-moot`).
