@@ -17,11 +17,14 @@ import { registerNotificationsRoutes } from "./notifications/routes";
 import { registerUsersRoutes } from "./users/routes";
 import { registerVoiceUploadRoutes } from "./upload/voice";
 import { registerPostMediaUploadRoutes } from "./upload/post-media";
+import { registerStoryMediaUploadRoutes } from "./upload/story-media";
 import { registerChatMediaUploadRoutes } from "./upload/chat-media";
 import { registerAvatarUploadRoutes } from "./upload/avatar";
 import { registerCoverUploadRoutes } from "./upload/cover";
 import { registerCallRoutes } from "./calls/routes";
 import { attachCallWebSocket } from "./calls/ws";
+import { startAdminMetricsCollector } from "./admin/metrics-collector";
+import { attachGroupCallTransport, registerGroupCallRoutes } from "./group-calls";
 import { registerSavedMessagesRoutes } from "./saved-messages/routes";
 import { registerTracksRoutes } from "./tracks/routes";
 import { registerAiChatRoutes } from "./ai-chat/routes";
@@ -29,11 +32,12 @@ import { registerSpellcheckRoutes } from "./spellcheck/routes";
 import { registerLinkPreviewRoutes } from "./link-preview/routes";
 import { registerTranslateRoutes } from "./translate/routes";
 import { registerVibeRoutes } from "./vibe/routes";
-import { ensureUserColumns } from "./db";
+import { registerCallTranscriptRoutes } from "./call-transcripts/routes";
+import { ensureUserColumns, ensureChatVibeSchema, ensureCallTranscriptsSchema } from "./db";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 
-const UPLOADS_SUBDIRS = ["voice", "posts", "avatars", "covers", "chat"];
+const UPLOADS_SUBDIRS = ["voice", "posts", "stories", "avatars", "covers", "chat"];
 
 function ensureUploadsDirs(): void {
   if (!fs.existsSync(UPLOADS_ROOT)) fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
@@ -49,6 +53,8 @@ export async function registerRoutes(
 ): Promise<Server> {
   if (process.env.DATABASE_URL) {
     await ensureUserColumns();
+    await ensureChatVibeSchema();
+    await ensureCallTranscriptsSchema();
     await ensureSessionTable();
   }
   // CORS для /uploads не перезаписываем: глобальный CORS уже выставил Allow-Origin (origin или capacitor://localhost при Bearer).
@@ -68,7 +74,10 @@ export async function registerRoutes(
   });
 
   registerCallRoutes(app);
+  registerGroupCallRoutes(app);
   attachCallWebSocket(httpServer);
+  attachGroupCallTransport(httpServer);
+  startAdminMetricsCollector();
 
   app.get("/api/build-info", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -97,8 +106,10 @@ export async function registerRoutes(
   registerVibeRoutes(app);
   registerSavedMessagesRoutes(app);
   registerTracksRoutes(app);
+  registerCallTranscriptRoutes(app);
   registerVoiceUploadRoutes(app);
   registerPostMediaUploadRoutes(app);
+  registerStoryMediaUploadRoutes(app);
   registerChatMediaUploadRoutes(app);
   registerAvatarUploadRoutes(app);
   registerCoverUploadRoutes(app);

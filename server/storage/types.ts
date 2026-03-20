@@ -13,6 +13,10 @@ import type {
   ChatVibeState,
   ChatVibeBatch,
   ChatVibeHistoryEntry,
+  CallSessionHistory,
+  CallParticipantHistory,
+  CallTranscriptSegment,
+  CallCommandSuggestion,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 
@@ -53,6 +57,8 @@ export interface IStorage {
 
   /** Админка: статистика пользователей */
   getAdminStats(): Promise<{ total: number; blocked: number; deleted: number; registeredToday: number }>;
+  /** Админка: регистрации по дням (UTC), без удалённых */
+  getUserRegistrationsByDay(days: number): Promise<{ day: string; count: number }[]>;
   /** Админка: список пользователей с пагинацией (без удалённых по умолчанию) */
   listUsersForAdmin(opts: { limit: number; offset: number; includeDeleted?: boolean; search?: string }): Promise<{ users: User[]; total: number }>;
   setUserBlocked(userId: string, blocked: boolean, opts?: { bannedBy: string; banReason?: string }): Promise<User | undefined>;
@@ -61,18 +67,25 @@ export interface IStorage {
   /** Список пользователей с ролью отличной от user (для раздела «Админы») */
   listAdmins(): Promise<Pick<User, "id" | "publicId" | "phone" | "displayName" | "surname" | "platformRole">[]>;
 
-  /** Реферальные коды: создать приглашение */
-  createReferralCode(inviterUserId: string, code: string, expiresAt: Date): Promise<{ id: string; code: string; expiresAt: Date }>;
-  /** Найти код по строке (нормализованной), только если не истёк и не использован */
+  /** Реферальные коды: создать приглашение (maxUses: -1 = без лимита до истечения) */
+  createReferralCode(
+    inviterUserId: string,
+    code: string,
+    expiresAt: Date,
+    opts?: { maxUses?: number }
+  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number }>;
+  /** Найти код по строке (нормализованной), только если не истёк и остались использования */
   getReferralCodeByCode(code: string): Promise<{ id: string; inviterUserId: string; expiresAt: Date } | undefined>;
-  /** Отметить код как использованный */
-  markReferralCodeUsed(codeId: string): Promise<void>;
+  /** Списать одно использование кода при регистрации */
+  consumeReferralCode(codeId: string): Promise<boolean>;
   /** Сколько пользователей привёл этот inviter */
   countReferralsByInviter(inviterUserId: string): Promise<number>;
   /** Количество приглашённых по списку userId (для админки) */
   getReferralCountsForUserIds(userIds: string[]): Promise<Record<string, number>>;
-  /** Активные коды пользователя (не использованы, не истекли) */
-  listActiveReferralCodesByInviter(inviterUserId: string): Promise<{ id: string; code: string; expiresAt: Date }[]>;
+  /** Активные коды пользователя (есть оставшиеся использования, не истекли) */
+  listActiveReferralCodesByInviter(
+    inviterUserId: string
+  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number; useCount: number }[]>;
   /** Список пользователей, приглашённых данным пользователем (для настроек) */
   listInvitedUsers(inviterUserId: string): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "avatarUrl" | "createdAt">[]>;
 
@@ -165,9 +178,10 @@ export interface IStorage {
 
   /** Треки: списки сообщений пользователя */
   createTrack(userId: string, name: string): Promise<{ id: string; name: string; createdAt: Date }>;
-  listTracks(userId: string): Promise<{ id: string; name: string; createdAt: Date }[]>;
+  listTracks(userId: string): Promise<{ id: string; name: string; createdAt: Date; totalItems: number; activeItems: number; doneItems: number }[]>;
   getTrack(userId: string, trackId: string): Promise<{ id: string; name: string; createdAt: Date } | undefined>;
   addMessageToTrack(userId: string, trackId: string, messageId: string, chatId: string): Promise<void>;
+  addCallSegmentToTrack(userId: string, trackId: string, segmentId: string): Promise<void>;
   removeTrackItem(userId: string, trackId: string, itemId: string): Promise<void>;
   setTrackItemDone(userId: string, trackId: string, itemId: string, done: boolean): Promise<void>;
   updateTrack(userId: string, trackId: string, data: { name: string }): Promise<void>;
@@ -179,9 +193,12 @@ export interface IStorage {
   ): Promise<
     {
       id: string;
-      messageId: string;
-      chatId: string;
+      sourceType: "message" | "call_segment";
+      messageId: string | null;
+      chatId: string | null;
+      callId: string | null;
       chatName: string;
+      speakerDisplayName: string | null;
       content: string;
       type: string;
       messageCreatedAt: Date;
@@ -189,6 +206,46 @@ export interface IStorage {
       doneAt: Date | null;
     }[]
   >;
+  createCallSessionHistory(data: {
+    id: string;
+    chatId: string;
+    mediaType: "audio" | "video";
+    createdByUserId: string;
+  }): Promise<CallSessionHistory>;
+  endCallSessionHistory(callId: string): Promise<void>;
+  upsertCallParticipantHistory(callId: string, userId: string, displayNameSnapshot: string): Promise<CallParticipantHistory>;
+  markCallParticipantLeft(callId: string, userId: string): Promise<void>;
+  upsertCallTranscriptSegment(data: {
+    id: string;
+    callId: string;
+    speakerUserId: string;
+    speakerDisplayName: string;
+    sourceStreamId?: string | null;
+    language?: string;
+    textRaw: string;
+    textNormalized: string;
+    confidence: number;
+    startedAtMs: number;
+    endedAtMs: number;
+    isFinal: boolean;
+  }): Promise<CallTranscriptSegment>;
+  getCallTranscriptSegment(callId: string, segmentId: string): Promise<CallTranscriptSegment | undefined>;
+  listCallTranscriptSegments(userId: string, callId: string): Promise<CallTranscriptSegment[]>;
+  listCallSessionsHistory(userId: string): Promise<Array<CallSessionHistory & { participantCount: number; chatName: string }>>;
+  createCallCommandSuggestion(data: {
+    callId: string;
+    segmentId?: string | null;
+    intentType: string;
+    title: string;
+    payloadJson: string;
+  }): Promise<CallCommandSuggestion>;
+  listCallCommandSuggestions(userId: string, callId: string): Promise<CallCommandSuggestion[]>;
+  resolveCallCommandSuggestion(
+    userId: string,
+    callId: string,
+    suggestionId: string,
+    status: "accepted" | "dismissed",
+  ): Promise<void>;
 
   /** Chat Vibe: текущее состояние вайба DM-чата */
   getVibeState(chatId: string): Promise<ChatVibeState | undefined>;
@@ -200,6 +257,8 @@ export interface IStorage {
       axes: VibeAxes;
       messageCounter: number;
       themeVersion?: number;
+      /** true только после реального батч-анализа — иначе кулдаун вайба никогда не проходил */
+      touchLastBatchAt?: boolean;
     }
   ): Promise<ChatVibeState>;
   createVibeBatch(data: {

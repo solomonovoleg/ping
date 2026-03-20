@@ -9,20 +9,23 @@ import { storage } from "../storage";
 import {
   createSession,
   getSession,
+  getActiveCallForUser,
   acceptSession,
   endSession,
   isUserInActiveCall,
   isParticipant,
   getOtherParticipant,
   setRingTimer,
-  cleanupForDisconnectedUser,
   RING_TIMEOUT_MS,
 } from "./session";
+import { isUserInGroupCall } from "../group-calls/room-runtime";
 
 type WsWithUserId = WebSocket & { userId?: string; isAlive?: boolean };
 
 /** userId -> Set of WebSocket */
 const socketsByUser = new Map<string, Set<WsWithUserId>>();
+const disconnectCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const DISCONNECT_GRACE_MS = numEnv("CALLS_DISCONNECT_GRACE_MS", 25_000);
 
 function numEnv(name: string, fallback: number): number {
   const v = process.env[name];
@@ -62,10 +65,34 @@ function getOpenUserSockets(userId: string): WsWithUserId[] {
   return list;
 }
 
+/** Уникальные пользователи с открытым /calls WS и число таких соединений (для админ-метрик). */
+export function getCallsRealtimeMetrics(): { onlineUsers: number; openConnections: number } {
+  let onlineUsers = 0;
+  let openConnections = 0;
+  for (const [, set] of socketsByUser) {
+    let n = 0;
+    set.forEach((ws) => {
+      if (ws.readyState === 1) n += 1;
+    });
+    if (n > 0) {
+      onlineUsers += 1;
+      openConnections += n;
+    }
+  }
+  return { onlineUsers, openConnections };
+}
+
 function sendToUser(userId: string, data: Record<string, unknown>): void {
   const set = getOpenUserSockets(userId);
   const raw = JSON.stringify(data);
   set.forEach((ws) => ws.send(raw));
+}
+
+function clearDisconnectCleanupTimer(userId: string): void {
+  const t = disconnectCleanupTimers.get(userId);
+  if (!t) return;
+  clearTimeout(t);
+  disconnectCleanupTimers.delete(userId);
 }
 
 /** Notify a user that their chat list changed (new chat, etc.) */
@@ -114,9 +141,32 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
     ws.userId = userId;
     ws.isAlive = true;
     ws.on("pong", () => { ws.isAlive = true; });
+    clearDisconnectCleanupTimer(userId);
     getUserSockets(userId).add(ws);
     console.log("[calls] ws connected", { userId, totalSockets: getOpenUserSockets(userId).length });
     storage.updateUserLastSeen(userId).catch(() => {});
+    const activeSession = getActiveCallForUser(userId);
+    if (activeSession) {
+      const otherUserId = activeSession.callerId === userId ? activeSession.calleeId : activeSession.callerId;
+      const direction = activeSession.callerId === userId ? "outgoing" : "incoming";
+      const shouldInitiateOffer = direction === "outgoing";
+      Promise.resolve(storage.getUser(otherUserId))
+        .then((otherUser) => {
+          if (ws.readyState !== 1) return;
+          ws.send(JSON.stringify({
+            type: "call.resume-available",
+            callId: activeSession.callId,
+            chatId: activeSession.chatId,
+            mediaType: activeSession.mediaType,
+            otherUserId,
+            otherDisplayName: otherUser?.displayName || otherUser?.phone || "Абонент",
+            direction,
+            shouldInitiateOffer,
+          }));
+          sendToUser(otherUserId, { type: "call.peer-reconnected", callId: activeSession.callId, byUserId: userId });
+        })
+        .catch(() => {});
+    }
 
     ws.on("message", async (raw: Buffer | string) => {
       try {
@@ -170,6 +220,32 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
         // ── Call events (call.* namespace) ──────────────────────
         if (!type || !type.startsWith("call.")) return;
 
+        if (type === "call.resume-check") {
+          const sessionForUser = getActiveCallForUser(userId);
+          if (!sessionForUser) {
+            debugCall("call.resume-check-miss", { userId, reason: "no_active_session" });
+            console.log("[calls] resume-check: no active session (user may have been dropped after disconnect grace or call ended)", {
+              userId,
+            });
+            return;
+          }
+          const otherUserId = sessionForUser.callerId === userId ? sessionForUser.calleeId : sessionForUser.callerId;
+          const direction = sessionForUser.callerId === userId ? "outgoing" : "incoming";
+          const shouldInitiateOffer = direction === "outgoing";
+          const otherUser = await storage.getUser(otherUserId);
+          ws.send(JSON.stringify({
+            type: "call.resume-available",
+            callId: sessionForUser.callId,
+            chatId: sessionForUser.chatId,
+            mediaType: sessionForUser.mediaType,
+            otherUserId,
+            otherDisplayName: otherUser?.displayName || otherUser?.phone || "Абонент",
+            direction,
+            shouldInitiateOffer,
+          }));
+          return;
+        }
+
         const callId = typeof parsed.callId === "string" ? parsed.callId : "";
 
         // ── call.invite ─────────────────────────────────────────
@@ -216,12 +292,48 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
             }
           }
 
+          const existingForInviter = getActiveCallForUser(userId);
+          if (
+            existingForInviter &&
+            existingForInviter.state === "ringing" &&
+            existingForInviter.calleeId === userId &&
+            existingForInviter.callerId === toUserId
+          ) {
+            const glareCaller = await storage.getUser(toUserId);
+            sendToUser(userId, {
+              type: "call.error",
+              callId,
+              code: "glare_use_incoming",
+              message: "Собеседник уже вызывает вас",
+            });
+            sendToUser(userId, {
+              type: "call.incoming",
+              callId: existingForInviter.callId,
+              fromUserId: toUserId,
+              chatId: existingForInviter.chatId,
+              mediaType: existingForInviter.mediaType,
+              fromDisplayName: existingForInviter.callerDisplayName,
+              fromAvatarUrl: glareCaller?.avatarUrl ?? null,
+            });
+            return;
+          }
+
           if (isUserInActiveCall(userId)) {
             sendToUser(userId, { type: "call.error", callId, code: "already_in_call", message: "Вы уже в звонке" });
             return;
           }
 
+          if (isUserInGroupCall(userId)) {
+            sendToUser(userId, { type: "call.error", callId, code: "in_group_call", message: "Сначала выйдите из группового созвона" });
+            return;
+          }
+
           if (isUserInActiveCall(toUserId)) {
+            sendToUser(userId, { type: "call.rejected", callId, byUserId: toUserId, reason: "busy" });
+            return;
+          }
+
+          if (isUserInGroupCall(toUserId)) {
             sendToUser(userId, { type: "call.rejected", callId, byUserId: toUserId, reason: "busy" });
             return;
           }
@@ -313,8 +425,24 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
           return;
         }
 
-        // ── call.offer / call.answer / call.ice-candidate ───────
-        if (type === "call.offer" || type === "call.answer" || type === "call.ice-candidate") {
+        // ── call.resume-request ────────────────────────────────
+        if (type === "call.resume-request") {
+          if (!session || !isParticipant(callId, userId)) return;
+          const target = getOtherParticipant(callId, userId);
+          if (!target) return;
+          sendToUser(target, { type: "call.peer-reconnected", callId, byUserId: userId });
+          return;
+        }
+
+        // ── call.offer / call.answer / call.ice-candidate / extensions ───────
+        if (
+          type === "call.offer" ||
+          type === "call.answer" ||
+          type === "call.ice-candidate" ||
+          type === "call.reaction" ||
+          type === "call.caption" ||
+          type === "call.screen-share-state"
+        ) {
           if (!session || !isParticipant(callId, userId)) return;
           const target = getOtherParticipant(callId, userId);
           if (!target) return;
@@ -344,25 +472,25 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
       }
 
       if (hasOtherActive) return;
+      clearDisconnectCleanupTimer(userId);
+      disconnectCleanupTimers.set(userId, setTimeout(() => {
+        disconnectCleanupTimers.delete(userId);
+        if (getOpenUserSockets(userId).length > 0) return;
+        const session = getActiveCallForUser(userId);
+        if (!session) return;
+        const callId = session.callId;
+        const target = getOtherParticipant(callId, userId);
+        endSession(callId, userId, "ended");
+        console.log("[calls] call ended (disconnect timeout)", { callId, disconnectedUser: userId, graceMs: DISCONNECT_GRACE_MS });
 
-      const callId = cleanupForDisconnectedUser(userId);
-      if (!callId) return;
-
-      const session = getSession(callId);
-      if (!session) return;
-
-      const target = getOtherParticipant(callId, userId);
-      endSession(callId, userId, "ended");
-      console.log("[calls] call ended (disconnect)", { callId, disconnectedUser: userId });
-
-      if (target) {
-        sendToUser(target, { type: "call.hungup", callId, byUserId: userId });
-      }
-
-      if (session.state === "ringing") {
-        recordMissedCall(session.chatId, session.callerId, session.calleeId, session.mediaType === "video")
-          .catch((e) => console.error("[calls] recordMissedCall:", e));
-      }
+        if (target) {
+          sendToUser(target, { type: "call.hungup", callId, byUserId: userId });
+        }
+        if (session.state === "ringing") {
+          recordMissedCall(session.chatId, session.callerId, session.calleeId, session.mediaType === "video")
+            .catch((e) => console.error("[calls] recordMissedCall:", e));
+        }
+      }, DISCONNECT_GRACE_MS));
     });
   });
 }

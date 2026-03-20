@@ -1,6 +1,6 @@
-import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
-/** Пригласительные коды: читаемый код из 4 слов, срок действия 12 часов, одноразовый */
+/** Пригласительные коды: читаемый код из 4 слов, срок действия; 1 = одноразовый, -1 = без лимита до истечения */
 export const referralCodes = pgTable("referral_codes", {
   id: varchar("id").primaryKey(),
   /** Человекочитаемый код: 4 слова через дефис, например sun-sea-coffee-book */
@@ -12,6 +12,10 @@ export const referralCodes = pgTable("referral_codes", {
   /** Когда код использован (null = ещё не использован) */
   usedAt: timestamp("used_at", { withTimezone: true, mode: "date" }),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow(),
+  /** 1 — одноразовый; >1 — не более N регистраций; -1 — без лимита до expires_at */
+  maxUses: integer("max_uses").notNull().default(1),
+  /** Сколько раз код уже применили при регистрации */
+  useCount: integer("use_count").notNull().default(0),
 });
 
 export type ReferralCode = typeof referralCodes.$inferSelect;

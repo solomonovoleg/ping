@@ -1,15 +1,62 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { format, parseISO } from "date-fns";
+import { ru } from "date-fns/locale";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { Card } from "@/components/ui/card";
-import { fetchDashboardStats } from "@/lib/admin";
-import { Users, UserX, UserMinus, UserPlus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { fetchDashboardAnalytics, fetchDashboardStats } from "@/lib/admin";
+import { usePrefersReducedMotion } from "@/lib/motion";
+import { Users, UserX, UserMinus, UserPlus, Activity, Cpu } from "lucide-react";
+
+const REGISTRATION_DAYS = 14;
 
 export default function AdminDashboard() {
-  const { data: stats, isLoading, error } = useQuery({
+  const reducedMotion = usePrefersReducedMotion();
+  const animate = !reducedMotion;
+
+  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
     queryKey: ["admin", "dashboard", "stats"],
     queryFn: fetchDashboardStats,
   });
 
-  if (isLoading) {
+  const {
+    data: analytics,
+    isLoading: analyticsLoading,
+    error: analyticsError,
+    refetch: refetchAnalytics,
+    isFetching: analyticsFetching,
+  } = useQuery({
+    queryKey: ["admin", "dashboard", "analytics", REGISTRATION_DAYS],
+    queryFn: () => fetchDashboardAnalytics(REGISTRATION_DAYS),
+    refetchInterval: 60_000,
+  });
+
+  const serverChartData = useMemo(() => analytics?.serverMetrics.history ?? [], [analytics]);
+
+  const registrationChartData = useMemo(
+    () =>
+      (analytics?.registrationsByDay ?? []).map((r) => ({
+        ...r,
+        label: format(parseISO(`${r.day}T12:00:00.000Z`), "d MMM", { locale: ru }),
+      })),
+    [analytics]
+  );
+
+  const current = analytics?.serverMetrics.current;
+
+  if (statsLoading) {
     return (
       <div className="space-y-6">
         <div className="h-8 w-32 rounded bg-muted animate-pulse" />
@@ -30,12 +77,12 @@ export default function AdminDashboard() {
     );
   }
 
-  if (error || !stats) {
+  if (statsError || !stats) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold">Дашборд</h1>
         <p className="text-destructive">
-          {error instanceof Error ? error.message : "Не удалось загрузить статистику"}
+          {statsError instanceof Error ? statsError.message : "Не удалось загрузить статистику"}
         </p>
       </div>
     );
@@ -66,6 +113,158 @@ export default function AdminDashboard() {
           </Card>
         ))}
       </div>
+
+      {current && (
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+          <Card className="p-3">
+            <p className="text-xs text-muted-foreground">Сейчас в сети (WS)</p>
+            <p className="text-xl font-semibold tabular-nums">{current.onlineUsers}</p>
+          </Card>
+          <Card className="p-3">
+            <p className="text-xs text-muted-foreground">Соединений /calls</p>
+            <p className="text-xl font-semibold tabular-nums">{current.openConnections}</p>
+          </Card>
+          <Card className="p-3">
+            <p className="text-xs text-muted-foreground">Heap (Node)</p>
+            <p className="text-xl font-semibold tabular-nums">{current.heapUsedMb} МБ</p>
+          </Card>
+          <Card className="p-3">
+            <p className="text-xs text-muted-foreground">Load 1m</p>
+            <p className="text-xl font-semibold tabular-nums">{current.load1m}</p>
+          </Card>
+        </div>
+      )}
+
+      {analyticsLoading && !analytics ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="h-72 animate-pulse bg-muted/30" />
+          <Card className="h-72 animate-pulse bg-muted/30" />
+        </div>
+      ) : analyticsError ? (
+        <Card className="p-4">
+          <p className="text-destructive text-sm mb-2">
+            {analyticsError instanceof Error ? analyticsError.message : "Не удалось загрузить графики"}
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={() => refetchAnalytics()}>
+            Повторить
+          </Button>
+        </Card>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card className="p-4 pt-5">
+            <div className="flex items-center gap-2 mb-1">
+              <UserPlus className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-base font-semibold">Новые регистрации по дням</h2>
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Последние {REGISTRATION_DAYS} дней (UTC), без удалённых аккаунтов
+            </p>
+            <div className="h-64 w-full min-h-[16rem]">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={registrationChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="regFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                  <YAxis allowDecimals={false} width={32} tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 8 }}
+                    formatter={(v: number) => [v, "Регистраций"]}
+                    labelFormatter={(_, payload) => {
+                      const p = payload?.[0]?.payload as { day?: string } | undefined;
+                      return p?.day ?? "";
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="count"
+                    stroke="hsl(var(--primary))"
+                    fill="url(#regFill)"
+                    strokeWidth={2}
+                    isAnimationActive={animate}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card className="p-4 pt-5">
+            <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-base font-semibold">Онлайн и нагрузка процесса</h2>
+              </div>
+              {analyticsFetching ? (
+                <span className="text-xs text-muted-foreground">Обновление…</span>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground mb-4">
+              Точки каждые 5 минут после перезапуска сервера. {analytics?.metricsNote ?? ""}
+            </p>
+            {serverChartData.length === 0 ? (
+              <div className="h-64 flex flex-col items-center justify-center text-center text-sm text-muted-foreground gap-2 px-4">
+                <Cpu className="h-8 w-8 opacity-50" />
+                <p>Нет снимков нагрузки. Подождите до первого интервала сбора (до 5 мин после старта сервера).</p>
+              </div>
+            ) : (
+              <div className="h-64 w-full min-h-[16rem]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={serverChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis
+                      dataKey="at"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(t) => format(parseISO(t), "dd.MM HH:mm", { locale: ru })}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis yAxisId="left" width={36} tick={{ fontSize: 10 }} allowDecimals={false} />
+                    <YAxis yAxisId="right" orientation="right" width={36} tick={{ fontSize: 10 }} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 8 }}
+                      labelFormatter={(t) => format(parseISO(t as string), "PPp", { locale: ru })}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="onlineUsers"
+                      name="В сети"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={animate}
+                    />
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="heapUsedMb"
+                      name="Heap МБ"
+                      stroke="hsl(var(--muted-foreground))"
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={animate}
+                    />
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="load1m"
+                      name="Load 1m"
+                      stroke="#f59e0b"
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={animate}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

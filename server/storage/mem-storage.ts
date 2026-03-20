@@ -1,5 +1,14 @@
 import type { IStorage } from "./types";
-import type { ChatFolder, ChatVibeState, ChatVibeBatch, ChatVibeHistoryEntry } from "@shared/schema";
+import type {
+  ChatFolder,
+  ChatVibeState,
+  ChatVibeBatch,
+  ChatVibeHistoryEntry,
+  CallSessionHistory,
+  CallParticipantHistory,
+  CallTranscriptSegment,
+  CallCommandSuggestion,
+} from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { createUsersStore } from "./users-store";
 import { createChatsStore } from "./chats-store";
@@ -196,6 +205,10 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.users.getAdminStats());
   }
 
+  async getUserRegistrationsByDay(days: number) {
+    return Promise.resolve(this.users.getRegistrationsByDay(days));
+  }
+
   async listUsersForAdmin(opts: {
     limit: number;
     offset: number;
@@ -237,9 +250,12 @@ export class MemStorage implements IStorage {
     return Promise.resolve(u);
   }
 
-  async createReferralCode(inviterUserId: string, code: string, expiresAt: Date) {
-    const row = this.referralCodes.create(inviterUserId, code, expiresAt);
-    return Promise.resolve({ id: row.id, code: row.code, expiresAt: row.expiresAt });
+  async createReferralCode(inviterUserId: string, code: string, expiresAt: Date, opts?: { maxUses?: number }) {
+    let maxUses = opts?.maxUses ?? 1;
+    if (maxUses === 0 || maxUses < -1) maxUses = 1;
+    if (maxUses > 10_000) maxUses = 10_000;
+    const row = this.referralCodes.create(inviterUserId, code, expiresAt, maxUses);
+    return Promise.resolve({ id: row.id, code: row.code, expiresAt: row.expiresAt, maxUses: row.maxUses });
   }
 
   async getReferralCodeByCode(code: string) {
@@ -248,9 +264,8 @@ export class MemStorage implements IStorage {
     return Promise.resolve({ id: row.id, inviterUserId: row.inviterUserId, expiresAt: row.expiresAt });
   }
 
-  async markReferralCodeUsed(codeId: string) {
-    this.referralCodes.markUsed(codeId);
-    return Promise.resolve();
+  async consumeReferralCode(codeId: string) {
+    return Promise.resolve(this.referralCodes.consume(codeId));
   }
 
   async countReferralsByInviter(inviterUserId: string) {
@@ -259,7 +274,15 @@ export class MemStorage implements IStorage {
 
   async listActiveReferralCodesByInviter(inviterUserId: string) {
     const list = this.referralCodes.listActiveByInviter(inviterUserId);
-    return Promise.resolve(list.map((r) => ({ id: r.id, code: r.code, expiresAt: r.expiresAt })));
+    return Promise.resolve(
+      list.map((r) => ({
+        id: r.id,
+        code: r.code,
+        expiresAt: r.expiresAt,
+        maxUses: r.maxUses,
+        useCount: r.useCount,
+      }))
+    );
   }
 
   async getReferralCountsForUserIds(userIds: string[]) {
@@ -555,6 +578,10 @@ export class MemStorage implements IStorage {
     return Promise.resolve();
   }
 
+  async addCallSegmentToTrack(_userId: string, _trackId: string, _segmentId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
   async removeTrackItem(_userId: string, _trackId: string, _itemId: string): Promise<void> {
     return Promise.resolve();
   }
@@ -581,9 +608,12 @@ export class MemStorage implements IStorage {
   ): Promise<
     {
       id: string;
-      messageId: string;
-      chatId: string;
+      sourceType: "message" | "call_segment";
+      messageId: string | null;
+      chatId: string | null;
+      callId: string | null;
       chatName: string;
+      speakerDisplayName: string | null;
       content: string;
       type: string;
       messageCreatedAt: Date;
@@ -592,6 +622,120 @@ export class MemStorage implements IStorage {
     }[]
   > {
     return [];
+  }
+
+  async createCallSessionHistory(data: {
+    id: string;
+    chatId: string;
+    mediaType: "audio" | "video";
+    createdByUserId: string;
+  }): Promise<CallSessionHistory> {
+    return {
+      id: data.id,
+      chatId: data.chatId,
+      mediaType: data.mediaType,
+      createdByUserId: data.createdByUserId,
+      createdAt: new Date(),
+      endedAt: null,
+    };
+  }
+
+  async endCallSessionHistory(_callId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async upsertCallParticipantHistory(callId: string, userId: string, displayNameSnapshot: string): Promise<CallParticipantHistory> {
+    return {
+      id: randomUUID(),
+      callId,
+      userId,
+      displayNameSnapshot,
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+  }
+
+  async markCallParticipantLeft(_callId: string, _userId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async upsertCallTranscriptSegment(data: {
+    id: string;
+    callId: string;
+    speakerUserId: string;
+    speakerDisplayName: string;
+    sourceStreamId?: string | null;
+    language?: string;
+    textRaw: string;
+    textNormalized: string;
+    confidence: number;
+    startedAtMs: number;
+    endedAtMs: number;
+    isFinal: boolean;
+  }): Promise<CallTranscriptSegment> {
+    const now = new Date();
+    return {
+      id: data.id,
+      callId: data.callId,
+      speakerUserId: data.speakerUserId,
+      speakerDisplayName: data.speakerDisplayName,
+      sourceStreamId: data.sourceStreamId ?? null,
+      language: data.language ?? "ru-RU",
+      textRaw: data.textRaw,
+      textNormalized: data.textNormalized,
+      confidence: data.confidence,
+      startedAtMs: data.startedAtMs,
+      endedAtMs: data.endedAtMs,
+      isFinal: data.isFinal,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  async getCallTranscriptSegment(_callId: string, _segmentId: string): Promise<CallTranscriptSegment | undefined> {
+    return undefined;
+  }
+
+  async listCallTranscriptSegments(_userId: string, _callId: string): Promise<CallTranscriptSegment[]> {
+    return [];
+  }
+
+  async listCallSessionsHistory(_userId: string): Promise<Array<CallSessionHistory & { participantCount: number; chatName: string }>> {
+    return [];
+  }
+
+  async createCallCommandSuggestion(data: {
+    callId: string;
+    segmentId?: string | null;
+    intentType: string;
+    title: string;
+    payloadJson: string;
+  }): Promise<CallCommandSuggestion> {
+    return {
+      id: randomUUID(),
+      callId: data.callId,
+      segmentId: data.segmentId ?? null,
+      intentType: data.intentType,
+      title: data.title,
+      payloadJson: data.payloadJson,
+      status: "pending",
+      createdAt: new Date(),
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+  }
+
+  async listCallCommandSuggestions(_userId: string, _callId: string): Promise<CallCommandSuggestion[]> {
+    return [];
+  }
+
+  async resolveCallCommandSuggestion(
+    _userId: string,
+    _callId: string,
+    _suggestionId: string,
+    _status: "accepted" | "dismissed",
+  ): Promise<void> {
+    return Promise.resolve();
   }
 
   // ── Chat Vibe (in-memory stubs) ───────────────────────────
@@ -604,10 +748,18 @@ export class MemStorage implements IStorage {
 
   async upsertVibeState(
     chatId: string,
-    data: { theme: VibeThemeCode; confidence: number; axes: VibeAxes; messageCounter: number; themeVersion?: number }
+    data: {
+      theme: VibeThemeCode;
+      confidence: number;
+      axes: VibeAxes;
+      messageCounter: number;
+      themeVersion?: number;
+      touchLastBatchAt?: boolean;
+    }
   ): Promise<ChatVibeState> {
     const now = new Date();
     const existing = this.vibeStates.get(chatId);
+    const touchBatch = data.touchLastBatchAt === true;
     const row: ChatVibeState = {
       id: existing?.id ?? crypto.randomUUID(),
       chatId,
@@ -621,7 +773,7 @@ export class MemStorage implements IStorage {
       energy: data.axes.energy,
       messageCounter: data.messageCounter,
       themeVersion: data.themeVersion ?? (existing?.themeVersion ?? 1),
-      lastBatchAt: now,
+      lastBatchAt: touchBatch ? now : (existing?.lastBatchAt ?? null),
       updatedAt: now,
     };
     this.vibeStates.set(chatId, row);

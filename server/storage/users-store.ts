@@ -21,6 +21,7 @@ export interface UsersStore {
   listAdmins(): User[];
   countReferralsByInviter(inviterUserId: string): number;
   listInvitedBy(inviterUserId: string): User[];
+  getRegistrationsByDay(days: number): { day: string; count: number }[];
 }
 
 export function createUsersStore(): UsersStore {
@@ -170,6 +171,29 @@ export function createUsersStore(): UsersStore {
       return Array.from(users.values())
         .filter((u) => (u as User).invitedById === inviterUserId)
         .sort((a, b) => new Date((b as User).createdAt!).getTime() - new Date((a as User).createdAt!).getTime());
+    },
+    getRegistrationsByDay(days: number) {
+      const safeDays = Math.min(Math.max(1, Math.floor(days)), 90);
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      start.setUTCDate(start.getUTCDate() - (safeDays - 1));
+      const map = new Map<string, number>();
+      for (const u of users.values()) {
+        if ((u as User).deletedAt) continue;
+        const c = (u as User).createdAt;
+        if (!c || new Date(c) < start) continue;
+        const d = new Date(c);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+        map.set(key, (map.get(key) ?? 0) + 1);
+      }
+      const out: { day: string; count: number }[] = [];
+      for (let i = 0; i < safeDays; i++) {
+        const d = new Date(start);
+        d.setUTCDate(start.getUTCDate() + i);
+        const key = d.toISOString().slice(0, 10);
+        out.push({ day: key, count: map.get(key) ?? 0 });
+      }
+      return out;
     },
   };
 }

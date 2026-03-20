@@ -75,7 +75,16 @@ export function registerAuthRoutes(app: Express): void {
       publicId,
       ...(invitedById && { invitedById }),
     });
-    if (referralCodeId) await storage.markReferralCodeUsed(referralCodeId);
+    if (referralCodeId) {
+      const consumed = await storage.consumeReferralCode(referralCodeId);
+      if (!consumed) {
+        await storage.setUserDeleted(user.id, true);
+        res.status(409).json({
+          message: "Код приглашения больше недействителен (уже использован или истёк). Обновите страницу и попробуйте снова.",
+        });
+        return;
+      }
+    }
     if (invitedById) {
       try {
         const { notifyChatListUpdate } = await import("../calls/ws");

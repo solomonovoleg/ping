@@ -1,9 +1,45 @@
 import { randomUUID } from "crypto";
-import { eq, and, desc, asc, sql, gt, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, gt, gte, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
 import type { IStorage } from "./types";
-import type { User, InsertUser, UpdateProfile, Chat, ChatMember, InsertChat, InsertChatMember, Message, InsertMessage } from "@shared/schema";
-import { users, referralCodes, chats, chatMembers, messages, contacts, follows, userBlocks, savedMessages, messageHidden, tracks, trackItems, chatFolders, scheduledMessages, chatVibeState, chatVibeBatches, chatVibeHistory } from "@shared/schema";
-import type { ChatVibeState, ChatVibeBatch, ChatVibeHistoryEntry } from "@shared/schema";
+import type {
+  User,
+  InsertUser,
+  UpdateProfile,
+  Chat,
+  ChatMember,
+  InsertChat,
+  InsertChatMember,
+  Message,
+  InsertMessage,
+  ChatVibeState,
+  ChatVibeBatch,
+  ChatVibeHistoryEntry,
+  CallTranscriptSegment,
+} from "@shared/schema";
+import {
+  users,
+  referralCodes,
+  chats,
+  chatMembers,
+  messages,
+  contacts,
+  follows,
+  userBlocks,
+  savedMessages,
+  messageHidden,
+  tracks,
+  trackItems,
+  chatFolders,
+  scheduledMessages,
+  chatVibeState,
+  chatVibeBatches,
+  chatVibeHistory,
+  callSessionsHistory,
+  callParticipantsHistory,
+  callTranscriptSegments,
+  callCommandSuggestions,
+  callTrackItems,
+} from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getDb, ensureUserColumns } from "../db";
 import { normalizePhone } from "../auth/phone";
@@ -184,32 +220,62 @@ export class DbStorage implements IStorage {
     return list;
   }
 
-  async createReferralCode(inviterUserId: string, code: string, expiresAt: Date): Promise<{ id: string; code: string; expiresAt: Date }> {
+  async createReferralCode(
+    inviterUserId: string,
+    code: string,
+    expiresAt: Date,
+    opts?: { maxUses?: number }
+  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number }> {
     const id = randomUUID();
+    let maxUses = opts?.maxUses ?? 1;
+    if (maxUses === 0 || maxUses < -1) maxUses = 1;
+    if (maxUses > 10_000) maxUses = 10_000;
     await this.db.insert(referralCodes).values({
       id,
       code,
       inviterUserId,
       expiresAt,
+      maxUses,
+      useCount: 0,
     });
-    return { id, code, expiresAt };
+    return { id, code, expiresAt, maxUses };
   }
 
   async getReferralCodeByCode(code: string): Promise<{ id: string; inviterUserId: string; expiresAt: Date } | undefined> {
     const now = new Date();
+    const usable = or(
+      and(eq(referralCodes.maxUses, 1), isNull(referralCodes.usedAt)),
+      eq(referralCodes.maxUses, -1),
+      and(gt(referralCodes.maxUses, 1), sql`${referralCodes.useCount} < ${referralCodes.maxUses}`)
+    );
     const [row] = await this.db
       .select({ id: referralCodes.id, inviterUserId: referralCodes.inviterUserId, expiresAt: referralCodes.expiresAt })
       .from(referralCodes)
-      .where(and(eq(referralCodes.code, code), gt(referralCodes.expiresAt, now), isNull(referralCodes.usedAt)))
+      .where(and(eq(referralCodes.code, code), gt(referralCodes.expiresAt, now), usable))
       .limit(1);
     return row;
   }
 
-  async markReferralCodeUsed(codeId: string): Promise<void> {
-    await this.db
+  /** Атомарно списывает одно использование; false — гонка или код уже недействителен */
+  async consumeReferralCode(codeId: string): Promise<boolean> {
+    const stillValid = or(
+      and(eq(referralCodes.maxUses, 1), isNull(referralCodes.usedAt)),
+      eq(referralCodes.maxUses, -1),
+      and(gt(referralCodes.maxUses, 1), sql`${referralCodes.useCount} < ${referralCodes.maxUses}`)
+    );
+    const rows = await this.db
       .update(referralCodes)
-      .set({ usedAt: new Date() })
-      .where(eq(referralCodes.id, codeId));
+      .set({
+        useCount: sql`${referralCodes.useCount} + 1`,
+        usedAt: sql`CASE
+          WHEN ${referralCodes.maxUses} = 1 THEN NOW()
+          WHEN ${referralCodes.maxUses} > 1 AND ${referralCodes.useCount} + 1 >= ${referralCodes.maxUses} THEN NOW()
+          ELSE ${referralCodes.usedAt}
+        END`,
+      })
+      .where(and(eq(referralCodes.id, codeId), sql`${referralCodes.expiresAt} > NOW()`, stillValid))
+      .returning({ id: referralCodes.id });
+    return rows.length === 1;
   }
 
   async countReferralsByInviter(inviterUserId: string): Promise<number> {
@@ -220,13 +286,53 @@ export class DbStorage implements IStorage {
     return r?.count ?? 0;
   }
 
-  async listActiveReferralCodesByInviter(inviterUserId: string): Promise<{ id: string; code: string; expiresAt: Date }[]> {
+  async listActiveReferralCodesByInviter(
+    inviterUserId: string
+  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number; useCount: number }[]> {
     const now = new Date();
+    const usable = or(
+      and(eq(referralCodes.maxUses, 1), isNull(referralCodes.usedAt)),
+      eq(referralCodes.maxUses, -1),
+      and(gt(referralCodes.maxUses, 1), sql`${referralCodes.useCount} < ${referralCodes.maxUses}`)
+    );
     return this.db
-      .select({ id: referralCodes.id, code: referralCodes.code, expiresAt: referralCodes.expiresAt })
+      .select({
+        id: referralCodes.id,
+        code: referralCodes.code,
+        expiresAt: referralCodes.expiresAt,
+        maxUses: referralCodes.maxUses,
+        useCount: referralCodes.useCount,
+      })
       .from(referralCodes)
-      .where(and(eq(referralCodes.inviterUserId, inviterUserId), gt(referralCodes.expiresAt, now), isNull(referralCodes.usedAt)))
+      .where(and(eq(referralCodes.inviterUserId, inviterUserId), gt(referralCodes.expiresAt, now), usable))
       .orderBy(desc(referralCodes.expiresAt));
+  }
+
+  async getUserRegistrationsByDay(days: number): Promise<{ day: string; count: number }[]> {
+    const safeDays = Math.min(Math.max(1, Math.floor(days)), 90);
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (safeDays - 1));
+
+    const rows = await this.db
+      .select({
+        day: sql<string>`to_char((${users.createdAt} AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD')`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(users)
+      .where(and(isNull(users.deletedAt), gte(users.createdAt, start)))
+      .groupBy(sql`(${users.createdAt} AT TIME ZONE 'UTC')::date`)
+      .orderBy(asc(sql`(${users.createdAt} AT TIME ZONE 'UTC')::date`));
+
+    const map = new Map(rows.map((r) => [r.day, r.count]));
+    const out: { day: string; count: number }[] = [];
+    for (let i = 0; i < safeDays; i++) {
+      const d = new Date(start);
+      d.setUTCDate(start.getUTCDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      out.push({ day: key, count: map.get(key) ?? 0 });
+    }
+    return out;
   }
 
   async listInvitedUsers(inviterUserId: string): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "avatarUrl" | "createdAt">[]> {
@@ -792,7 +898,7 @@ export class DbStorage implements IStorage {
       .from(tracks)
       .where(eq(tracks.userId, userId))
       .orderBy(desc(tracks.createdAt));
-    const counts = await this.db
+    const messageCounts = await this.db
       .select({
         trackId: trackItems.trackId,
         total: sql<number>`count(*)::int`,
@@ -801,7 +907,25 @@ export class DbStorage implements IStorage {
       })
       .from(trackItems)
       .groupBy(trackItems.trackId);
-    const countMap = new Map(counts.map((c) => [c.trackId, { total: c.total, active: c.active, done: c.done }]));
+    const callCounts = await this.db
+      .select({
+        trackId: callTrackItems.trackId,
+        total: sql<number>`count(*)::int`,
+        active: sql<number>`count(*) filter (where ${callTrackItems.doneAt} is null)::int`,
+        done: sql<number>`count(*) filter (where ${callTrackItems.doneAt} is not null)::int`,
+      })
+      .from(callTrackItems)
+      .groupBy(callTrackItems.trackId);
+    const countMap = new Map<string, { total: number; active: number; done: number }>();
+    for (const c of messageCounts) countMap.set(c.trackId, { total: c.total, active: c.active, done: c.done });
+    for (const c of callCounts) {
+      const prev = countMap.get(c.trackId) ?? { total: 0, active: 0, done: 0 };
+      countMap.set(c.trackId, {
+        total: prev.total + c.total,
+        active: prev.active + c.active,
+        done: prev.done + c.done,
+      });
+    }
     return trackRows.map((t) => {
       const c = countMap.get(t.id) ?? { total: 0, active: 0, done: 0 };
       return { ...t, totalItems: c.total, activeItems: c.active, doneItems: c.done };
@@ -830,6 +954,35 @@ export class DbStorage implements IStorage {
       .onConflictDoNothing({ target: [trackItems.trackId, trackItems.messageId] });
   }
 
+  async addCallSegmentToTrack(userId: string, trackId: string, segmentId: string): Promise<void> {
+    const track = await this.getTrack(userId, trackId);
+    if (!track) throw new Error("Трек не найден");
+    const [row] = await this.db
+      .select({
+        segmentId: callTranscriptSegments.id,
+        callId: callTranscriptSegments.callId,
+        speakerUserId: callTranscriptSegments.speakerUserId,
+        speakerDisplayName: callTranscriptSegments.speakerDisplayName,
+        text: callTranscriptSegments.textNormalized,
+      })
+      .from(callTranscriptSegments)
+      .innerJoin(callParticipantsHistory, eq(callParticipantsHistory.callId, callTranscriptSegments.callId))
+      .where(and(eq(callTranscriptSegments.id, segmentId), eq(callParticipantsHistory.userId, userId)))
+      .limit(1);
+    if (!row) throw new Error("Реплика не найдена");
+    await this.db
+      .insert(callTrackItems)
+      .values({
+        trackId,
+        callId: row.callId,
+        segmentId: row.segmentId,
+        speakerUserId: row.speakerUserId,
+        speakerDisplayName: row.speakerDisplayName,
+        text: row.text,
+      })
+      .onConflictDoNothing({ target: [callTrackItems.trackId, callTrackItems.segmentId] });
+  }
+
   async removeTrackItem(userId: string, trackId: string, itemId: string): Promise<void> {
     const track = await this.getTrack(userId, trackId);
     if (!track) throw new Error("Трек не найден");
@@ -838,8 +991,17 @@ export class DbStorage implements IStorage {
       .from(trackItems)
       .where(and(eq(trackItems.trackId, trackId), eq(trackItems.id, itemId)))
       .limit(1);
-    if (!item) throw new Error("Элемент не найден");
-    await this.db.delete(trackItems).where(eq(trackItems.id, itemId));
+    if (item) {
+      await this.db.delete(trackItems).where(eq(trackItems.id, itemId));
+      return;
+    }
+    const [callItem] = await this.db
+      .select()
+      .from(callTrackItems)
+      .where(and(eq(callTrackItems.trackId, trackId), eq(callTrackItems.id, itemId)))
+      .limit(1);
+    if (!callItem) throw new Error("Элемент не найден");
+    await this.db.delete(callTrackItems).where(eq(callTrackItems.id, itemId));
   }
 
   async setTrackItemDone(userId: string, trackId: string, itemId: string, done: boolean): Promise<void> {
@@ -850,11 +1012,23 @@ export class DbStorage implements IStorage {
       .from(trackItems)
       .where(and(eq(trackItems.trackId, trackId), eq(trackItems.id, itemId)))
       .limit(1);
-    if (!item) throw new Error("Элемент не найден");
+    if (item) {
+      await this.db
+        .update(trackItems)
+        .set({ doneAt: done ? new Date() : null })
+        .where(eq(trackItems.id, itemId));
+      return;
+    }
+    const [callItem] = await this.db
+      .select()
+      .from(callTrackItems)
+      .where(and(eq(callTrackItems.trackId, trackId), eq(callTrackItems.id, itemId)))
+      .limit(1);
+    if (!callItem) throw new Error("Элемент не найден");
     await this.db
-      .update(trackItems)
+      .update(callTrackItems)
       .set({ doneAt: done ? new Date() : null })
-      .where(eq(trackItems.id, itemId));
+      .where(eq(callTrackItems.id, itemId));
   }
 
   async updateTrack(userId: string, trackId: string, data: { name: string }): Promise<void> {
@@ -892,11 +1066,27 @@ export class DbStorage implements IStorage {
       .from(trackItems)
       .innerJoin(tracks, eq(tracks.id, trackItems.trackId))
       .where(eq(tracks.userId, userId));
+    const [activeCallRow] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(callTrackItems)
+      .innerJoin(tracks, eq(tracks.id, callTrackItems.trackId))
+      .where(and(eq(tracks.userId, userId), isNull(callTrackItems.doneAt)));
+    const [doneCallRow] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(callTrackItems)
+      .innerJoin(tracks, eq(tracks.id, callTrackItems.trackId))
+      .where(and(eq(tracks.userId, userId), isNotNull(callTrackItems.doneAt)));
+    const [lastCallRow] = await this.db
+      .select({ lastAdded: sql<Date>`max(${callTrackItems.addedAt})` })
+      .from(callTrackItems)
+      .innerJoin(tracks, eq(tracks.id, callTrackItems.trackId))
+      .where(eq(tracks.userId, userId));
+    const candidates = [lastRow?.lastAdded ?? null, lastCallRow?.lastAdded ?? null].filter(Boolean) as Date[];
     return {
       totalTracks: totalRow?.count ?? 0,
-      activeItemsCount: activeRow?.count ?? 0,
-      doneItemsCount: doneRow?.count ?? 0,
-      lastAddedAt: lastRow?.lastAdded ?? null,
+      activeItemsCount: (activeRow?.count ?? 0) + (activeCallRow?.count ?? 0),
+      doneItemsCount: (doneRow?.count ?? 0) + (doneCallRow?.count ?? 0),
+      lastAddedAt: candidates.sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
     };
   }
 
@@ -906,9 +1096,12 @@ export class DbStorage implements IStorage {
   ): Promise<
     {
       id: string;
-      messageId: string;
-      chatId: string;
+      sourceType: "message" | "call_segment";
+      messageId: string | null;
+      chatId: string | null;
+      callId: string | null;
       chatName: string;
+      speakerDisplayName: string | null;
       content: string;
       type: string;
       messageCreatedAt: Date;
@@ -933,6 +1126,22 @@ export class DbStorage implements IStorage {
       .innerJoin(messages, eq(messages.id, trackItems.messageId))
       .where(eq(trackItems.trackId, trackId))
       .orderBy(desc(trackItems.addedAt));
+    const callRows = await this.db
+      .select({
+        id: callTrackItems.id,
+        callId: callTrackItems.callId,
+        speakerDisplayName: callTrackItems.speakerDisplayName,
+        content: callTrackItems.text,
+        createdAt: callTranscriptSegments.createdAt,
+        addedAt: callTrackItems.addedAt,
+        doneAt: callTrackItems.doneAt,
+        chatId: callSessionsHistory.chatId,
+      })
+      .from(callTrackItems)
+      .innerJoin(callTranscriptSegments, eq(callTranscriptSegments.id, callTrackItems.segmentId))
+      .innerJoin(callSessionsHistory, eq(callSessionsHistory.id, callTrackItems.callId))
+      .where(eq(callTrackItems.trackId, trackId))
+      .orderBy(desc(callTrackItems.addedAt));
     const chatNames = new Map<string, string>();
     for (const row of rows) {
       if (chatNames.has(row.chatId)) continue;
@@ -953,17 +1162,218 @@ export class DbStorage implements IStorage {
         chatNames.set(row.chatId, chat.name || "Группа");
       }
     }
-    return rows.map((r) => ({
+    for (const row of callRows) {
+      if (chatNames.has(row.chatId)) continue;
+      const chat = await this.getChatById(row.chatId);
+      chatNames.set(row.chatId, chat?.name || "Созвон");
+    }
+    const messageItems = rows.map((r) => ({
       id: r.id,
+      sourceType: "message" as const,
       messageId: r.messageId,
       chatId: r.chatId,
+      callId: null,
       chatName: chatNames.get(r.chatId) || "Чат",
+      speakerDisplayName: null,
       content: r.type === "text" ? r.content.slice(0, 200) : r.type,
       type: r.type,
       messageCreatedAt: r.messageCreatedAt,
       addedAt: r.addedAt,
       doneAt: r.doneAt,
     }));
+    const segmentItems = callRows.map((r) => ({
+      id: r.id,
+      sourceType: "call_segment" as const,
+      messageId: null,
+      chatId: null,
+      callId: r.callId,
+      chatName: `Созвон · ${chatNames.get(r.chatId) || "Чат"}`,
+      speakerDisplayName: r.speakerDisplayName,
+      content: r.content,
+      type: "call_segment",
+      messageCreatedAt: r.createdAt,
+      addedAt: r.addedAt,
+      doneAt: r.doneAt,
+    }));
+    return [...messageItems, ...segmentItems].sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime());
+  }
+
+  async createCallSessionHistory(data: {
+    id: string;
+    chatId: string;
+    mediaType: "audio" | "video";
+    createdByUserId: string;
+  }) {
+    const [row] = await this.db
+      .insert(callSessionsHistory)
+      .values(data)
+      .onConflictDoNothing({ target: [callSessionsHistory.id] })
+      .returning();
+    return row ?? (await this.db.select().from(callSessionsHistory).where(eq(callSessionsHistory.id, data.id)).limit(1))[0]!;
+  }
+
+  async endCallSessionHistory(callId: string): Promise<void> {
+    await this.db
+      .update(callSessionsHistory)
+      .set({ endedAt: new Date() })
+      .where(and(eq(callSessionsHistory.id, callId), isNull(callSessionsHistory.endedAt)));
+  }
+
+  async upsertCallParticipantHistory(callId: string, userId: string, displayNameSnapshot: string) {
+    const [row] = await this.db
+      .insert(callParticipantsHistory)
+      .values({ callId, userId, displayNameSnapshot, leftAt: null })
+      .onConflictDoUpdate({
+        target: [callParticipantsHistory.callId, callParticipantsHistory.userId],
+        set: { displayNameSnapshot, leftAt: null },
+      })
+      .returning();
+    return row;
+  }
+
+  async markCallParticipantLeft(callId: string, userId: string): Promise<void> {
+    await this.db
+      .update(callParticipantsHistory)
+      .set({ leftAt: new Date() })
+      .where(and(eq(callParticipantsHistory.callId, callId), eq(callParticipantsHistory.userId, userId)));
+  }
+
+  async upsertCallTranscriptSegment(data: {
+    id: string;
+    callId: string;
+    speakerUserId: string;
+    speakerDisplayName: string;
+    sourceStreamId?: string | null;
+    language?: string;
+    textRaw: string;
+    textNormalized: string;
+    confidence: number;
+    startedAtMs: number;
+    endedAtMs: number;
+    isFinal: boolean;
+  }): Promise<CallTranscriptSegment> {
+    const [row] = await this.db
+      .insert(callTranscriptSegments)
+      .values({
+        ...data,
+        sourceStreamId: data.sourceStreamId ?? null,
+        language: data.language ?? "ru-RU",
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [callTranscriptSegments.id],
+        set: {
+          speakerDisplayName: data.speakerDisplayName,
+          sourceStreamId: data.sourceStreamId ?? null,
+          language: data.language ?? "ru-RU",
+          textRaw: data.textRaw,
+          textNormalized: data.textNormalized,
+          confidence: data.confidence,
+          startedAtMs: data.startedAtMs,
+          endedAtMs: data.endedAtMs,
+          isFinal: data.isFinal,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async getCallTranscriptSegment(callId: string, segmentId: string): Promise<CallTranscriptSegment | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(callTranscriptSegments)
+      .where(and(eq(callTranscriptSegments.callId, callId), eq(callTranscriptSegments.id, segmentId)))
+      .limit(1);
+    return row;
+  }
+
+  async listCallTranscriptSegments(userId: string, callId: string): Promise<CallTranscriptSegment[]> {
+    const [participant] = await this.db
+      .select({ id: callParticipantsHistory.id })
+      .from(callParticipantsHistory)
+      .where(and(eq(callParticipantsHistory.callId, callId), eq(callParticipantsHistory.userId, userId)))
+      .limit(1);
+    if (!participant) return [];
+    return this.db
+      .select()
+      .from(callTranscriptSegments)
+      .where(eq(callTranscriptSegments.callId, callId))
+      .orderBy(asc(callTranscriptSegments.createdAt));
+  }
+
+  async listCallSessionsHistory(userId: string): Promise<Array<typeof callSessionsHistory.$inferSelect & { participantCount: number; chatName: string }>> {
+    const rows = await this.db
+      .select({
+        id: callSessionsHistory.id,
+        chatId: callSessionsHistory.chatId,
+        mediaType: callSessionsHistory.mediaType,
+        createdByUserId: callSessionsHistory.createdByUserId,
+        createdAt: callSessionsHistory.createdAt,
+        endedAt: callSessionsHistory.endedAt,
+      })
+      .from(callSessionsHistory)
+      .innerJoin(callParticipantsHistory, eq(callParticipantsHistory.callId, callSessionsHistory.id))
+      .where(eq(callParticipantsHistory.userId, userId))
+      .orderBy(desc(callSessionsHistory.createdAt));
+    const participantCounts = await this.db
+      .select({
+        callId: callParticipantsHistory.callId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(callParticipantsHistory)
+      .groupBy(callParticipantsHistory.callId);
+    const countMap = new Map(participantCounts.map((r) => [r.callId, r.count]));
+    const chatMap = new Map<string, string>();
+    for (const row of rows) {
+      if (chatMap.has(row.chatId)) continue;
+      const chat = await this.getChatById(row.chatId);
+      chatMap.set(row.chatId, chat?.name || "Созвон");
+    }
+    return rows.map((row) => ({ ...row, participantCount: countMap.get(row.id) ?? 0, chatName: chatMap.get(row.chatId) || "Созвон" }));
+  }
+
+  async createCallCommandSuggestion(data: {
+    callId: string;
+    segmentId?: string | null;
+    intentType: string;
+    title: string;
+    payloadJson: string;
+  }) {
+    const [row] = await this.db
+      .insert(callCommandSuggestions)
+      .values(data)
+      .onConflictDoNothing({ target: [callCommandSuggestions.segmentId, callCommandSuggestions.intentType] })
+      .returning();
+    return row ?? (await this.db.select().from(callCommandSuggestions)
+      .where(and(eq(callCommandSuggestions.segmentId, data.segmentId ?? ""), eq(callCommandSuggestions.intentType, data.intentType)))
+      .limit(1))[0]!;
+  }
+
+  async listCallCommandSuggestions(userId: string, callId: string) {
+    const [participant] = await this.db
+      .select({ id: callParticipantsHistory.id })
+      .from(callParticipantsHistory)
+      .where(and(eq(callParticipantsHistory.callId, callId), eq(callParticipantsHistory.userId, userId)))
+      .limit(1);
+    if (!participant) return [];
+    return this.db
+      .select()
+      .from(callCommandSuggestions)
+      .where(eq(callCommandSuggestions.callId, callId))
+      .orderBy(desc(callCommandSuggestions.createdAt));
+  }
+
+  async resolveCallCommandSuggestion(
+    userId: string,
+    callId: string,
+    suggestionId: string,
+    status: "accepted" | "dismissed",
+  ): Promise<void> {
+    await this.db
+      .update(callCommandSuggestions)
+      .set({ status, resolvedAt: new Date(), resolvedByUserId: userId })
+      .where(and(eq(callCommandSuggestions.id, suggestionId), eq(callCommandSuggestions.callId, callId)));
   }
 
   async updateUserProfile(userId: string, data: UpdateProfile): Promise<User | undefined> {
@@ -1187,10 +1597,12 @@ export class DbStorage implements IStorage {
       axes: VibeAxes;
       messageCounter: number;
       themeVersion?: number;
+      touchLastBatchAt?: boolean;
     }
   ): Promise<ChatVibeState> {
     const now = new Date();
-    const values = {
+    const touchBatch = data.touchLastBatchAt === true;
+    const insertValues = {
       chatId,
       theme: data.theme,
       confidence: String(data.confidence),
@@ -1202,15 +1614,30 @@ export class DbStorage implements IStorage {
       energy: data.axes.energy,
       messageCounter: data.messageCounter,
       ...(data.themeVersion !== undefined && { themeVersion: data.themeVersion }),
-      lastBatchAt: now,
+      lastBatchAt: touchBatch ? now : null,
       updatedAt: now,
     };
+    const updateSet: Record<string, unknown> = {
+      theme: data.theme,
+      confidence: String(data.confidence),
+      warmth: data.axes.warmth,
+      tension: data.axes.tension,
+      playfulness: data.axes.playfulness,
+      intimacy: data.axes.intimacy,
+      formality: data.axes.formality,
+      energy: data.axes.energy,
+      messageCounter: data.messageCounter,
+      updatedAt: now,
+    };
+    if (data.themeVersion !== undefined) updateSet.themeVersion = data.themeVersion;
+    if (touchBatch) updateSet.lastBatchAt = now;
+
     const [row] = await this.db
       .insert(chatVibeState)
-      .values(values)
+      .values(insertValues)
       .onConflictDoUpdate({
         target: chatVibeState.chatId,
-        set: { ...values },
+        set: updateSet as typeof insertValues,
       })
       .returning();
     return row;

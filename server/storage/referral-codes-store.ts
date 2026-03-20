@@ -7,12 +7,14 @@ export interface ReferralCodeRow {
   expiresAt: Date;
   usedAt: Date | null;
   createdAt: Date;
+  maxUses: number;
+  useCount: number;
 }
 
 export interface ReferralCodesStore {
-  create(inviterUserId: string, code: string, expiresAt: Date): ReferralCodeRow;
+  create(inviterUserId: string, code: string, expiresAt: Date, maxUses?: number): ReferralCodeRow;
   getByCode(code: string): ReferralCodeRow | undefined;
-  markUsed(id: string): void;
+  consume(id: string): boolean;
   listActiveByInviter(inviterUserId: string): ReferralCodeRow[];
 }
 
@@ -20,12 +22,20 @@ function normalizeCode(code: string): string {
   return code.toLowerCase().trim().replace(/\s+/g, "-").replace(/-+/g, "-");
 }
 
+function rowIsUsable(r: ReferralCodeRow, now: Date): boolean {
+  if (r.expiresAt <= now) return false;
+  if (r.maxUses === 1) return r.usedAt == null;
+  if (r.maxUses === -1) return true;
+  if (r.maxUses > 1) return r.useCount < r.maxUses;
+  return false;
+}
+
 export function createReferralCodesStore(): ReferralCodesStore {
   const byId = new Map<string, ReferralCodeRow>();
   const byCode = new Map<string, ReferralCodeRow>();
 
   return {
-    create(inviterUserId: string, code: string, expiresAt: Date) {
+    create(inviterUserId: string, code: string, expiresAt: Date, maxUses = 1) {
       const id = randomUUID();
       const row: ReferralCodeRow = {
         id,
@@ -34,6 +44,8 @@ export function createReferralCodesStore(): ReferralCodesStore {
         expiresAt,
         usedAt: null,
         createdAt: new Date(),
+        maxUses: maxUses === -1 || maxUses > 1 ? maxUses : 1,
+        useCount: 0,
       };
       byId.set(id, row);
       byCode.set(normalizeCode(code), row);
@@ -41,21 +53,24 @@ export function createReferralCodesStore(): ReferralCodesStore {
     },
     getByCode(code: string) {
       const row = byCode.get(normalizeCode(code));
-      if (!row || row.usedAt || row.expiresAt <= new Date()) return undefined;
+      const now = new Date();
+      if (!row || !rowIsUsable(row, now)) return undefined;
       return row;
     },
-    markUsed(id: string) {
+    consume(id: string) {
       const row = byId.get(id);
-      if (row) {
+      const now = new Date();
+      if (!row || !rowIsUsable(row, now)) return false;
+      row.useCount += 1;
+      if (row.maxUses === 1 || (row.maxUses > 1 && row.useCount >= row.maxUses)) {
         row.usedAt = new Date();
         byCode.delete(normalizeCode(row.code));
       }
+      return true;
     },
     listActiveByInviter(inviterUserId: string) {
       const now = new Date();
-      return Array.from(byId.values()).filter(
-        (r) => r.inviterUserId === inviterUserId && !r.usedAt && r.expiresAt > now
-      );
+      return Array.from(byId.values()).filter((r) => r.inviterUserId === inviterUserId && rowIsUsable(r, now));
     },
   };
 }

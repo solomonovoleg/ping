@@ -16,6 +16,13 @@ export function registerAdminReferralRoutes(app: Express): void {
     const expiresInHours = typeof req.body?.expiresInHours === "number" && req.body.expiresInHours > 0
       ? Math.min(req.body.expiresInHours, 30 * 24) // макс 30 дней
       : ADMIN_CODE_TTL_HOURS;
+    const multiUse = req.body?.multiUse === true;
+    let maxUses = 1;
+    if (multiUse) {
+      maxUses = -1;
+    } else if (typeof req.body?.maxUses === "number" && req.body.maxUses > 1) {
+      maxUses = Math.min(Math.floor(req.body.maxUses), 10_000);
+    }
 
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + expiresInHours);
@@ -29,12 +36,13 @@ export function registerAdminReferralRoutes(app: Express): void {
       attempts++;
     }
 
-    const created = await storage.createReferralCode(adminUserId, code, expiresAt);
+    const created = await storage.createReferralCode(adminUserId, code, expiresAt, { maxUses });
     res.status(201).json({
       id: created.id,
       code: created.code,
       expiresAt: created.expiresAt.toISOString(),
       expiresInHours,
+      maxUses: created.maxUses,
     });
   });
 
@@ -47,6 +55,8 @@ export function registerAdminReferralRoutes(app: Express): void {
         id: c.id,
         code: c.code,
         expiresAt: c.expiresAt.toISOString(),
+        maxUses: c.maxUses,
+        useCount: c.useCount,
       })),
     });
   });

@@ -1,9 +1,7 @@
-import { API, getAuthHeaders } from "@/lib/api-base";
+import { API, apiFetch } from "@/lib/api-base";
 
 function adminFetch(path: string, init?: RequestInit) {
-  const headers = new Headers(init?.headers);
-  Object.entries(getAuthHeaders()).forEach(([k, v]) => headers.set(k, v));
-  return fetch(`${API}${path}`, { ...init, credentials: "include", headers });
+  return apiFetch(`${API}${path}`, { ...init, credentials: "include" });
 }
 
 export type DashboardStats = {
@@ -15,6 +13,31 @@ export type DashboardStats = {
 
 export async function fetchDashboardStats(): Promise<DashboardStats> {
   const res = await adminFetch("/admin/dashboard/stats");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export type AdminMetricPoint = {
+  at: string;
+  onlineUsers: number;
+  openConnections: number;
+  heapUsedMb: number;
+  rssMb: number;
+  load1m: number;
+};
+
+export type DashboardAnalytics = {
+  registrationsByDay: { day: string; count: number }[];
+  serverMetrics: {
+    current: AdminMetricPoint;
+    history: AdminMetricPoint[];
+  };
+  metricsNote?: string;
+};
+
+export async function fetchDashboardAnalytics(days = 14): Promise<DashboardAnalytics> {
+  const safe = Math.min(90, Math.max(1, Math.floor(days)));
+  const res = await adminFetch(`/admin/dashboard/analytics?days=${safe}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -268,11 +291,17 @@ export type AdminReferralCode = {
   code: string;
   expiresAt: string;
   expiresInHours?: number;
+  maxUses?: number;
+  useCount?: number;
 };
 
 export async function createAdminReferralCode(opts?: {
   format?: "phrase" | "digits";
   expiresInHours?: number;
+  /** Без лимита использований до даты истечения */
+  multiUse?: boolean;
+  /** Фиксированное число регистраций (если не multiUse) */
+  maxUses?: number;
 }): Promise<AdminReferralCode> {
   const res = await adminFetch("/admin/referrals/create", {
     method: "POST",
