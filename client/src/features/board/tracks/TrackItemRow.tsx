@@ -18,6 +18,7 @@ export type TrackItemRowProps = {
   onRemove?: (itemId: string) => void;
   /** Переход в чат. messageId — скролл к сообщению. */
   onOpenChat?: (chatId: string, messageId?: string) => void;
+  onOpenCallHistory?: (callId: string) => void;
 };
 
 function formatContentPreview(content: string, type: string): string {
@@ -28,7 +29,7 @@ function formatContentPreview(content: string, type: string): string {
   return "Сообщение";
 }
 
-function TrackItemRowInner({ item, onDone, onRemove, onOpenChat }: TrackItemRowProps) {
+function TrackItemRowInner({ item, onDone, onRemove, onOpenChat, onOpenCallHistory }: TrackItemRowProps) {
   const isDone = !!item.doneAt;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -41,15 +42,15 @@ function TrackItemRowInner({ item, onDone, onRemove, onOpenChat }: TrackItemRowP
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (!onOpenChat) return;
+      if (item.sourceType !== "message" || !onOpenChat || !item.chatId) return;
       clearLongPress();
       longPressTimerRef.current = setTimeout(() => {
         longPressTimerRef.current = null;
         triggerSelectionHaptic();
-        onOpenChat(item.chatId, item.messageId);
+        onOpenChat(item.chatId!, item.messageId ?? undefined);
       }, LONG_PRESS_MS);
     },
-    [onOpenChat, item.chatId, item.messageId, clearLongPress]
+    [onOpenChat, item.chatId, item.messageId, clearLongPress, item.sourceType]
   );
 
   const handlePointerUp = useCallback(() => clearLongPress(), [clearLongPress]);
@@ -97,22 +98,36 @@ function TrackItemRowInner({ item, onDone, onRemove, onOpenChat }: TrackItemRowP
           isDone && "text-muted-foreground"
         )}
         {...contentLongPressProps}
-        title={onOpenChat ? "Удерживайте, чтобы перейти к сообщению в чате" : undefined}
+        title={item.sourceType === "message" && onOpenChat ? "Удерживайте, чтобы перейти к сообщению в чате" : undefined}
       >
         <p className={cn("text-[15px] leading-snug break-words", isDone && "line-through")}>
           {formatContentPreview(item.content, item.type)}
         </p>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[12px] text-muted-foreground">
-          {onOpenChat ? (
+          {item.sourceType === "message" && onOpenChat && item.chatId ? (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onOpenChat(item.chatId, item.messageId); }}
+              onClick={(e) => { e.stopPropagation(); onOpenChat(item.chatId!, item.messageId ?? undefined); }}
+              className="hover:text-primary hover:underline"
+            >
+              {item.chatName}
+            </button>
+          ) : item.sourceType === "call_segment" && item.callId && onOpenCallHistory ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenCallHistory(item.callId!); }}
               className="hover:text-primary hover:underline"
             >
               {item.chatName}
             </button>
           ) : (
             <span>{item.chatName}</span>
+          )}
+          {item.speakerDisplayName && (
+            <>
+              <span>·</span>
+              <span>{item.speakerDisplayName}</span>
+            </>
           )}
           <span>·</span>
           <span>{formatMessageTime(item.messageCreatedAt)}</span>

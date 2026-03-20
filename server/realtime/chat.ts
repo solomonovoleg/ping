@@ -59,17 +59,15 @@ export function notifyNewMessage(chatId: string, message: ChatMessagePayload): v
       return;
     }
 
-    getPref(recipientId, chatId)
-      .then((pref) => {
+    void (async () => {
+      try {
+        const pref = await getPref(recipientId, chatId);
         if (!pref?.enabled) {
           if (ws.readyState === 1) ws.send(originalPayload);
-          return "__sent__" as const;
+          return;
         }
-        return translate(message.content, pref.targetLang, message.id);
-      })
-      .then((result) => {
+        const result = await translate(message.content, pref.targetLang, message.id);
         if (ws.readyState !== 1) return;
-        if (result === "__sent__") return;
         if (result) {
           ws.send(JSON.stringify({
             type: "chat-message",
@@ -79,10 +77,10 @@ export function notifyNewMessage(chatId: string, message: ChatMessagePayload): v
         } else {
           ws.send(originalPayload);
         }
-      })
-      .catch(() => {
+      } catch {
         if (ws.readyState === 1) ws.send(originalPayload);
-      });
+      }
+    })();
   });
 }
 

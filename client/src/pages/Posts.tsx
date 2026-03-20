@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2, Camera, ImageIcon, User, Pencil } from "lucide-react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,7 @@ import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
-import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, uploadPostMedia, type FeedPost, type ReactionUser } from "@/lib/posts";
+import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, type FeedPost, type ReactionUser } from "@/lib/posts";
 import { PostMedia } from "@/components/PostMedia";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { startDm } from "@/lib/search";
@@ -24,9 +24,12 @@ import {
   likeStory,
   recordStoryView,
   unlikeStory,
+  uploadStoryMedia,
   type StoryViewerUser,
 } from "@/lib/stories";
 import { compressImage } from "@/lib/compress-image";
+import { validateStoryVideoFile } from "@/lib/story-media";
+import { getStoryBeautyEnabled, subscribeStoryPrefsChange } from "@/lib/story-prefs";
 import { isNative, takePhotoFromCamera, pickPhotoFromGallery } from "@/lib/capacitor-native";
 import { useLongPress } from "@/hooks/useLongPress";
 import { LoadingProgress } from "@/components/ui/loading-progress";
@@ -37,6 +40,7 @@ import { ShatterEffect } from "@/components/ShatterEffect";
 import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 import { FeedHeader } from "@/features/feed/components/FeedHeader";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
+import { playLikeActionSound } from "@/lib/send-sound";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -52,6 +56,164 @@ const OTHER_STORIES = [
 ];
 
 const EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
+const FEED_PAGE_SIZE = 5;
+const FEED_RENDER_WINDOW_SIZE = 15;
+const FEED_RENDER_OVERSCAN = 2;
+const FEED_POST_ESTIMATED_HEIGHT_PX = 560;
+
+function MeasuredFeedItem({
+  postId,
+  onHeightChange,
+  children,
+}: {
+  postId: string;
+  onHeightChange: (postId: string, height: number) => void;
+  children: ReactNode;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+
+    onHeightChange(postId, node.getBoundingClientRect().height);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      onHeightChange(postId, entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [postId, onHeightChange]);
+
+  return (
+    <div ref={rootRef} data-post-id={postId}>
+      {children}
+    </div>
+  );
+}
+
+function findPostIndexByOffset(offsets: number[], totalItems: number, targetOffset: number): number {
+  if (totalItems <= 0) return 0;
+  let low = 0;
+  let high = totalItems;
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (offsets[mid] <= targetOffset) low = mid;
+    else high = mid - 1;
+  }
+  return Math.min(totalItems - 1, Math.max(0, low));
+}
+
+function splitPostTextParts(text: string): string[] {
+  return text.split(/(https?:\/\/[^\s]+|www\.[^\s]+|#[a-zA-Zа-яёА-ЯЁ0-9_]+)/g);
+}
+
+function normalizeHref(part: string): string {
+  if (/^https?:\/\//i.test(part)) return part;
+  return `https://${part}`;
+}
+
+function FeedPostCaption({
+  postId,
+  text,
+  expanded,
+  onToggleExpand,
+  onHashtagClick,
+}: {
+  postId: string;
+  text: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onHashtagClick: (tag: string) => void;
+}) {
+  const paragraphRef = useRef<HTMLParagraphElement>(null);
+  const [showToggle, setShowToggle] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = paragraphRef.current;
+    if (!el) return;
+    if (expanded) {
+      setShowToggle(true);
+      return;
+    }
+    const measure = () => {
+      const node = paragraphRef.current;
+      if (!node) return;
+      setShowToggle(node.scrollHeight > node.clientHeight + 2);
+    };
+    measure();
+    requestAnimationFrame(measure);
+  }, [text, expanded, postId]);
+
+  if (!text.trim()) return null;
+
+  return (
+    <div className="min-w-0">
+      <div
+        className={cn(showToggle && !expanded && "cursor-pointer rounded-md -mx-0.5 px-0.5")}
+        onClick={() => {
+          if (showToggle && !expanded) onToggleExpand();
+        }}
+      >
+        <p
+          ref={paragraphRef}
+          className={cn(
+            "text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap",
+            !expanded && "line-clamp-2"
+          )}
+        >
+          {splitPostTextParts(text).map((part, i) => {
+            if (!part) return null;
+            if (part.startsWith("#")) {
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  className="text-primary font-medium hover:underline underline-offset-2"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onHashtagClick(part.slice(1).toLowerCase());
+                  }}
+                >
+                  {part}
+                </button>
+              );
+            }
+            if (/^(https?:\/\/|www\.)/i.test(part)) {
+              const href = normalizeHref(part);
+              return (
+                <a
+                  key={i}
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer noopener nofollow"
+                  className="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {part}
+                </a>
+              );
+            }
+            return <span key={i}>{part}</span>;
+          })}
+        </p>
+      </div>
+      {showToggle && (
+        <button
+          type="button"
+          className="mt-[var(--uix-space-2)] pl-0 text-[13px] font-semibold text-primary hover:underline underline-offset-2 min-h-[var(--uix-touch-min)] py-1 -my-1 text-left w-full sm:w-auto"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpand();
+          }}
+        >
+          {expanded ? "Свернуть" : "Ещё"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function Posts() {
   const [, setLocation] = useLocation();
@@ -74,14 +236,25 @@ export default function Posts() {
   const [likesCountByStoryId, setLikesCountByStoryId] = useState<Record<string, number>>({});
   const [myAvatarMenu, setMyAvatarMenu] = useState(false);
   const [storyUploading, setStoryUploading] = useState(false);
+  const [storyCircleBeauty, setStoryCircleBeauty] = useState(getStoryBeautyEnabled);
+  const [feedScrollTop, setFeedScrollTop] = useState(0);
+  const [feedViewportHeight, setFeedViewportHeight] = useState(0);
+  const [feedHeightsVersion, setFeedHeightsVersion] = useState(0);
   const storyFileRef = useRef<HTMLInputElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const postHeightsRef = useRef<Record<string, number>>({});
   const { toast } = useToast();
   const prefersReducedMotion = usePrefersReducedMotion();
   const isNativePlatform = isNative();
+  const storyCircleFilter = storyCircleBeauty
+    ? "saturate(1.1) contrast(1.08) brightness(1.04) hue-rotate(-2deg)"
+    : "none";
 
-  const POST_TEXT_PREVIEW_CHARS = 200;
+  useEffect(() => {
+    return subscribeStoryPrefsChange(() => setStoryCircleBeauty(getStoryBeautyEnabled()));
+  }, []);
+
   const togglePostExpand = (postId: string) => {
     setExpandedPostIds((prev) => {
       const next = new Set(prev);
@@ -91,7 +264,6 @@ export default function Posts() {
     });
   };
 
-  const FEED_PAGE_SIZE = 20;
   const feedOpts = hashtagFilter ? { hashtag: hashtagFilter } : undefined;
   const {
     data: feedData,
@@ -112,6 +284,82 @@ export default function Posts() {
     },
   });
   const feedPosts: FeedPost[] = Array.isArray(feedData?.pages) ? feedData.pages.flat() : [];
+  const updateFeedPostHeight = useCallback((postId: string, height: number) => {
+    if (!Number.isFinite(height) || height <= 0) return;
+    const rounded = Math.round(height);
+    const prev = postHeightsRef.current[postId];
+    if (prev != null && Math.abs(prev - rounded) < 2) return;
+    postHeightsRef.current[postId] = rounded;
+    setFeedHeightsVersion((v) => v + 1);
+  }, []);
+
+  useEffect(() => {
+    const existingIds = new Set(feedPosts.map((p) => p.id));
+    let changed = false;
+    for (const postId of Object.keys(postHeightsRef.current)) {
+      if (!existingIds.has(postId)) {
+        delete postHeightsRef.current[postId];
+        changed = true;
+      }
+    }
+    if (changed) setFeedHeightsVersion((v) => v + 1);
+  }, [feedPosts]);
+
+  useEffect(() => {
+    const el = feedScrollRef.current;
+    if (!el) return;
+    const sync = () => {
+      setFeedScrollTop(el.scrollTop);
+      setFeedViewportHeight(el.clientHeight);
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
+
+  const feedVirtualization = useMemo(() => {
+    const totalItems = feedPosts.length;
+    if (totalItems === 0) {
+      return {
+        startIndex: 0,
+        endIndexExclusive: 0,
+        topSpacerPx: 0,
+        bottomSpacerPx: 0,
+      };
+    }
+
+    const offsets = new Array<number>(totalItems + 1);
+    offsets[0] = 0;
+    for (let i = 0; i < totalItems; i += 1) {
+      const row = feedPosts[i];
+      const h = row ? (postHeightsRef.current[row.id] ?? FEED_POST_ESTIMATED_HEIGHT_PX) : FEED_POST_ESTIMATED_HEIGHT_PX;
+      offsets[i + 1] = offsets[i] + h;
+    }
+
+    const viewportTop = Math.max(0, feedScrollTop);
+    const viewportBottom = viewportTop + Math.max(1, feedViewportHeight);
+    const visibleStart = Math.max(0, findPostIndexByOffset(offsets, totalItems, viewportTop) - FEED_RENDER_OVERSCAN);
+    const visibleEnd = Math.min(totalItems, findPostIndexByOffset(offsets, totalItems, viewportBottom) + 1 + FEED_RENDER_OVERSCAN);
+
+    let startIndex = visibleStart;
+    let endIndexExclusive = visibleEnd;
+    if (endIndexExclusive - startIndex > FEED_RENDER_WINDOW_SIZE) {
+      startIndex = Math.max(0, endIndexExclusive - FEED_RENDER_WINDOW_SIZE);
+    }
+    if (endIndexExclusive - startIndex < FEED_RENDER_WINDOW_SIZE) {
+      endIndexExclusive = Math.min(totalItems, startIndex + FEED_RENDER_WINDOW_SIZE);
+    }
+
+    const topSpacerPx = offsets[startIndex] ?? 0;
+    const bottomSpacerPx = Math.max(0, (offsets[totalItems] ?? 0) - (offsets[endIndexExclusive] ?? 0));
+    return { startIndex, endIndexExclusive, topSpacerPx, bottomSpacerPx };
+  }, [feedPosts, feedScrollTop, feedViewportHeight, feedHeightsVersion]);
+
+  const renderedFeedPosts = feedPosts.slice(feedVirtualization.startIndex, feedVirtualization.endIndexExclusive);
   const feedErrorText =
     feedError instanceof Error && feedError.message.trim()
       ? feedError.message
@@ -276,7 +524,7 @@ export default function Posts() {
         ...OTHER_STORIES.map((s) => ({ ...s, hasActive: true, stories: [], author: null })),
       ];
 
-  const getViewerStoriesForIndex = (idx: number) => {
+  const getViewerStoriesForIndex = useCallback((idx: number) => {
     const item = storyCircles[idx];
     if (!item || !("stories" in item) || !Array.isArray(item.stories) || item.stories.length === 0) {
       return [{ id: item?.id ?? idx, image: (item as { image?: string })?.image ?? "", userName: (item as { name?: string })?.name ?? "", userAvatar: (item as { avatar?: string })?.avatar ?? "", time: (item as { time?: string })?.time ?? "" }];
@@ -302,7 +550,59 @@ export default function Posts() {
       likesCount: Number(s.likesCount ?? 0),
       isLiked: s.isLiked === true,
     }));
-  };
+  }, [storyCircles]);
+
+  /** Для записи просмотра: в цепочке сториз автор слайда не совпадает с кругом, с которого открыли. */
+  const storyAuthorIdByStoryId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of storiesFeed ?? []) {
+      const aid = a.authorId;
+      for (const s of a.stories ?? []) {
+        m.set(s.id, aid);
+      }
+    }
+    return m;
+  }, [storiesFeed]);
+
+  /** Все авторы с непустыми сториз по порядку кольца — свайп ведёт к следующему аккаунту. */
+  const chainedStoryViewerModel = useMemo(() => {
+    if (activeStoryIndex === null) return null;
+    const openedIdx = activeStoryIndex;
+    const itemAtOpen = storyCircles[openedIdx];
+    const hasAtOpen =
+      !!itemAtOpen &&
+      "stories" in itemAtOpen &&
+      Array.isArray(itemAtOpen.stories) &&
+      itemAtOpen.stories.length > 0;
+
+    if (!hasAtOpen) {
+      return { stories: getViewerStoriesForIndex(openedIdx), initialIndex: 0 };
+    }
+
+    type StoryViewerSlide = ReturnType<typeof getViewerStoriesForIndex>[number];
+    const flat: StoryViewerSlide[] = [];
+    let initialIndex = 0;
+    let sawOpen = false;
+
+    for (let i = 0; i < storyCircles.length; i++) {
+      const item = storyCircles[i];
+      const hasReal =
+        !!item && "stories" in item && Array.isArray(item.stories) && item.stories.length > 0;
+      if (!hasReal) continue;
+      if (i === openedIdx) {
+        initialIndex = flat.length;
+        sawOpen = true;
+      }
+      for (const slide of getViewerStoriesForIndex(i)) {
+        flat.push(slide);
+      }
+    }
+
+    if (!sawOpen || flat.length === 0) {
+      return { stories: getViewerStoriesForIndex(openedIdx), initialIndex: 0 };
+    }
+    return { stories: flat, initialIndex };
+  }, [activeStoryIndex, storyCircles, getViewerStoriesForIndex]);
 
   const handleStoryReply = async (payload: {
     storyId: string;
@@ -343,6 +643,9 @@ export default function Posts() {
       const result = liked ? await unlikeStory(storyId) : await likeStory(storyId);
       setLikedStoryIds((prev) => ({ ...prev, [storyId]: !!result.isLiked }));
       setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: Number(result.likesCount ?? optimisticCount) }));
+      if (!liked && result.isLiked) {
+        playLikeActionSound();
+      }
     } catch (err) {
       setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
       setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
@@ -416,8 +719,12 @@ export default function Posts() {
     setStoryUploading(true);
     try {
       const isImage = file.type.startsWith("image/");
+      if (!isImage) {
+        const videoValidationError = validateStoryVideoFile(file);
+        if (videoValidationError) throw new Error(videoValidationError);
+      }
       const toUpload = isImage ? await compressImage(file) : file;
-      const mediaUrl = await uploadPostMedia(toUpload);
+      const mediaUrl = await uploadStoryMedia(toUpload);
       await createStory(mediaUrl);
       toast({ title: "Сториз опубликована" });
       await refetchStories();
@@ -504,7 +811,7 @@ export default function Posts() {
               <input
                 ref={storyFileRef}
                 type="file"
-                accept="image/*,video/mp4,video/webm,video/quicktime"
+                accept="image/*,video/*"
                 className="hidden"
                 onChange={(e) => void onStoryFileChange(e)}
               />
@@ -536,6 +843,7 @@ export default function Posts() {
                       <img 
                         src={(story as { avatar?: string }).avatar ?? avatarMain} 
                         alt={(story as { name?: string }).name ?? ""} 
+                        style={{ filter: storyCircleFilter }}
                         className="w-full h-full rounded-full object-cover border-2 border-background"
                       />
                     </div>
@@ -623,7 +931,11 @@ export default function Posts() {
                 onAction={() => setLocation("/create-post")}
               />
             ) : (
-              feedPosts.map((post: FeedPost) => {
+              <>
+              {feedVirtualization.topSpacerPx > 0 && (
+                <div style={{ height: `${feedVirtualization.topSpacerPx}px` }} aria-hidden />
+              )}
+              {renderedFeedPosts.map((post: FeedPost) => {
                 const isShattering = shatteringPostIds.has(post.id);
                 const safeText = post.text ?? "";
                 const authorProfilePath = buildProfilePath({
@@ -643,11 +955,12 @@ export default function Posts() {
                 const latestTwoComments = latestComments
                   .slice(0, 2)
                   .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+                const hasCaption = safeText.trim().length > 0;
                 const article = (
-              <article key={post.id} className="p-4 border-b border-border/50 hover:bg-secondary/20 transition-colors">
-                <div className="flex items-center justify-between mb-3">
+              <article className="uix-content-x py-[var(--uix-space-4)] border-b border-border/40 hover:bg-secondary/15 transition-colors duration-200 ease-out">
+                <div className="flex items-start justify-between gap-[var(--uix-space-3)] mb-[var(--uix-space-3)]">
                   <div
-                    className="flex items-center gap-3 cursor-pointer group"
+                    className="flex min-w-0 flex-1 items-center gap-[var(--uix-space-3)] cursor-pointer group"
                     onClick={() => setLocation(authorProfilePath)}
                   >
                     <UserAvatar
@@ -657,9 +970,9 @@ export default function Posts() {
                       size={40}
                       className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity flex-shrink-0"
                     />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h3
-                        className="font-semibold text-[15px] group-hover:text-primary transition-colors truncate"
+                        className="font-semibold text-[15px] leading-tight group-hover:text-primary transition-colors truncate"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLocation(postDetailPath);
@@ -668,7 +981,7 @@ export default function Posts() {
                         {post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${post.author?.publicId ?? post.authorId}`}
                       </h3>
                       <p
-                        className="text-xs text-muted-foreground cursor-pointer hover:text-foreground"
+                        className="mt-[var(--uix-space-1)] uix-text-caption text-muted-foreground cursor-pointer hover:text-foreground"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLocation(postDetailPath);
@@ -678,10 +991,10 @@ export default function Posts() {
                       </p>
                     </div>
                   </div>
-                  <div className="relative">
+                  <div className="relative shrink-0 pt-0.5">
                     <button
                       type="button"
-                      className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary/80 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
                       onClick={(e) => {
                         e.stopPropagation();
                         setMenuPostId(menuPostId === post.id ? null : post.id);
@@ -691,10 +1004,10 @@ export default function Posts() {
                       <MoreHorizontal className="w-5 h-5" />
                     </button>
                     {post.authorId === user?.id && menuPostId === post.id && (
-                      <div className="absolute right-0 top-full mt-1 py-1 bg-background border border-border rounded-lg shadow-lg z-50 min-w-[160px]">
+                      <div className="absolute right-0 top-full mt-[var(--uix-space-2)] py-[var(--uix-space-1)] bg-background border border-border/80 rounded-xl shadow-lg z-50 min-w-[168px] overflow-hidden">
                         <button
                           type="button"
-                          className="w-full px-3 py-2 text-left text-sm hover:bg-secondary flex items-center gap-2"
+                          className="w-full px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-secondary/70 flex items-center gap-[var(--uix-space-2)] min-h-[44px]"
                           onClick={(e) => {
                             e.stopPropagation();
                             setEditPost(post);
@@ -708,7 +1021,7 @@ export default function Posts() {
                         </button>
                         <button
                           type="button"
-                          className="w-full px-3 py-2 text-left text-sm hover:bg-red-500/10 text-red-600 flex items-center gap-2"
+                          className="w-full px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-red-500/10 text-red-600 flex items-center gap-[var(--uix-space-2)] min-h-[44px]"
                           onClick={(e) => {
                             e.stopPropagation();
                             if (window.confirm("Удалить пост?")) {
@@ -727,43 +1040,18 @@ export default function Posts() {
                 </div>
 
                 {/* Post Content */}
-                <div className="mb-3">
-                  <p
-                    className={cn(
-                      "text-[15px] leading-relaxed whitespace-pre-wrap",
-                      safeText.length > POST_TEXT_PREVIEW_CHARS && !expandedPostIds.has(post.id) && "line-clamp-4"
-                    )}
-                  >
-                    {safeText.split(/(#[a-zA-Zа-яёА-ЯЁ0-9_]+)/g).map((part, i) =>
-                      part.startsWith("#") ? (
-                        <button
-                          key={i}
-                          type="button"
-                          className="text-primary hover:underline font-medium"
-                          onClick={() => setHashtagFilter(part.slice(1).toLowerCase())}
-                        >
-                          {part}
-                        </button>
-                      ) : (
-                        part
-                      )
-                    )}
-                  </p>
-                  {safeText.length > POST_TEXT_PREVIEW_CHARS && (
-                    <button
-                      type="button"
-                      className="text-[13px] text-primary font-medium mt-1 hover:underline"
-                      onClick={() => togglePostExpand(post.id)}
-                    >
-                      {expandedPostIds.has(post.id) ? "Свернуть" : "Ещё"}
-                    </button>
-                  )}
-                  <div className="-mx-4">
-                    <PostMedia
-                      mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
-                      layout={post.mediaLayout ?? null}
-                    />
-                  </div>
+                <div>
+                  <FeedPostCaption
+                    postId={post.id}
+                    text={safeText}
+                    expanded={expandedPostIds.has(post.id)}
+                    onToggleExpand={() => togglePostExpand(post.id)}
+                    onHashtagClick={(tag) => setHashtagFilter(tag)}
+                  />
+                  <PostMedia
+                    mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+                    layout={post.mediaLayout ?? null}
+                  />
                 </div>
 
                 {latestTwoComments.length > 0 && (
@@ -869,7 +1157,8 @@ export default function Posts() {
                             key={emoji}
                             onClick={(e) => {
                               e.stopPropagation();
-                              import("@/lib/micro-feedback").then(({ triggerSuccessFeedback }) => triggerSuccessFeedback());
+                              import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                              playLikeActionSound();
                               reactionMutation.mutate({ postId: post.id, emoji });
                               setShowReactionPicker(null);
                             }}
@@ -920,8 +1209,8 @@ export default function Posts() {
                 );
                 if (isShattering) {
                   return (
+                    <MeasuredFeedItem key={post.id} postId={post.id} onHeightChange={updateFeedPostHeight}>
                     <ShatterEffect
-                      key={post.id}
                       onComplete={() => {
                         setShatteringPostIds((s) => { const n = new Set(s); n.delete(post.id); return n; });
                         queryClient.invalidateQueries({ queryKey: ["posts"] });
@@ -932,10 +1221,19 @@ export default function Posts() {
                     >
                       {article}
                     </ShatterEffect>
+                    </MeasuredFeedItem>
                   );
                 }
-                return article;
-              })
+                return (
+                  <MeasuredFeedItem key={post.id} postId={post.id} onHeightChange={updateFeedPostHeight}>
+                    {article}
+                  </MeasuredFeedItem>
+                );
+              })}
+              {feedVirtualization.bottomSpacerPx > 0 && (
+                <div style={{ height: `${feedVirtualization.bottomSpacerPx}px` }} aria-hidden />
+              )}
+              </>
             )}
             {isError && feedPosts.length > 0 && (
               <div className="px-4 pb-2">
@@ -964,10 +1262,11 @@ export default function Posts() {
           </div>
         </PullToRefresh>
 
-        {activeStoryIndex !== null && (
-          <StoryViewer 
-            stories={getViewerStoriesForIndex(activeStoryIndex)} 
-            initialIndex={0} 
+        {activeStoryIndex !== null && chainedStoryViewerModel && chainedStoryViewerModel.stories.length > 0 && (
+          <StoryViewer
+            key={activeStoryIndex}
+            stories={chainedStoryViewerModel.stories}
+            initialIndex={chainedStoryViewerModel.initialIndex}
             onClose={() => {
               setActiveStoryIndex(null);
               void refetchStories();
@@ -979,26 +1278,25 @@ export default function Posts() {
                 next.add(storyId);
                 return next;
               });
-              if (storyCircles[activeStoryIndex]?.isMe !== true) {
+              const authorId = storyAuthorIdByStoryId.get(storyId);
+              if (authorId && authorId !== user?.id) {
                 void recordStoryView(storyId);
               }
             }}
-            canSeeViewers={storyCircles[activeStoryIndex]?.isMe === true}
             onOpenViewers={(storyId) => setActiveViewersStoryId(storyId)}
             viewersCountByStoryId={(storiesFeed ?? []).reduce<Record<string, number>>((acc, author) => {
               for (const story of author.stories ?? []) acc[story.id] = Number(story.viewsCount ?? 0);
               return acc;
             }, {})}
             onReply={handleStoryReply}
-            canReply={storyCircles[activeStoryIndex]?.isMe !== true}
+            canReply={!!user}
             onToggleLike={handleStoryLikeToggle}
-            canLike={storyCircles[activeStoryIndex]?.isMe !== true}
+            canLike={!!user}
             likedByStoryId={likedStoryIds}
             likesCountByStoryId={likesCountByStoryId}
-            canManage={storyCircles[activeStoryIndex]?.isMe === true}
             onShareStory={handleStoryShare}
-            onArchiveStory={storyCircles[activeStoryIndex]?.isMe === true ? handleStoryArchive : undefined}
-            onDeleteStory={storyCircles[activeStoryIndex]?.isMe === true ? handleStoryDelete : undefined}
+            onArchiveStory={user ? handleStoryArchive : undefined}
+            onDeleteStory={user ? handleStoryDelete : undefined}
           />
         )}
 

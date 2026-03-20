@@ -63,6 +63,14 @@
   --uix-easing-out: cubic-bezier(0.33, 1, 0.68, 1);
   --uix-easing-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
+  /* Нижний тулбар чата (Telegram-style): круги + капсула; подхватывают light / dark / кастомные темы */
+  --chat-composer-fill: hsl(var(--muted) / 0.94);
+  --chat-composer-fill-press: hsl(var(--muted) / 1);
+  --chat-composer-stroke: hsl(var(--border) / 0.5);
+  --chat-composer-bar-bg: hsl(var(--background) / 0.9);
+  --chat-composer-bar-blur: 20px;
+  --chat-composer-icon-muted: hsl(var(--muted-foreground));
+
   /* Chat Vibe — adaptive atmosphere tokens (default = invisible) */
   --chat-vibe-bg-tint: transparent;
   --chat-vibe-bubble-in: transparent;
@@ -175,6 +183,11 @@
   --border: 240 3.7% 15.9%;
   --input: 240 3.7% 15.9%;
   --ring: 211 100% 55%;
+
+  --chat-composer-fill: hsl(var(--secondary) / 0.88);
+  --chat-composer-fill-press: hsl(var(--secondary) / 0.96);
+  --chat-composer-stroke: hsl(var(--border) / 0.38);
+  --chat-composer-bar-bg: hsl(var(--background) / 0.94);
 }
 
 .theme-fitfin {
@@ -206,6 +219,11 @@
   --border: 35 30% 88%;
   --input: 35 30% 88%;
   --ring: 22 90% 55%;
+
+  --chat-composer-fill: hsl(var(--muted) / 0.96);
+  --chat-composer-fill-press: hsl(var(--muted) / 1);
+  --chat-composer-stroke: hsl(var(--border) / 0.55);
+  --chat-composer-bar-bg: hsl(var(--background) / 0.92);
   
   --radius: 1.5rem; /* More rounded and bubbly */
 }
@@ -304,6 +322,63 @@
     height: 0 !important;
     background: transparent !important;
   }
+
+  /* Чат: полоска над полем ввода (фон и размытие от текущей темы) */
+  .chat-composer-bar {
+    border-top: 1px solid hsl(var(--border) / 0.35);
+    background-color: var(--chat-composer-bar-bg);
+    backdrop-filter: saturate(180%) blur(var(--chat-composer-bar-blur));
+    -webkit-backdrop-filter: saturate(180%) blur(var(--chat-composer-bar-blur));
+  }
+
+  /* Капсула поля ввода */
+  .chat-composer-pill {
+    background-color: var(--chat-composer-fill);
+    border: 1px solid var(--chat-composer-stroke);
+    border-radius: 9999px;
+    box-shadow: none;
+  }
+
+  /* Круглые кнопки (скрепка, микрофон) — та же «плитка», что и капсула */
+  .chat-composer-round {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: var(--uix-touch-min);
+    height: var(--uix-touch-min);
+    min-width: var(--uix-touch-min);
+    min-height: var(--uix-touch-min);
+    border-radius: 9999px;
+    background-color: var(--chat-composer-fill);
+    border: 1px solid var(--chat-composer-stroke);
+    color: hsl(var(--foreground));
+    transition:
+      background-color var(--uix-duration-normal) var(--uix-easing-out),
+      color var(--uix-duration-fast) var(--uix-easing-out);
+  }
+
+  .chat-composer-round:hover:not(:disabled) {
+    background-color: var(--chat-composer-fill-press);
+  }
+
+  .chat-composer-round:disabled {
+    opacity: 0.45;
+  }
+
+  /* Иконки внутри капсулы (видеокружок, смайл) — приглушённые, как стикеры в Telegram */
+  .chat-composer-pill-action {
+    color: var(--chat-composer-icon-muted);
+  }
+
+  .chat-composer-pill-action:hover {
+    color: hsl(var(--foreground));
+  }
+
+  .chat-composer-pill-action[data-active="true"] {
+    color: hsl(var(--primary));
+    background-color: hsl(var(--primary) / 0.12);
+  }
 }
 
 /* Глобальный стиль для скроллбара */
@@ -398,5 +473,34 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-ping-logo {
     animation: none;
+  }
+}
+
+/* PULSE GroupCall — полоски уровня речи у имени (video-call/GroupCall.tsx) */
+@keyframes pm-group-call-sound-bar {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1.4);
+  }
+}
+.pm-group-call-sound-bar {
+  transform-origin: bottom center;
+  animation: pm-group-call-sound-bar 0.8s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-group-call-sound-bar {
+    animation: none;
+  }
+}
+
+/* group-call-spec / GroupCall.tsx — @keyframes soundBar (UIX-GUIDELINES §6) */
+@keyframes soundBar {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1.4);
   }
 }

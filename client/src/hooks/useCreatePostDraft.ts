@@ -50,7 +50,11 @@ export function useCreatePostDraft(
   }
   snapshotRef.current = { text, mediaUrls: validDoneUrls };
 
+  /** Только при первом монтировании экрана: иначе при смене зависимостей эффекта состояние (в т.ч. загрузка медиа) могло бы перезаписаться данными из storage. */
+  const didRestoreRef = useRef(false);
   useEffect(() => {
+    if (didRestoreRef.current) return;
+    didRestoreRef.current = true;
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) return;
@@ -74,7 +78,8 @@ export function useCreatePostDraft(
     } catch {
       /* повреждённый черновик */
     }
-  }, [maxChars, maxMedia, setText, setMediaItems, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- восстановление один раз при открытии редактора
+  }, []);
 
   /** Только при уходе со страницы: иначе cleanup с [text, mediaUrls] срабатывал каждый рендер (новый массив mediaUrls) и перезаписывал storage устаревшим снимком — в state оставались «восстановленные» слоты, а лимит 10 казался занятым при пустом UI. */
   useEffect(() => {

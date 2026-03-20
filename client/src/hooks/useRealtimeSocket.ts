@@ -10,6 +10,8 @@ export type UseRealtimeSocketOptions = {
   callMessageHandlerRef: MutableRefObject<(raw: Record<string, unknown>) => void>;
   /** Сокет закрыт (обрыв сети и т.д.) — до scheduleReconnect. */
   onSocketDisconnectedRef: MutableRefObject<() => void>;
+  /** Сокет снова открыт после реконнекта. */
+  onSocketConnectedRef: MutableRefObject<() => void>;
 };
 
 /**
@@ -20,6 +22,7 @@ export function useRealtimeSocket({
   refetchAuth,
   callMessageHandlerRef,
   onSocketDisconnectedRef,
+  onSocketConnectedRef,
 }: UseRealtimeSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const transportRef = useRef<RealtimeSocketTransport | null>(null);
@@ -28,6 +31,7 @@ export function useRealtimeSocket({
       wsRef,
       callMessageHandlerRef,
       onSocketDisconnectedRef,
+      onSocketConnectedRef,
     });
   }
   const transport = transportRef.current;

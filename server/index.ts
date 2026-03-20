@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { randomUUID } from "crypto";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -11,6 +12,12 @@ const httpServer = createServer(app);
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
+  }
+}
+
+declare module "express-serve-static-core" {
+  interface Request {
+    requestId?: string;
   }
 }
 
@@ -24,6 +31,17 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+app.use((req, res, next) => {
+  const incomingRequestId =
+    typeof req.headers["x-request-id"] === "string" && req.headers["x-request-id"].trim()
+      ? req.headers["x-request-id"].trim().slice(0, 120)
+      : "";
+  const requestId = incomingRequestId || randomUUID();
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  next();
+});
 
 // CORS с credentials: чтобы куки сессии отправлялись при запросах с другого origin (поддомен или мобильное приложение).
 // iOS/Android Capacitor иногда не шлют Origin; при запросе с Bearer считаем нативным приложением и разрешаем capacitor://localhost.
@@ -39,7 +57,8 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", allowOrigin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Id");
+    res.setHeader("Access-Control-Expose-Headers", "X-Request-Id");
   }
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
@@ -117,7 +136,7 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      let logLine = `[rid:${req.requestId ?? "-"}] ${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${payloadToLogString(capturedJsonResponse)}`;
       }

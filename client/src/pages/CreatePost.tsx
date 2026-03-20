@@ -86,6 +86,29 @@ async function getImageAspectFromDataUrl(dataUrl: string): Promise<number | null
   }
 }
 
+const POST_VIDEO_MAX_SECONDS = 14;
+
+function probeVideoDurationSec(file: File): Promise<number | null> {
+  const isVideo =
+    file.type.startsWith("video/") || /\.(mp4|webm|mov)(\?|$)/i.test(file.name);
+  if (!isVideo) return Promise.resolve(null);
+  const objectUrl = URL.createObjectURL(file);
+  return new Promise((resolve) => {
+    const el = document.createElement("video");
+    el.preload = "metadata";
+    const done = (sec: number | null) => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(sec);
+    };
+    el.onloadedmetadata = () => {
+      const d = el.duration;
+      done(Number.isFinite(d) && d > 0 ? d : null);
+    };
+    el.onerror = () => done(null);
+    el.src = objectUrl;
+  });
+}
+
 export default function CreatePost() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
@@ -173,14 +196,24 @@ export default function CreatePost() {
       return;
     }
 
-    const newSlots: MediaSlot[] = [];
-    for (let i = 0; i < toAdd; i++) {
-      const item = acceptedFiles[i];
-      if (!item) continue;
+    let warnedLongVideo = false;
+    for (const payload of acceptedFiles) {
+      if (payload.kind !== "video") continue;
+      const dur = await probeVideoDurationSec(payload.file);
+      if (dur != null && dur > POST_VIDEO_MAX_SECONDS + 0.05 && !warnedLongVideo) {
+        warnedLongVideo = true;
+        toast({
+          title: `Видео дольше ${POST_VIDEO_MAX_SECONDS} с будет обрезано при загрузке (как в сториз).`,
+        });
+        break;
+      }
+    }
+
+    const newSlots: MediaSlot[] = acceptedFiles.map((item) => {
       const id = ++uploadIdRef.current;
       const preview = URL.createObjectURL(item.file);
-      newSlots.push({ type: "uploading", preview, id, kind: item.kind, aspectRatio: item.aspectRatio });
-    }
+      return { type: "uploading" as const, preview, id, kind: item.kind, aspectRatio: item.aspectRatio };
+    });
     setMediaItems((prev) => [...prev, ...newSlots].slice(0, MAX_MEDIA));
     setShowPreview(true);
 
@@ -418,54 +451,60 @@ export default function CreatePost() {
       exit={{ y: "100%" }}
       transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
     >
-      {/* Header */}
-      <div className="glass uix-content-x py-3 flex items-center justify-between border-b border-border/50 pt-safe-offset-2 z-10 sticky top-0">
-        <TapScaleButton
-          type="button"
-          onClick={() => setLocation("/posts")}
-          haptic
-          subtle
-          className="text-foreground hover:bg-secondary p-2 -ml-2 rounded-full transition-colors font-medium text-[16px] min-h-[var(--uix-touch-min)] flex items-center"
-          aria-label="Отмена"
-        >
-          Отмена
-        </TapScaleButton>
-        
-        <span className="uix-text-title font-semibold">Новая запись</span>
-        
-        <TapScaleButton
-          type="button"
-          onClick={handlePublish}
-          disabled={!canPublish}
-          haptic
-          className={cn(
-            "px-4 py-1.5 rounded-full font-semibold text-[14px] transition-all",
-            canPublish
-              ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20" 
-              : "bg-secondary text-muted-foreground cursor-not-allowed"
-          )}
-        >
-          {isPublishing ? "Публикуем…" : "Опубликовать"}
-        </TapScaleButton>
+      {/* Header: сетка 3 колонки — заголовок строго по центру */}
+      <div className="glass uix-content-x pt-safe-offset-2 pb-[var(--uix-space-3)] border-b border-border/50 z-10 sticky top-0">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-[var(--uix-space-2)]">
+          <div className="flex justify-start min-w-0">
+            <TapScaleButton
+              type="button"
+              onClick={() => setLocation("/posts")}
+              haptic
+              subtle
+              className="text-foreground hover:bg-secondary px-2 py-2 -ml-2 rounded-full transition-colors font-medium text-[15px] leading-none min-h-[var(--uix-touch-min)] flex items-center shrink-0"
+              aria-label="Отмена"
+            >
+              Отмена
+            </TapScaleButton>
+          </div>
+          <h1 className="text-center text-[17px] font-semibold leading-tight tracking-tight text-foreground truncate max-w-[min(200px,46vw)]">
+            Новая запись
+          </h1>
+          <div className="flex justify-end min-w-0">
+            <TapScaleButton
+              type="button"
+              onClick={handlePublish}
+              disabled={!canPublish}
+              haptic
+              className={cn(
+                "shrink-0 px-[var(--uix-space-4)] py-2 rounded-full font-semibold text-[13px] leading-none min-h-[40px] flex items-center justify-center transition-all",
+                canPublish
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/15"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed"
+              )}
+            >
+              {isPublishing ? "Публикуем…" : "Опубликовать"}
+            </TapScaleButton>
+          </div>
+        </div>
       </div>
 
       {/* Editor Area */}
       <div
-        className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 p-4 flex flex-col gap-4"
+        className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 uix-content-x flex flex-col gap-[var(--uix-space-4)] pt-[var(--uix-space-4)] pb-[calc(var(--uix-nav-bottom)+var(--uix-space-6))]"
         onScroll={() => {
           if (selectionToast && !useBottomSelectionBar) setSelectionToast(null);
         }}
       >
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-[var(--uix-space-2)] gap-y-[var(--uix-space-2)]">
           <TapScaleButton
             type="button"
             haptic
             onClick={handleProofread}
             disabled={isProofreading || !text.trim()}
-            className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary disabled:opacity-60"
+            className="rounded-full bg-primary/10 px-[var(--uix-space-3)] py-2 text-[12px] font-semibold text-primary disabled:opacity-60 min-h-[40px] inline-flex items-center"
             aria-label="Проверить орфографию ИИ"
           >
-            <Sparkles className="mr-1 h-3.5 w-3.5" />
+            <Sparkles className="mr-1.5 h-3.5 w-3.5 shrink-0" />
             {isProofreading ? "Проверяем..." : "Проверить ИИ"}
           </TapScaleButton>
           <TapScaleButton
@@ -473,21 +512,27 @@ export default function CreatePost() {
             haptic
             subtle
             onClick={() => setShowPreview((v) => !v)}
-            className="rounded-full border border-border bg-secondary/60 px-3 py-1.5 text-xs font-semibold"
+            className="rounded-full border border-border/70 bg-secondary/60 px-[var(--uix-space-3)] py-2 text-[12px] font-semibold min-h-[40px] inline-flex items-center"
             aria-label="Переключить предпросмотр поста"
           >
-            <Eye className="mr-1 h-3.5 w-3.5" /> {showPreview ? "Редактор" : "Предпросмотр"}
+            <Eye className="mr-1.5 h-3.5 w-3.5 shrink-0" /> {showPreview ? "Редактор" : "Предпросмотр"}
           </TapScaleButton>
-          <span className={cn("ml-auto text-xs", textLeft < 120 ? "text-amber-600" : "text-muted-foreground")} title="Cmd+Enter — опубликовать">
+          <span
+            className={cn(
+              "ml-auto tabular-nums text-[12px] leading-none shrink-0",
+              textLeft < 120 ? "text-amber-600" : "text-muted-foreground"
+            )}
+            title="Cmd+Enter — опубликовать"
+          >
             {text.length}/{MAX_CHARS}
           </span>
         </div>
-        <div className="rounded-2xl border border-border/60 bg-secondary/25 px-3 py-2.5">
-          <p className="text-[13px] text-foreground/90">
-            Добавьте текст и медиа. Можно смешивать фото, видео и аудио.
+        <div className="rounded-2xl border border-border/60 bg-secondary/20 px-[var(--uix-space-4)] py-[var(--uix-space-3)] space-y-[var(--uix-space-2)]">
+          <p className="text-[13px] leading-snug text-foreground/90">
+            Текст, заголовки (выделите строки — H1/H2/H3) и медиа. На телефоне — галерея и камера; на ПК — выбор файлов.
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Слотов: {mediaCount}/{MAX_MEDIA} • Осталось: {availableMediaSlots}
+          <p className="uix-text-caption text-muted-foreground leading-relaxed">
+            Видео на сервере сжимается и обрезается до {POST_VIDEO_MAX_SECONDS} с. Слотов: {mediaCount}/{MAX_MEDIA} • Осталось: {availableMediaSlots}
             {mediaUrls.length > MAX_MEDIA_PUBLISHED && (
               <span className="ml-1 text-amber-600">• В пост попадёт {MAX_MEDIA_PUBLISHED}</span>
             )}
@@ -497,9 +542,9 @@ export default function CreatePost() {
         {selectionToast && !showPreview && (
           <motion.div
             className={cn(
-              "fixed z-[160] rounded-2xl border border-border/70 bg-background/95 px-3 py-2 shadow-lg backdrop-blur",
+              "fixed z-[160] rounded-2xl border border-border/70 bg-background/95 px-[var(--uix-space-4)] py-[var(--uix-space-3)] shadow-lg backdrop-blur",
               useBottomSelectionBar
-                ? "left-2 right-2 bottom-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px)+8px)]"
+                ? "left-[max(var(--uix-space-2),env(safe-area-inset-left))] right-[max(var(--uix-space-2),env(safe-area-inset-right))] bottom-[calc(var(--uix-nav-bottom)+var(--uix-space-2)+env(safe-area-inset-bottom,0px))]"
                 : "w-[min(320px,calc(100vw-16px))] -translate-x-1/2"
             )}
             style={
@@ -511,8 +556,10 @@ export default function CreatePost() {
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: DURATION_FAST_S, ease: EASING_OUT_BEZIER }}
           >
-            <p className="mb-2 text-[11px] font-medium text-muted-foreground">Сделать выделенное заголовком?</p>
-            <div className="flex flex-wrap gap-2">
+            <p className="mb-[var(--uix-space-3)] text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Сделать выделенное заголовком?
+            </p>
+            <div className="flex flex-wrap gap-[var(--uix-space-2)]">
               <TapScaleButton
                 type="button"
                 haptic
@@ -561,17 +608,17 @@ export default function CreatePost() {
           </motion.div>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-[var(--uix-space-3)] items-start">
           <UserAvatar
             avatarUrl={user?.avatarUrl}
             displayName={displayName || undefined}
             seed={user?.id}
             size={40}
-            className="border border-border/50"
+            className="border border-border/50 shrink-0 mt-0.5"
           />
-          <div className="flex-1 pt-1">
+          <div className="flex-1 min-w-0">
             {!showPreview ? (
-              <div className="rounded-2xl border border-border/60 bg-background px-3 py-2">
+              <div className="rounded-2xl border border-border/60 bg-background px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
                 <textarea
                   ref={textAreaRef}
                   value={text}
@@ -584,20 +631,39 @@ export default function CreatePost() {
                   onPointerUp={handleTextSelection}
                   placeholder="Что у вас нового?"
                   aria-label="Текст поста"
-                  className="w-full bg-transparent border-none focus:ring-0 resize-none min-h-[180px] text-[16px] outline-none placeholder:text-muted-foreground"
+                  className="w-full bg-transparent border-none focus:ring-0 resize-none min-h-[min(200px,42vh)] text-[17px] leading-relaxed outline-none placeholder:text-muted-foreground"
                   autoFocus
                 />
               </div>
             ) : (
-              <div className="w-full min-h-[150px] rounded-xl border border-border/60 bg-secondary/20 px-3 py-2 text-[15px] leading-relaxed">
+              <div className="w-full min-h-[min(160px,36vh)] rounded-2xl border border-border/60 bg-secondary/20 px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-[15px] leading-relaxed">
                 {text.trim().length === 0 ? (
-                  <p className="text-muted-foreground">Предпросмотр текста появится здесь</p>
+                  <p className="text-muted-foreground text-[15px]">Предпросмотр текста появится здесь</p>
                 ) : (
                   text.split("\n").map((line, i) => {
-                    if (/^###\s+/.test(line)) return <h3 key={i} className="mb-1 text-[17px] font-semibold">{line.replace(/^###\s+/, "")}</h3>;
-                    if (/^##\s+/.test(line)) return <h2 key={i} className="mb-1.5 text-[20px] font-bold">{line.replace(/^##\s+/, "")}</h2>;
-                    if (/^#\s+/.test(line)) return <h1 key={i} className="mb-2 text-[24px] font-bold">{line.replace(/^#\s+/, "")}</h1>;
-                    return <p key={i} className="whitespace-pre-wrap">{line || "\u00A0"}</p>;
+                    if (/^###\s+/.test(line))
+                      return (
+                        <h3 key={i} className="mb-[var(--uix-space-2)] text-[17px] font-semibold">
+                          {line.replace(/^###\s+/, "")}
+                        </h3>
+                      );
+                    if (/^##\s+/.test(line))
+                      return (
+                        <h2 key={i} className="mb-[var(--uix-space-2)] text-[19px] font-bold">
+                          {line.replace(/^##\s+/, "")}
+                        </h2>
+                      );
+                    if (/^#\s+/.test(line))
+                      return (
+                        <h1 key={i} className="mb-[var(--uix-space-3)] text-[22px] font-bold leading-tight">
+                          {line.replace(/^#\s+/, "")}
+                        </h1>
+                      );
+                    return (
+                      <p key={i} className="whitespace-pre-wrap mb-[var(--uix-space-1)] last:mb-0">
+                        {line || "\u00A0"}
+                      </p>
+                    );
                   })
                 )}
               </div>
@@ -605,11 +671,13 @@ export default function CreatePost() {
           </div>
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <p className="text-[13px] leading-snug text-destructive px-[var(--uix-space-1)]">{error}</p>
+        )}
 
         {mediaItems.length > 0 && (
-          <div className="rounded-xl overflow-hidden border border-border/50 bg-secondary/30">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 p-1">
+          <div className="rounded-2xl overflow-hidden border border-border/50 bg-secondary/25">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-[var(--uix-space-2)] p-[var(--uix-space-2)]">
               {mediaItems.map((slot, i) => {
                 const src = slot.type === "done" ? resolveUrl(slot.url) : slot.preview;
                 const kind = slot.type === "done" ? slot.kind : slot.kind;
@@ -617,7 +685,10 @@ export default function CreatePost() {
                 const isAudio = kind === "audio";
                 const uploading = slot.type === "uploading";
                 return (
-                  <div key={slot.type === "uploading" ? `u-${slot.id}` : `d-${i}-${slot.url}`} className="relative aspect-square rounded-lg overflow-hidden bg-black/10">
+                  <div
+                    key={slot.type === "uploading" ? `u-${slot.id}` : `d-${i}-${slot.url}`}
+                    className="relative aspect-square rounded-xl overflow-hidden bg-black/10 ring-1 ring-black/5"
+                  >
                     {isAudio ? (
                       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-2">
                         <Mic className="h-5 w-5 text-primary" />
@@ -636,33 +707,35 @@ export default function CreatePost() {
                     <button
                       type="button"
                       onClick={() => removeMedia(i)}
-                      className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white hover:bg-black/70 disabled:opacity-50 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]"
+                      className="absolute top-[var(--uix-space-2)] right-[var(--uix-space-2)] flex items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/75 min-h-[36px] min-w-[36px] backdrop-blur-[2px]"
                       aria-label={uploading ? "Удалить (загрузка отменится)" : "Удалить"}
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
                 );
               })}
             </div>
-            <p className="text-xs text-muted-foreground px-2 pb-1">
-              {hasUploading
-                ? `Загружено: ${mediaItems.filter((s) => s.type === "done").length} из ${mediaCount} • загрузка…`
-                : `${mediaItems.filter((s) => s.type === "done").length} / ${MAX_MEDIA}`}
-            </p>
+            <div className="flex items-center justify-between border-t border-border/40 bg-background/40 px-[var(--uix-space-3)] py-[var(--uix-space-2)]">
+              <p className="uix-text-caption text-muted-foreground">
+                {hasUploading
+                  ? `Загружено ${mediaItems.filter((s) => s.type === "done").length} из ${mediaCount}…`
+                  : `Готово: ${mediaItems.filter((s) => s.type === "done").length} из ${MAX_MEDIA}`}
+              </p>
+            </div>
           </div>
         )}
 
         {showPreview && mediaUrls.length > 0 && (
-          <div className="rounded-xl border border-border/60 bg-background px-3 py-2">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Предпросмотр медиа</p>
-            <PostMedia mediaUrls={mediaUrls} layout={previewLayout} />
+          <div className="rounded-2xl border border-border/60 bg-background px-[var(--uix-space-3)] py-[var(--uix-space-3)] space-y-[var(--uix-space-3)]">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Предпросмотр медиа</p>
+            <PostMedia mediaUrls={mediaUrls} layout={previewLayout} className="!mt-0" />
           </div>
         )}
 
-        {/* Media Picker */}
-        <div className="sticky bottom-[calc(var(--uix-nav-bottom)+env(safe-area-inset-bottom,0px))] mt-auto pt-3 pb-2 border-t border-border/50 bg-background/95 backdrop-blur grid grid-cols-3 gap-2 relative">
-          <div className="col-span-3 flex gap-2">
+        {/* Media Picker — прижат к низу области прокрутки, отступ снизу под таб-бар */}
+        <div className="sticky bottom-0 z-[5] mt-auto pt-[var(--uix-space-4)] pb-[var(--uix-space-3)] border-t border-border/50 bg-background/92 backdrop-blur-md supports-[backdrop-filter]:bg-background/78 shadow-[0_-10px_28px_-12px_rgba(0,0,0,0.08)]">
+          <div className="flex gap-[var(--uix-space-2)] items-stretch">
             {isNativePlatform ? (
               <TapScaleButton
                 type="button"
@@ -675,9 +748,9 @@ export default function CreatePost() {
                   setShowMediaPicker(true);
                 }}
                 disabled={availableMediaSlots <= 0}
-                className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary disabled:opacity-60"
+                className="flex-1 flex items-center justify-center gap-[var(--uix-space-2)] rounded-2xl border border-border/45 bg-secondary/50 px-[var(--uix-space-4)] min-h-[48px] text-[14px] font-semibold transition-colors hover:bg-secondary/80 disabled:opacity-60"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-[18px] w-[18px] shrink-0 opacity-90" />
                 Добавить медиа
               </TapScaleButton>
             ) : availableMediaSlots <= 0 ? (
@@ -686,13 +759,13 @@ export default function CreatePost() {
                 haptic
                 onClick={() => toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" })}
                 disabled
-                className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary disabled:opacity-60"
+                className="flex-1 flex items-center justify-center gap-[var(--uix-space-2)] rounded-2xl border border-border/45 bg-secondary/50 px-[var(--uix-space-4)] min-h-[48px] text-[14px] font-semibold transition-colors hover:bg-secondary/80 disabled:opacity-60"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-[18px] w-[18px] shrink-0 opacity-90" />
                 Добавить медиа
               </TapScaleButton>
             ) : (
-              <label className="relative flex-1 flex items-center justify-center gap-2 rounded-2xl border border-border/40 bg-secondary/55 px-4 py-3 text-sm font-semibold transition-colors hover:bg-secondary min-h-[var(--uix-touch-min)] cursor-pointer">
+              <label className="relative flex-1 flex items-center justify-center gap-[var(--uix-space-2)] rounded-2xl border border-border/45 bg-secondary/50 px-[var(--uix-space-4)] min-h-[48px] text-[14px] font-semibold transition-colors hover:bg-secondary/80 cursor-pointer">
                 <input
                   type="file"
                   accept="image/*,video/*"
@@ -701,7 +774,7 @@ export default function CreatePost() {
                   onChange={(e) => void handleFileChange(e)}
                   aria-label="Выбрать фото или видео"
                 />
-                <Plus className="h-4 w-4" />
+                <Plus className="h-[18px] w-[18px] shrink-0 opacity-90" />
                 Добавить медиа
               </label>
             )}
@@ -711,15 +784,15 @@ export default function CreatePost() {
               subtle
               onClick={() => setShowMediaPicker(true)}
               disabled={availableMediaSlots <= 0}
-              className="rounded-2xl border border-border/40 bg-secondary/55 px-3 py-3 text-sm font-semibold disabled:opacity-60"
+              className="shrink-0 aspect-square min-h-[48px] min-w-[48px] rounded-2xl border border-border/45 bg-secondary/50 flex items-center justify-center disabled:opacity-60"
               aria-label="Выбрать тип медиа"
             >
-              <Files className="h-4 w-4" />
+              <Files className="h-[18px] w-[18px]" />
             </TapScaleButton>
           </div>
-          <div className="col-span-3 px-1 pt-0.5 text-[11px] text-muted-foreground text-center">
-            Можно добавить ещё: {availableMediaSlots}
-          </div>
+          <p className="mt-[var(--uix-space-2)] text-center uix-text-caption text-muted-foreground">
+            Свободных слотов: {availableMediaSlots}
+          </p>
         </div>
       </div>
 
@@ -739,23 +812,28 @@ export default function CreatePost() {
               aria-label="Закрыть выбор медиа"
             />
             <motion.div
-              className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-background p-3 pb-[calc(var(--uix-space-3)+env(safe-area-inset-bottom,0px))] shadow-2xl"
+              className="absolute inset-x-0 bottom-0 rounded-t-[1.25rem] border-t border-border/80 bg-background px-[var(--uix-space-3)] pt-[var(--uix-space-2)] pb-[calc(var(--uix-space-4)+env(safe-area-inset-bottom,0px))] shadow-2xl"
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ duration: prefersReducedMotion ? 0.05 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
             >
-            <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">Выберите источник медиа</p>
-
+            <div className="mx-auto mb-[var(--uix-space-3)] h-1 w-10 rounded-full bg-muted-foreground/20" aria-hidden />
+            <p className="px-[var(--uix-space-2)] pb-[var(--uix-space-3)] text-[13px] font-semibold text-foreground">
+              Источник медиа
+            </p>
+            <div className="flex flex-col gap-[var(--uix-space-1)]">
             {isNativePlatform && (
               <TapScaleButton
                 type="button"
                 haptic
                 subtle
-                className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
+                className="flex w-full items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] min-h-[52px]"
                 onClick={() => handleAddFromNative("camera")}
               >
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/10 text-blue-600">📷</span>
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-lg" aria-hidden>
+                  📷
+                </span>
                 Камера
               </TapScaleButton>
             )}
@@ -765,16 +843,16 @@ export default function CreatePost() {
                 type="button"
                 haptic
                 subtle
-                className="mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left"
+                className="flex w-full items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] min-h-[52px]"
                 onClick={() => handleAddFromNative("gallery")}
               >
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
-                  <ImageIcon className="h-4 w-4" />
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
+                  <ImageIcon className="h-[18px] w-[18px]" />
                 </span>
-                Фото
+                Фото из галереи
               </TapScaleButton>
             ) : (
-              <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+              <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
                 <input
                   type="file"
                   accept="image/*"
@@ -786,14 +864,14 @@ export default function CreatePost() {
                   }}
                   aria-label="Выбрать фото"
                 />
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
-                  <ImageIcon className="h-4 w-4" />
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
+                  <ImageIcon className="h-[18px] w-[18px]" />
                 </span>
                 Фото
               </label>
             )}
 
-            <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
               <input
                 type="file"
                 accept="video/*"
@@ -805,13 +883,13 @@ export default function CreatePost() {
                 }}
                 aria-label="Выбрать видео"
               />
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
-                <Video className="h-4 w-4" />
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
+                <Video className="h-[18px] w-[18px]" />
               </span>
               Видео
             </label>
 
-            <label className="relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
               <input
                 type="file"
                 accept="audio/*"
@@ -823,13 +901,13 @@ export default function CreatePost() {
                 }}
                 aria-label="Выбрать аудио"
               />
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
-                <Mic className="h-4 w-4" />
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
+                <Mic className="h-[18px] w-[18px]" />
               </span>
               Аудио
             </label>
 
-            <label className="relative mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-secondary/60 cursor-pointer">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
               <input
                 type="file"
                 accept="image/*,video/*"
@@ -841,17 +919,18 @@ export default function CreatePost() {
                 }}
                 aria-label="Выбрать файлы медиа"
               />
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Files className="h-4 w-4" />
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <Files className="h-[18px] w-[18px]" />
               </span>
-              Файлы
+              Все файлы
             </label>
+            </div>
 
             <TapScaleButton
               type="button"
               haptic
               subtle
-              className="w-full rounded-xl border border-border/70 bg-secondary/40 px-3 py-2.5 text-sm font-medium"
+              className="mt-[var(--uix-space-3)] w-full rounded-xl border border-border/60 bg-secondary/45 px-[var(--uix-space-4)] py-[var(--uix-space-3)] text-[15px] font-medium min-h-[48px]"
               onClick={() => setShowMediaPicker(false)}
             >
               Отмена

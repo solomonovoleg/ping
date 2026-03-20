@@ -8,6 +8,7 @@ import {
   listSavedPostsDetailed,
   PostsServiceError,
   recordPostView,
+  recordPostEngagement,
   savePost,
   sharePostToUser,
   unsavePost,
@@ -129,6 +130,27 @@ export function registerPostsRoutes(app: Express): void {
     } catch (e) {
       console.error("Post view error:", e);
       res.status(500).json({ message: "Ошибка записи просмотра" });
+    }
+  });
+
+  /** Записать engagement-сигнал поста (подготовка к ранжированию v2) */
+  app.post("/api/posts/:postId/engage", requireAuth, async (req: Request, res: Response) => {
+    const postId = Array.isArray(req.params.postId) ? req.params.postId[0] : req.params.postId;
+    const userId = getUserId(req)!;
+    if (!postId) {
+      res.status(400).json({ message: "postId required" });
+      return;
+    }
+    const rawDwellMs = Number(req.body?.dwellMs);
+    const dwellMs = Number.isFinite(rawDwellMs) && rawDwellMs > 0 ? Math.min(rawDwellMs, 60_000) : undefined;
+    const expanded = req.body?.expanded === true;
+    const readFull = req.body?.readFull === true;
+    try {
+      await recordPostEngagement(postId, userId, { dwellMs, expanded, readFull });
+      res.status(204).end();
+    } catch (e) {
+      console.error("Post engagement error:", e);
+      res.status(500).json({ message: "Ошибка записи engagement" });
     }
   });
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { API, apiFetch } from "@/lib/api-base";
+import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
 import { onChatVibeUpdate, type ChatVibeUpdateDetail } from "../realtime-events";
 import { getClientVibeTokens } from "@/lib/chat-vibe-themes";
 import { getIntensityScale } from "@/lib/chat-vibe-prefs";
@@ -24,6 +25,7 @@ const DEFAULT_STATE: ChatVibeState = {
 
 export function useChatVibe(chatId: string | undefined): ChatVibeState {
   const [state, setState] = useState<ChatVibeState>(DEFAULT_STATE);
+  const [prefsEpoch, setPrefsEpoch] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLElement | null>(null);
 
@@ -52,6 +54,12 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
   );
 
   useEffect(() => {
+    const onPrefs = () => setPrefsEpoch((n) => n + 1);
+    window.addEventListener(CHAT_VIBE_PREFS_CHANGED, onPrefs);
+    return () => window.removeEventListener(CHAT_VIBE_PREFS_CHANGED, onPrefs);
+  }, []);
+
+  useEffect(() => {
     if (!chatId) {
       setState(DEFAULT_STATE);
       applyTokensToCSS(DEFAULT_STATE.tokens, false);
@@ -60,8 +68,12 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
 
     let cancelled = false;
 
-    apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/vibe`)
+    apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/vibe`, { cache: "no-store" })
       .then(async (res) => {
+        if (res.status === 304) {
+          // Keep current vibe state: 304 means "not modified", not "disabled".
+          return;
+        }
         const data = (await res.json().catch(() => ({}))) as {
           active?: boolean;
           theme?: string;
@@ -101,7 +113,7 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
     return () => {
       cancelled = true;
     };
-  }, [chatId, applyTokensToCSS]);
+  }, [chatId, prefsEpoch, applyTokensToCSS]);
 
   useEffect(() => {
     if (!chatId) return;

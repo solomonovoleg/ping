@@ -53,5 +53,9 @@
 	<string>PING использует галерею для выбора фото и видео.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>PING сохраняет фото и видео в галерею по вашему запросу.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

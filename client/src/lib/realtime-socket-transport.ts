@@ -15,6 +15,7 @@ export type ChatMessagePayload = {
   type: string;
   content: string;
   createdAt: string;
+  folderId?: string | null;
   translatedText?: string;
   detectedLang?: string;
 };
@@ -31,6 +32,7 @@ type TransportParams = {
   wsRef: MutableRefObject<WebSocket | null>;
   callMessageHandlerRef: MutableRefObject<(raw: Record<string, unknown>) => void>;
   onSocketDisconnectedRef: MutableRefObject<() => void>;
+  onSocketConnectedRef: MutableRefObject<() => void>;
 };
 
 type SendJsonOptions = {
@@ -53,6 +55,7 @@ export class RealtimeSocketTransport {
   private readonly wsRef: MutableRefObject<WebSocket | null>;
   private readonly callMessageHandlerRef: MutableRefObject<(raw: Record<string, unknown>) => void>;
   private readonly onSocketDisconnectedRef: MutableRefObject<() => void>;
+  private readonly onSocketConnectedRef: MutableRefObject<() => void>;
   private readonly chatListenersRef = new Map<string, Set<(msg: ChatMessagePayload) => void>>();
   private readonly messageDeletedListenersRef = new Map<string, Set<(messageId: string) => void>>();
   private readonly typingListenersRef = new Map<string, Set<(userId: string, displayName: string | null) => void>>();
@@ -67,6 +70,7 @@ export class RealtimeSocketTransport {
     this.wsRef = params.wsRef;
     this.callMessageHandlerRef = params.callMessageHandlerRef;
     this.onSocketDisconnectedRef = params.onSocketDisconnectedRef;
+    this.onSocketConnectedRef = params.onSocketConnectedRef;
   }
 
   closeWs = (): void => {
@@ -307,7 +311,10 @@ export class RealtimeSocketTransport {
       Array.from(this.chatListenersRef.keys()).forEach((id) => this.sendSubscribeChat(ws, id));
       this.flushOutgoingQueue();
     };
-    ws.onopen = () => sendAllChatSubscriptions();
+    ws.onopen = () => {
+      sendAllChatSubscriptions();
+      this.onSocketConnectedRef.current();
+    };
   };
 
   ensureOpenWs = async (): Promise<WebSocket> => {

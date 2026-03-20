@@ -15,6 +15,9 @@ export type CallState =
   | "failed";
 
 export type CallMediaType = "audio" | "video";
+export type CallNetworkQualityLevel = "good" | "medium" | "poor" | "unknown";
+export type CallCameraFacingMode = "user" | "environment";
+export type CallReactionKind = "heart" | "clap" | "fire" | "like";
 
 export type CallDirection = "outgoing" | "incoming";
 
@@ -86,6 +89,32 @@ export type ClientCallEvent =
       type: "call.ice-candidate";
       callId: string;
       candidate: RTCIceCandidateInit;
+    }
+  | {
+      type: "call.reaction";
+      callId: string;
+      reaction: CallReactionKind;
+      sentAt: number;
+      id: string;
+    }
+  | {
+      type: "call.caption";
+      callId: string;
+      text: string;
+      sentAt: number;
+      id: string;
+    }
+  | {
+      type: "call.screen-share-state";
+      callId: string;
+      active: boolean;
+    }
+  | {
+      type: "call.resume-check";
+    }
+  | {
+      type: "call.resume-request";
+      callId: string;
     };
 
 // ─── Server → Client events ──────────────────────────────────────
@@ -140,6 +169,43 @@ export type ServerCallEvent =
       candidate: RTCIceCandidateInit;
     }
   | {
+      type: "call.reaction";
+      callId: string;
+      fromUserId: string;
+      reaction: CallReactionKind;
+      sentAt: number;
+      id: string;
+    }
+  | {
+      type: "call.caption";
+      callId: string;
+      fromUserId: string;
+      text: string;
+      sentAt: number;
+      id: string;
+    }
+  | {
+      type: "call.screen-share-state";
+      callId: string;
+      fromUserId: string;
+      active: boolean;
+    }
+  | {
+      type: "call.resume-available";
+      callId: string;
+      chatId: string;
+      mediaType: CallMediaType;
+      otherUserId: string;
+      otherDisplayName: string;
+      direction: CallDirection;
+      shouldInitiateOffer: boolean;
+    }
+  | {
+      type: "call.peer-reconnected";
+      callId: string;
+      byUserId: string;
+    }
+  | {
       type: "call.timeout";
       callId: string;
     }
@@ -176,6 +242,12 @@ export type WebRtcPeerHandlers = {
 
 // ─── Store state exposed to UI ────────────────────────────────────
 
+/** Контекст списка сообщений в панели чата во время звонка (папки группы). */
+export type CallMessageListContext =
+  | { kind: "dm" }
+  | { kind: "group"; folderId: string | null }
+  | { kind: "unknown" };
+
 export interface CallStoreState {
   state: CallState;
   direction: CallDirection;
@@ -188,10 +260,22 @@ export interface CallStoreState {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   connectionState: RTCPeerConnectionState | null;
+  networkQuality: CallNetworkQualityLevel;
+  cameraFacingMode: CallCameraFacingMode;
+  isScreenShareActive: boolean;
+  isCameraEnabled: boolean;
+  localRecordingState: "idle" | "recording" | "paused" | "stopping" | "error";
+  localRecordingElapsedMs: number;
+  captionsEnabled: boolean;
+  supports: CallFeatureSupport;
+  localReactions: CallReactionEvent[];
+  remoteReactions: CallReactionEvent[];
+  captions: CallCaptionEvent[];
   otherUserId: string | null;
   otherDisplayName: string | null;
   otherAvatarUrl: string | null;
   chatId: string | null;
+  callMessageContext: CallMessageListContext;
 }
 
 export interface IncomingCallInfo {
@@ -204,10 +288,59 @@ export interface IncomingCallInfo {
 }
 
 export interface CallStoreActions {
-  startCall: (otherUserId: string, otherName: string | null, chatId: string, video: boolean, avatarUrl?: string | null) => Promise<void>;
+  startCall: (
+    otherUserId: string,
+    otherName: string | null,
+    chatId: string,
+    video: boolean,
+    avatarUrl?: string | null,
+    messageContext?: CallMessageListContext,
+  ) => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => void;
   hangup: () => void;
   setMuted: (muted: boolean) => void;
+  toggleCameraEnabled: () => void;
+  switchCamera: () => Promise<void>;
+  toggleScreenShare: () => Promise<void>;
+  toggleRecording: () => Promise<void>;
+  toggleRecordingPause: () => Promise<void>;
+  sendReaction: (reaction: CallReactionKind) => void;
+  toggleCaptions: () => void;
   retryCall: () => void;
+}
+
+export interface CallReactionEvent {
+  id: string;
+  kind: CallReactionKind;
+  from: "local" | "remote";
+  sentAt: number;
+}
+
+export interface CallCaptionEvent {
+  id: string;
+  text: string;
+  from: "local" | "remote";
+  sentAt: number;
+}
+
+export interface CallFeatureFlags {
+  networkQuality: boolean;
+  cameraFlip: boolean;
+  screenShare: boolean;
+  localRecording: boolean;
+  reactions: boolean;
+  captionsRelay: boolean;
+}
+
+export interface CallFeatureSupport {
+  networkQuality: boolean;
+  cameraFlip: boolean;
+  screenShare: boolean;
+  localRecording: boolean;
+  reactions: boolean;
+  /** Сервер и клиент пересылают титры (в т.ч. входящие без Web Speech на этом устройстве). */
+  captionsRelay: boolean;
+  /** Локальная речь → текст в браузере (Web Speech API). */
+  captionsLocalSTT: boolean;
 }

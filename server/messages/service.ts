@@ -165,7 +165,11 @@ export async function sendChatMessage(input: SendMessageInput) {
   notifyNewMessage(chatId, payload);
 
   if (chat?.type === "dm") {
-    import("../vibe/state-engine").then((m) => m.processNewMessage(chatId)).catch(() => {});
+    import("../vibe/state-engine")
+      .then((m) => m.processNewMessage(chatId))
+      .catch((e) => {
+        console.warn("[vibe] processNewMessage:", e instanceof Error ? e.message : e);
+      });
   }
 
   for (const memberId of memberIds) {

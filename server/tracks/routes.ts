@@ -5,6 +5,7 @@ import {
   listTracks,
   getTrack,
   addMessageToTrack,
+  addCallSegmentToTrack,
   removeTrackItem,
   setTrackItemDone,
   listTrackItems,
@@ -68,6 +69,32 @@ export function registerTracksRoutes(app: Express): void {
     }
     try {
       await addMessageToTrack(userId, trackId, messageId, chatId);
+      res.status(201).json({ ok: true });
+    } catch (error) {
+      if (error instanceof TracksServiceError) {
+        if (error.code === "FORBIDDEN") {
+          res.status(403).json({ message: error.message });
+          return;
+        }
+        if (error.code === "NOT_FOUND") {
+          res.status(404).json({ message: error.message });
+          return;
+        }
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/tracks/:trackId/call-items", requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const trackId = param(req.params, "trackId");
+    const { segmentId } = req.body ?? {};
+    if (!segmentId || typeof segmentId !== "string") {
+      res.status(400).json({ message: "segmentId обязателен" });
+      return;
+    }
+    try {
+      await addCallSegmentToTrack(userId, trackId, segmentId);
       res.status(201).json({ ok: true });
     } catch (error) {
       if (error instanceof TracksServiceError) {

@@ -9,6 +9,12 @@ import { storage } from "../storage";
 const FCM_SERVER_KEY = process.env.FCM_SERVER_KEY?.trim();
 const FCM_LEGACY_URL = "https://fcm.googleapis.com/fcm/send";
 
+if (!FCM_SERVER_KEY) {
+  console.warn(
+    "[push] FCM_SERVER_KEY не задан — сервер не шлёт пуши (новые сообщения / звонок). Добавь ключ в deploy.env → деплой.",
+  );
+}
+
 export async function sendPushToUser(
   userId: string,
   title: string,

@@ -30,6 +30,7 @@ import {
 import { VoiceMessagePlayer } from "../../components/VoiceMessagePlayer";
 import { UserAvatar } from "../../components/UserAvatar";
 import { colors, spacing, radius } from "../../theme";
+import { getMobileCallCapabilities } from "../../lib/call-capabilities";
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -159,7 +160,11 @@ export default function ChatScreen() {
 
   const callPhone = () => {
     const phone = chat?.otherMember?.phone;
-    if (phone) Linking.openURL(`tel:${phone}`);
+    const caps = getMobileCallCapabilities();
+    if (!phone) return;
+    if (caps.fallbackMode === "tel") {
+      Linking.openURL(`tel:${phone}`);
+    }
   };
 
   const renderMessage = ({ item }: { item: Message }) => {
@@ -243,7 +248,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
         <TextInput
           style={styles.input}
-          placeholder="Сообщение"
+          placeholder="Сообщение..."
           placeholderTextColor={colors.mutedForeground}
           value={text}
           onChangeText={setText}
@@ -299,8 +304,7 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   headerTitle: { fontSize: 17, fontWeight: "600", color: colors.foreground, flex: 1 },
   callText: { fontSize: 14, color: colors.primary, fontWeight: "500" },
-  list: { flex: 1 },
-  list: { backgroundColor: colors.secondary + "33" },
+  list: { flex: 1, backgroundColor: colors.secondary + "33" },
   listContent: { padding: 16, paddingBottom: 24, gap: 4 },
   bubble: {
     maxWidth: "85%",

@@ -85,6 +85,10 @@ export function TrackDetailView({ trackId, trackName }: TrackDetailViewProps) {
     setLocation(url);
   };
 
+  const handleOpenCallHistory = (callId: string) => {
+    setLocation(`/board/calls/${encodeURIComponent(callId)}`);
+  };
+
   const handleRemove = (itemId: string) => {
     removeMutation.mutate(itemId);
   };
@@ -273,6 +277,7 @@ export function TrackDetailView({ trackId, trackName }: TrackDetailViewProps) {
                     onDone={handleDone}
                     onRemove={handleRemove}
                     onOpenChat={handleOpenChat}
+                    onOpenCallHistory={handleOpenCallHistory}
                   />
                 ))}
               </section>
@@ -291,6 +296,7 @@ export function TrackDetailView({ trackId, trackName }: TrackDetailViewProps) {
                     onDone={handleDone}
                     onRemove={handleRemove}
                     onOpenChat={handleOpenChat}
+                    onOpenCallHistory={handleOpenCallHistory}
                   />
                 ))}
               </section>

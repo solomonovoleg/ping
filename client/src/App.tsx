@@ -11,6 +11,7 @@ import { AddToHomeScreenHint } from "@/components/AddToHomeScreenHint";
 
 import AppLayout from "@/components/layout/AppLayout";
 import { CallProvider } from "@/contexts/CallContext";
+import { GroupCallProvider } from "@/contexts/GroupCallContext";
 import { RealtimeProvider } from "@/contexts/RealtimeContext";
 import Login from "@/pages/Login";
 import Onboarding from "@/pages/Onboarding";
@@ -87,6 +88,8 @@ const PostDetail = lazyWithRetry(() => import("@/pages/PostDetail"), "post-detai
 const EditProfile = lazyWithRetry(() => import("@/pages/EditProfile"), "edit-profile");
 const CreatePost = lazyWithRetry(() => import("@/pages/CreatePost"), "create-post");
 const Board = lazyWithRetry(() => import("@/pages/Board"), "board");
+const BoardCallHistory = lazyWithRetry(() => import("@/pages/BoardCallHistory"), "board-calls");
+const BoardCallHistoryDetail = lazyWithRetry(() => import("@/pages/BoardCallHistoryDetail"), "board-calls-detail");
 const BoardTracksList = lazyWithRetry(() => import("@/features/board/tracks/TracksListPage").then((m) => ({ default: m.TracksListPage })), "board-tracks");
 const BoardTracksDetail = lazyWithRetry(() => import("@/pages/BoardTracksDetail"), "board-tracks-detail");
 const Settings = lazyWithRetry(() => import("@/pages/Settings"), "settings");
@@ -136,6 +139,8 @@ function Router() {
           <Route path="/id/:id" component={LegacyProfileRedirect} />
           <Route path="/subscribers" component={Subscribers} />
           <Route path="/notifications" component={Notifications} />
+          <Route path="/board/calls/:callId" component={BoardCallHistoryDetail} />
+          <Route path="/board/calls" component={BoardCallHistory} />
           <Route path="/board/tracks/:trackId" component={BoardTracksDetail} />
           <Route path="/board/tracks" component={BoardTracksList} />
           <Route path="/board" component={Board} />
@@ -189,7 +194,9 @@ function AppBody() {
   return (
     <RealtimeProvider>
       <CallProvider>
-        <Router />
+        <GroupCallProvider>
+          <Router />
+        </GroupCallProvider>
       </CallProvider>
     </RealtimeProvider>
   );

@@ -19,4 +19,5 @@ run_ssh() {
   fi
 }
 
-run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && node scripts/run-migrations.cjs && pm2 restart ping-moot && echo 'OK: миграции и рестарт выполнены'"
+# Останавливаем приложение перед миграциями (освобождаем слоты PostgreSQL). Рестарт всегда — чтобы не оставить сервис в stop при ошибке миграций.
+run_ssh "$SERVER_USER@$SERVER_HOST" "cd $REMOTE_DIR && pm2 stop ping-moot 2>/dev/null || true; sleep 2; if node scripts/run-migrations.cjs; then pm2 restart ping-moot && echo 'OK: миграции и рестарт выполнены'; else pm2 restart ping-moot; echo 'Ошибка миграций (см. лог выше), приложение перезапущено'; exit 1; fi"

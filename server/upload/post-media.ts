@@ -5,6 +5,11 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
 import { s3Configured, uploadToS3 } from "./s3";
+import {
+  transcodeStoryVideoBuffer,
+  transcodeStoryVideoFileToPath,
+  validateStoryVideoUpload,
+} from "./story-video-transcode";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "posts");
 const MAX_SIZE = 500 * 1024 * 1024; // 500 MB (видео MOV/MP4 до 500 МБ)
@@ -31,6 +36,18 @@ const ALLOWED_MIMES = [
   "audio/ogg",
 ];
 const ALLOWED_EXT_RE = /\.(jpe?g|png|gif|webp|heic|heif|mp4|webm|mov|mp3|m4a|aac|wav|ogg)$/i;
+
+function detectPostMediaKind(file: Pick<Express.Multer.File, "mimetype" | "originalname">): "image" | "video" | "audio" | "unknown" {
+  const mime = (file.mimetype || "").toLowerCase().trim();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (/\.(jpe?g|png|gif|webp|heic|heif)$/i.test(ext)) return "image";
+  if (/\.(mp4|webm|mov)$/i.test(ext)) return "video";
+  if (/\.(mp3|m4a|aac|wav|ogg)$/i.test(ext)) return "audio";
+  return "unknown";
+}
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) {
@@ -72,24 +89,48 @@ export function registerPostMediaUploadRoutes(app: Express): void {
     requireAuth,
     upload.single("file"),
     async (req: Request, res: Response) => {
-      if (!req.file) {
-        res.status(400).json({ message: "Файл не загружен. Отправьте поле «file»." });
-        return;
+      try {
+        if (!req.file) {
+          res.status(400).json({ message: "Файл не загружен. Отправьте поле «file»." });
+          return;
+        }
+        const mediaKind = detectPostMediaKind(req.file);
+        if (mediaKind === "video") {
+          const videoErr = validateStoryVideoUpload(req.file);
+          if (videoErr) {
+            res.status(400).json({ message: videoErr });
+            return;
+          }
+        }
+
+        if (s3Configured && req.file.buffer) {
+          let buffer: Buffer = req.file.buffer;
+          let ext = path.extname(req.file.originalname) || ".jpg";
+          let contentType = req.file.mimetype;
+          if (mediaKind === "video") {
+            const transcoded = await transcodeStoryVideoBuffer(buffer, ext);
+            buffer = transcoded.buffer;
+            ext = transcoded.ext;
+            contentType = transcoded.contentType;
+          }
+          const url = await uploadToS3("posts", buffer, contentType, ext);
+          res.status(201).json({ url });
+          return;
+        }
+
+        const file = req.file as Express.Multer.File & { filename?: string; path?: string };
+        let filename = file.filename ?? "";
+        if (mediaKind === "video" && file.path) {
+          const sourcePath = file.path;
+          const transcodedPath = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR);
+          fs.unlink(sourcePath, () => {});
+          filename = path.basename(transcodedPath);
+        }
+        res.status(201).json({ url: `/uploads/posts/${filename}` });
+      } catch (err) {
+        console.error("Post media upload error:", err);
+        res.status(500).json({ message: "Не удалось обработать файл поста" });
       }
-      if (s3Configured && req.file.buffer) {
-        const ext = path.extname(req.file.originalname) || ".jpg";
-        const url = await uploadToS3(
-          "posts",
-          req.file.buffer,
-          req.file.mimetype,
-          ext
-        );
-        res.status(201).json({ url });
-        return;
-      }
-      const filename = (req.file as Express.Multer.File & { filename?: string }).filename ?? "";
-      const url = `/uploads/posts/${filename}`;
-      res.status(201).json({ url });
     }
   );
 

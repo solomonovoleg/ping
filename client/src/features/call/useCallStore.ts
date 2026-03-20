@@ -4,7 +4,7 @@ import { CallSignalingClient } from "./call-signaling";
 import { useRealtimeContext } from "@/contexts/RealtimeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "@/hooks/use-toast";
-import type { CallMediaType, CallStoreActions } from "./call-types";
+import type { CallMediaType, CallStoreActions, CallReactionKind, CallMessageListContext } from "./call-types";
 
 const INITIAL_SNAPSHOT: CallControllerSnapshot = {
   state: "idle",
@@ -18,10 +18,30 @@ const INITIAL_SNAPSHOT: CallControllerSnapshot = {
   localStream: null,
   remoteStream: null,
   connectionState: null,
+  networkQuality: "unknown",
+  cameraFacingMode: "user",
+  isScreenShareActive: false,
+  isCameraEnabled: true,
+  localRecordingState: "idle",
+  localRecordingElapsedMs: 0,
+  captionsEnabled: false,
+  supports: {
+    networkQuality: false,
+    cameraFlip: false,
+    screenShare: false,
+    localRecording: false,
+    reactions: false,
+    captionsRelay: false,
+    captionsLocalSTT: false,
+  },
+  localReactions: [],
+  remoteReactions: [],
+  captions: [],
   otherUserId: null,
   otherDisplayName: null,
   otherAvatarUrl: null,
   chatId: null,
+  callMessageContext: { kind: "unknown" },
 };
 
 /**
@@ -75,8 +95,21 @@ export function useCallStore() {
     };
   }, [realtime.onSocketDisconnectedRef]);
 
+  useEffect(() => {
+    realtime.onSocketConnectedRef.current = () => {
+      controllerRef.current?.onTransportConnected();
+    };
+  }, [realtime.onSocketConnectedRef]);
+
   const startCall = useCallback(
-    async (otherUserId: string, otherName: string | null, chatId: string, video: boolean, avatarUrl?: string | null) => {
+    async (
+      otherUserId: string,
+      otherName: string | null,
+      chatId: string,
+      video: boolean,
+      avatarUrl?: string | null,
+      messageContext?: CallMessageListContext,
+    ) => {
       const ctrl = controllerRef.current;
       if (!ctrl || !user) {
         toast({ title: "Невозможно позвонить: не авторизованы", variant: "destructive" });
@@ -88,7 +121,15 @@ export function useCallStore() {
 
       try {
         await realtime.ensureOpenWs();
-        await ctrl.startCall(otherUserId, otherName, avatarUrl ?? null, chatId, mediaType, callerDisplayName);
+        await ctrl.startCall(
+          otherUserId,
+          otherName,
+          avatarUrl ?? null,
+          chatId,
+          mediaType,
+          callerDisplayName,
+          messageContext ?? { kind: "unknown" },
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Не удалось начать звонок";
         toast({ title: msg, variant: "destructive" });
@@ -121,13 +162,69 @@ export function useCallStore() {
     controllerRef.current?.setMuted(muted);
   }, []);
 
+  const toggleCameraEnabled = useCallback(() => {
+    controllerRef.current?.toggleCameraEnabled();
+  }, []);
+
   const retryCall = useCallback(() => {
     controllerRef.current?.retryCall();
   }, []);
 
+  const switchCamera = useCallback(async () => {
+    await controllerRef.current?.switchCamera();
+  }, []);
+
+  const toggleScreenShare = useCallback(async () => {
+    await controllerRef.current?.toggleScreenShare();
+  }, []);
+
+  const toggleRecording = useCallback(async () => {
+    await controllerRef.current?.toggleRecording();
+  }, []);
+
+  const toggleRecordingPause = useCallback(async () => {
+    await controllerRef.current?.toggleRecordingPause();
+  }, []);
+
+  const sendReaction = useCallback((reaction: CallReactionKind) => {
+    controllerRef.current?.sendReaction(reaction);
+  }, []);
+
+  const toggleCaptions = useCallback(() => {
+    controllerRef.current?.toggleCaptions();
+  }, []);
+
   const actions: CallStoreActions = useMemo(
-    () => ({ startCall, acceptCall, rejectCall, hangup, setMuted, retryCall }),
-    [startCall, acceptCall, rejectCall, hangup, setMuted, retryCall],
+    () => ({
+      startCall,
+      acceptCall,
+      rejectCall,
+      hangup,
+      setMuted,
+      toggleCameraEnabled,
+      switchCamera,
+      toggleScreenShare,
+      toggleRecording,
+      toggleRecordingPause,
+      sendReaction,
+      toggleCaptions,
+      retryCall,
+    }),
+    [
+      startCall,
+      acceptCall,
+      rejectCall,
+      hangup,
+      setMuted,
+      toggleCameraEnabled,
+      switchCamera,
+      toggleScreenShare,
+      toggleRecording,
+      toggleRecordingPause,
+      sendReaction,
+      toggleCaptions,
+      retryCall,
+    ],
   );
 
   return {

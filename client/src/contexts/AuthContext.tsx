@@ -1,7 +1,14 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import type { AuthUser } from "@/lib/auth";
 import { fetchMe } from "@/lib/auth";
-import { API, apiFetch, setAuthToken } from "@/lib/api-base";
+import {
+  API,
+  apiFetch,
+  hydrateNativeAuthToken,
+  setAuthToken,
+  syncAuthTokenFromStorage,
+  warnNativeAuth,
+} from "@/lib/api-base";
 import { isNative, requestPushAndGetToken } from "@/lib/capacitor-native";
 import { toast } from "@/hooks/use-toast";
 
@@ -22,16 +29,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const initialLoadDoneRef = useRef(false);
+  /** Увеличивается при успешном login/register: отбрасываем устаревший /auth/me, запущенный ещё без Bearer (типично iOS/Capacitor). */
+  const authFetchGenRef = useRef(0);
 
   const refetch = useCallback(async (): Promise<AuthUser | null> => {
+    const refetchGenAtStart = authFetchGenRef.current;
     const isInitialLoad = !initialLoadDoneRef.current;
     const start = isInitialLoad ? Date.now() : 0;
     try {
-      const u = await fetchMe();
+      let u = await fetchMe();
+      if (refetchGenAtStart !== authFetchGenRef.current) {
+        return null;
+      }
       setUser((prev) => {
         if (!u && prev) {
+          warnNativeAuth("refetch_me_empty_logout", {});
           setAuthToken(null);
-          // Не шлём auth:session-expired при refetch: 401/пустой ответ может быть из-за гонки после входа (куки ещё не подхвачены). Тост «Сессия истекла» показывается только при 401 из apiFetch (защищённый запрос).
+          // Не шлём auth:session-expired при refetch: 401/пустой ответ — см. authFetchGenRef (гонка после входа).
           return null;
         }
         if (!u) return null;
@@ -39,6 +53,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       return u ?? null;
     } catch {
+      if (refetchGenAtStart !== authFetchGenRef.current) {
+        return null;
+      }
       setUser((prev) => (prev ? prev : null));
       return null;
     } finally {
@@ -58,13 +75,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setUserFromLogin = useCallback((u: AuthUser & { token?: string }) => {
+    if (u?.id) {
+      authFetchGenRef.current += 1;
+    }
     setUser(u);
     if (u && (u as { token?: string }).token) setAuthToken((u as { token: string }).token);
     else if (!u) setAuthToken(null);
   }, []);
 
   useEffect(() => {
-    refetch();
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateNativeAuthToken();
+      } finally {
+        if (!cancelled) void refetch();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refetch]);
+
+  /** После сворачивания приложения: синхронизировать токен и тихо обновить пользователя (iOS WKWebView). */
+  useEffect(() => {
+    if (!isNative()) return;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        void (async () => {
+          await hydrateNativeAuthToken();
+          syncAuthTokenFromStorage();
+          await refetch();
+        })();
+      }, 350);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      if (t) clearTimeout(t);
+    };
   }, [refetch]);
 
   useEffect(() => {
@@ -99,6 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 function SessionExpiredListener() {
   useEffect(() => {
     const handler = () => {
+      warnNativeAuth("toast_session_expired", {});
       toast({ title: "Сессия истекла. Войдите снова.", variant: "destructive" });
     };
     window.addEventListener("auth:session-expired", handler);

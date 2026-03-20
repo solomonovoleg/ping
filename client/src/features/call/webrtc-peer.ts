@@ -28,10 +28,12 @@ export class WebRtcCallPeer {
       );
     }
 
+    const wantVideo = mediaType === "video";
     const attempts: MediaStreamConstraints[] = [
-      getMediaConstraints(mediaType === "video"),
-      { audio: true, video: mediaType === "video" ? { facingMode: "user" } : false },
-      { audio: true, video: mediaType === "video" },
+      getMediaConstraints(wantVideo, { highQuality: wantVideo }),
+      getMediaConstraints(wantVideo),
+      { audio: true, video: wantVideo ? { facingMode: "user" } : false },
+      { audio: true, video: wantVideo },
     ];
 
     let lastErr: unknown = null;
@@ -54,6 +56,10 @@ export class WebRtcCallPeer {
 
   getRemoteStream(): MediaStream | null {
     return this.remoteStream;
+  }
+
+  getPeerConnection(): RTCPeerConnection | null {
+    return this.pc;
   }
 
   // ── Peer Connection ────────────────────────────────────────────
@@ -184,6 +190,46 @@ export class WebRtcCallPeer {
 }
 
 // ── Static helpers ───────────────────────────────────────────────
+
+/**
+ * Поднимаем maxBitrate исходящего видео после установки соединения / смены трека
+ * (иначе часто остаются низкие дефолты кодека).
+ */
+export async function tuneOutgoingVideoSenders(
+  pc: RTCPeerConnection,
+  opts?: { screenShare?: boolean },
+): Promise<void> {
+  const screen = opts?.screenShare === true;
+  const videoMaxPrimary = screen ? 4_000_000 : 2_800_000;
+  const videoMaxRtx = screen ? 2_000_000 : 1_200_000;
+  try {
+    for (const sender of pc.getSenders()) {
+      const track = sender.track;
+      if (!track) continue;
+      const params = sender.getParameters();
+      const enc =
+        params.encodings && params.encodings.length > 0
+          ? params.encodings.map((e, i) =>
+              track.kind === "video"
+                ? {
+                    ...e,
+                    maxBitrate: Math.max(e.maxBitrate ?? 0, i === 0 ? videoMaxPrimary : videoMaxRtx),
+                    maxFramerate: Math.min(e.maxFramerate ?? 30, screen ? 24 : 30),
+                  }
+                : {
+                    ...e,
+                    maxBitrate: Math.max(e.maxBitrate ?? 0, 128_000),
+                  },
+            )
+          : track.kind === "video"
+            ? [{ maxBitrate: videoMaxPrimary, maxFramerate: screen ? 24 : 30 }]
+            : [{ maxBitrate: 128_000 }];
+      await sender.setParameters({ ...params, encodings: enc });
+    }
+  } catch {
+    /* различается по браузерам */
+  }
+}
 
 export function isWebRtcSupported(): boolean {
   if (typeof window === "undefined" || typeof navigator === "undefined") return false;

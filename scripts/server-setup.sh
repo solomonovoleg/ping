@@ -74,14 +74,39 @@ EOSQL
 fi
 
 # На VPS БД всегда localhost: правим .env и передаём миграциям гарантированно localhost
+PM2_APP_NAME="${PM2_APP_NAME:-ping-moot}"
 if grep -q '^DATABASE_URL=.\+' .env 2>/dev/null; then
   sed -i.bak 's/@base/@localhost/g; s/:base:5432/:localhost:5432/g' .env 2>/dev/null || true
   DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
   export DATABASE_URL=$(echo "$DB_URL_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
+  # Сначала снимаем процесс с PM2 — пул приложения держит слоты PostgreSQL; иначе часто 53300 при миграциях
+  if command -v pm2 &>/dev/null; then
+    echo "Остановка $PM2_APP_NAME перед миграциями (освобождение соединений к БД)..."
+    pm2 delete "$PM2_APP_NAME" 2>/dev/null || true
+    sleep 2
+  fi
   echo "Миграции БД..."
-  [ -f scripts/run-migrations.cjs ] && DATABASE_URL="$DATABASE_URL" node scripts/run-migrations.cjs || true
+  if [ -f scripts/run-migrations.cjs ]; then
+    DATABASE_URL="$DATABASE_URL" node scripts/run-migrations.cjs
+  else
+    echo "Предупреждение: scripts/run-migrations.cjs не найден, миграции пропущены."
+  fi
 else
   echo "DATABASE_URL не задан в .env — миграции пропущены (приложение будет без БД)."
+fi
+
+# Бесплатный self-hosted ASR для титров групповых звонков (Vosk)
+if grep -q '^GROUP_CALLS_SERVER_ASR_ENABLED=1' .env 2>/dev/null; then
+  echo "Настройка Vosk ASR для групповых титров..."
+  if ! grep -q '^CALL_TRANSCRIPTS_ASR_URL=' .env 2>/dev/null; then
+    echo 'CALL_TRANSCRIPTS_ASR_URL=http://127.0.0.1:8099/transcribe' >> .env
+  fi
+  if ! grep -q '^CALL_TRANSCRIPTS_ASR_WS_URL=' .env 2>/dev/null; then
+    echo 'CALL_TRANSCRIPTS_ASR_WS_URL=ws://127.0.0.1:8100/stream' >> .env
+  fi
+  VOSK_ENV_LINE=$(grep '^CALL_TRANSCRIPTS_ASR_API_KEY=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
+  CALL_TRANSCRIPTS_ASR_API_KEY="${CALL_TRANSCRIPTS_ASR_API_KEY:-$VOSK_ENV_LINE}" \
+    bash scripts/setup-vosk-asr-on-server.sh
 fi
 
 # PM2: установка и запуск

@@ -12,4 +12,13 @@ if [ -z "$SESSION_SECRET" ]; then
   echo "[pre-deploy] SESSION_SECRET пустой — при деплое будет сгенерирован."
 fi
 
+if [ "${GROUP_CALLS_SERVER_ASR_ENABLED:-}" = "1" ]; then
+  if [ -z "${CALL_TRANSCRIPTS_ASR_URL:-}" ]; then
+    echo "[pre-deploy] GROUP_CALLS_SERVER_ASR_ENABLED=1, но нет CALL_TRANSCRIPTS_ASR_URL — server-setup подставит локальный http://127.0.0.1:8099/transcribe"
+  fi
+  if [ -z "${CALL_TRANSCRIPTS_ASR_WS_URL:-}" ]; then
+    echo "[pre-deploy] GROUP_CALLS_SERVER_ASR_ENABLED=1, но нет CALL_TRANSCRIPTS_ASR_WS_URL — server-setup подставит ws://127.0.0.1:8100/stream"
+  fi
+fi
+
 return 0

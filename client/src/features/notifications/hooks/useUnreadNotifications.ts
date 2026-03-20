@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchNotifications } from "@/lib/notifications";
+import { fetchNotifications, type NotificationItem } from "@/lib/notifications";
+import { playLikeNotificationSound } from "@/lib/send-sound";
 
 const BASE_REFETCH_MS = 22000;
 const FAST_REFETCH_MS = 12000;
@@ -43,6 +44,27 @@ export function useUnreadNotifications(): UnreadNotificationsState {
   const unreadCount = useMemo(() => {
     const list = Array.isArray(query.data) ? query.data : [];
     return list.reduce((sum, n) => sum + (n.readAt ? 0 : 1), 0);
+  }, [query.data]);
+  const isInitializedRef = useRef(false);
+  const prevUnreadReactionIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const list = Array.isArray(query.data) ? (query.data as NotificationItem[]) : [];
+    const unreadReactionIds = new Set(
+      list.filter((n) => !n.readAt && n.type === "reaction").map((n) => n.id)
+    );
+    if (!isInitializedRef.current) {
+      prevUnreadReactionIdsRef.current = unreadReactionIds;
+      isInitializedRef.current = true;
+      return;
+    }
+    const hasNewUnreadReaction = Array.from(unreadReactionIds).some(
+      (id) => !prevUnreadReactionIdsRef.current.has(id)
+    );
+    if (hasNewUnreadReaction) {
+      playLikeNotificationSound();
+    }
+    prevUnreadReactionIdsRef.current = unreadReactionIds;
   }, [query.data]);
 
   return {

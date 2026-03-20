@@ -11,9 +11,12 @@ export type Track = {
 
 export type TrackItem = {
   id: string;
-  messageId: string;
-  chatId: string;
+  sourceType: "message" | "call_segment";
+  messageId: string | null;
+  chatId: string | null;
+  callId: string | null;
   chatName: string;
+  speakerDisplayName: string | null;
   content: string;
   type: string;
   messageCreatedAt: string;
@@ -50,6 +53,18 @@ export async function addMessageToTrack(trackId: string, messageId: string, chat
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { message?: string }).message || "Не удалось добавить в трек");
+  }
+}
+
+export async function addCallSegmentToTrack(trackId: string, segmentId: string): Promise<void> {
+  const res = await apiFetch(`${API}/tracks/${encodeURIComponent(trackId)}/call-items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segmentId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось добавить реплику в трек");
   }
 }
 

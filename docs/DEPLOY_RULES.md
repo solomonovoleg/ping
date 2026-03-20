@@ -27,6 +27,7 @@
 - В production (NODE_ENV=production) кука по умолчанию ставится с флагом `secure`, если не задано `SESSION_SECURE=false`.
 - Если фронт и API на разных поддоменах — в deploy.env добавь **SESSION_SAME_SITE=none** (при этом нужен HTTPS и SESSION_SECURE=true).
 - **За nginx:** передавай заголовок `X-Forwarded-Proto $scheme`, чтобы приложение считало запрос HTTPS и кука сохранялась (в приложении уже включён `trust proxy`).
+- **Мобильный Bearer (JWT в приложении):** подпись считается от `AUTH_TOKEN_SECRET`, иначе от **SESSION_SECRET** (`server/auth/token.ts`). Если при деплое **SESSION_SECRET** на сервере меняется на новый случайный (пустой deploy.env и не подтянулся старый с VPS) — **все выданные токены приложения сразу недействительны**, пользователи увидят вылет на экран входа. Держи **стабильный** `SESSION_SECRET` в `deploy.env` или задай отдельный стабильный `AUTH_TOKEN_SECRET`.
 
 ## 5. Проверки перед деплоем (для скриптов и ИИ)
 

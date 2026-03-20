@@ -98,3 +98,149 @@ export async function ensureUserColumns(): Promise<void> {
     console.error("[db] ensureUserColumns failed (повторим при следующем запросе):", e);
   }
 }
+
+let chatVibeSchemaEnsured = false;
+
+/** Таблицы адаптивной атмосферы DM (без отдельного migrate на старых VPS). */
+export async function ensureChatVibeSchema(): Promise<void> {
+  if (chatVibeSchemaEnsured || !process.env.DATABASE_URL) return;
+  const p = getPool();
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS chat_vibe_state (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        chat_id varchar NOT NULL UNIQUE REFERENCES chats(id) ON DELETE CASCADE,
+        theme text NOT NULL DEFAULT 'casual',
+        confidence numeric(5,2) NOT NULL DEFAULT 0,
+        warmth int NOT NULL DEFAULT 50,
+        tension int NOT NULL DEFAULT 10,
+        playfulness int NOT NULL DEFAULT 30,
+        intimacy int NOT NULL DEFAULT 20,
+        formality int NOT NULL DEFAULT 30,
+        energy int NOT NULL DEFAULT 40,
+        message_counter int NOT NULL DEFAULT 0,
+        theme_version int NOT NULL DEFAULT 1,
+        last_batch_at timestamptz,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS chat_vibe_batches (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        chat_id varchar NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        window_size int NOT NULL,
+        dominant_pattern text NOT NULL,
+        secondary_pattern text,
+        confidence numeric(5,2) NOT NULL,
+        warmth int NOT NULL,
+        tension int NOT NULL,
+        playfulness int NOT NULL,
+        intimacy int NOT NULL,
+        formality int NOT NULL,
+        energy int NOT NULL,
+        toxicity_flag boolean NOT NULL DEFAULT false,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS idx_chat_vibe_batches_chat_id ON chat_vibe_batches(chat_id)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS chat_vibe_history (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        chat_id varchar NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        old_theme text NOT NULL,
+        new_theme text NOT NULL,
+        old_confidence numeric(5,2) NOT NULL,
+        new_confidence numeric(5,2) NOT NULL,
+        trigger_type text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS idx_chat_vibe_history_chat_id ON chat_vibe_history(chat_id)");
+    chatVibeSchemaEnsured = true;
+    console.log("[db] chat_vibe schema OK");
+  } catch (e) {
+    console.error("[db] ensureChatVibeSchema failed (повторим при следующем запросе):", e);
+  }
+}
+
+let callTranscriptsSchemaEnsured = false;
+
+export async function ensureCallTranscriptsSchema(): Promise<void> {
+  if (callTranscriptsSchemaEnsured || !process.env.DATABASE_URL) return;
+  const p = getPool();
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS call_sessions_history (
+        id varchar PRIMARY KEY,
+        chat_id varchar NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        media_type text NOT NULL DEFAULT 'audio',
+        created_by_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        ended_at timestamptz
+      )
+    `);
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS call_participants_history (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        call_id varchar NOT NULL REFERENCES call_sessions_history(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        display_name_snapshot text NOT NULL,
+        joined_at timestamptz NOT NULL DEFAULT now(),
+        left_at timestamptz
+      )
+    `);
+    await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_call_participant_unique ON call_participants_history(call_id, user_id)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS call_transcript_segments (
+        id varchar PRIMARY KEY,
+        call_id varchar NOT NULL REFERENCES call_sessions_history(id) ON DELETE CASCADE,
+        speaker_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        speaker_display_name text NOT NULL,
+        source_stream_id varchar,
+        language varchar(24) NOT NULL DEFAULT 'ru-RU',
+        text_raw text NOT NULL,
+        text_normalized text NOT NULL,
+        confidence int NOT NULL DEFAULT 0,
+        started_at_ms int NOT NULL DEFAULT 0,
+        ended_at_ms int NOT NULL DEFAULT 0,
+        is_final boolean NOT NULL DEFAULT false,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await p.query("CREATE INDEX IF NOT EXISTS idx_call_transcript_call_created ON call_transcript_segments(call_id, created_at)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS call_command_suggestions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        call_id varchar NOT NULL REFERENCES call_sessions_history(id) ON DELETE CASCADE,
+        segment_id varchar REFERENCES call_transcript_segments(id) ON DELETE CASCADE,
+        intent_type text NOT NULL,
+        title text NOT NULL,
+        payload_json text NOT NULL DEFAULT '{}',
+        status text NOT NULL DEFAULT 'pending',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        resolved_at timestamptz,
+        resolved_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_call_command_unique_segment_intent ON call_command_suggestions(segment_id, intent_type)");
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS call_track_items (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        track_id varchar NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        call_id varchar NOT NULL REFERENCES call_sessions_history(id) ON DELETE CASCADE,
+        segment_id varchar NOT NULL REFERENCES call_transcript_segments(id) ON DELETE CASCADE,
+        speaker_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        speaker_display_name text NOT NULL,
+        text text NOT NULL,
+        added_at timestamptz NOT NULL DEFAULT now(),
+        done_at timestamptz
+      )
+    `);
+    await p.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_call_track_items_track_segment ON call_track_items(track_id, segment_id)");
+    callTranscriptsSchemaEnsured = true;
+    console.log("[db] call_transcripts schema OK");
+  } catch (e) {
+    console.error("[db] ensureCallTranscriptsSchema failed (повторим при следующем запросе):", e);
+  }
+}

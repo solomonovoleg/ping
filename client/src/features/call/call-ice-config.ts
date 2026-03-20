@@ -22,22 +22,35 @@ export function getIceServers(): RTCIceServer[] {
   return [...stun, { urls, username, credential }];
 }
 
-export function getMediaConstraints(video: boolean): MediaStreamConstraints {
+export function getMediaConstraints(
+  video: boolean,
+  opts?: { highQuality?: boolean },
+): MediaStreamConstraints {
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
   const isIos = /iPhone|iPad|iPod/i.test(ua);
+  const hq = opts?.highQuality === true && !isIos;
   return {
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
+      channelCount: { ideal: 1 },
       ...(isIos ? {} : { sampleRate: 48000 }),
     },
     video: video
       ? {
           facingMode: "user",
-          width: isIos ? { ideal: 960, min: 240 } : { ideal: 1280, min: 320 },
-          height: isIos ? { ideal: 540, min: 180 } : { ideal: 720, min: 240 },
-          frameRate: { ideal: 24, max: 30 },
+          width: isIos
+            ? { ideal: 1280, min: 240 }
+            : hq
+              ? { ideal: 1920, min: 640 }
+              : { ideal: 1280, min: 320 },
+          height: isIos
+            ? { ideal: 720, min: 180 }
+            : hq
+              ? { ideal: 1080, min: 360 }
+              : { ideal: 720, min: 240 },
+          frameRate: { ideal: 30, max: 30 },
         }
       : false,
   };

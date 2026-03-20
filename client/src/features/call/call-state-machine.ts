@@ -6,12 +6,12 @@ import type { CallState } from "./call-types";
  */
 const TRANSITIONS: Record<CallState, CallState[]> = {
   idle:              ["outgoing_ringing", "incoming_ringing"],
-  outgoing_ringing:  ["connecting", "ended", "busy", "rejected", "missed", "failed"],
-  incoming_ringing:  ["accepting", "rejected", "ended", "missed"],
-  accepting:         ["connecting", "failed", "ended"],
-  connecting:        ["connected", "failed", "ended"],
+  outgoing_ringing:  ["connecting", "incoming_ringing", "reconnecting", "ended", "busy", "rejected", "missed", "failed"],
+  incoming_ringing:  ["accepting", "reconnecting", "rejected", "ended", "missed"],
+  accepting:         ["connecting", "reconnecting", "failed", "ended"],
+  connecting:        ["connected", "reconnecting", "failed", "ended"],
   connected:         ["reconnecting", "ended"],
-  reconnecting:      ["connected", "failed", "ended"],
+  reconnecting:      ["connected", "incoming_ringing", "failed", "ended"],
   ended:             ["idle"],
   rejected:          ["idle"],
   missed:            ["idle"],

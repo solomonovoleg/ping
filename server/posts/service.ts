@@ -68,6 +68,25 @@ export async function recordPostView(postId: string, userId: string): Promise<vo
   await db.insert(postViews).values({ postId, userId }).onConflictDoNothing();
 }
 
+export type PostEngagementInput = {
+  dwellMs?: number;
+  expanded?: boolean;
+  readFull?: boolean;
+};
+
+/**
+ * Базовая запись engagement-сигнала для будущего ранкера.
+ * Пока сохраняем уникальный просмотр как устойчивый минимум,
+ * а расширенные сигналы подключим после миграции схемы.
+ */
+export async function recordPostEngagement(
+  postId: string,
+  userId: string,
+  _engagement: PostEngagementInput = {}
+): Promise<void> {
+  await recordPostView(postId, userId);
+}
+
 export async function deleteOwnPost(postId: string, userId: string): Promise<void> {
   const db = getDb();
   const [existing] = await db.select().from(posts).where(eq(posts.id, postId)).limit(1);

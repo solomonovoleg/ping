@@ -1,4 +1,5 @@
-import { LayoutDashboard, Plus, Star, Clock, ChevronLeft, List } from "lucide-react";
+import { LayoutDashboard, Plus, Star, Clock, ChevronLeft, List, Captions } from "lucide-react";
+import { getCallHistory } from "@/lib/call-history";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { TapScaleButton } from "@/components/ui/tap-scale";
@@ -10,6 +11,10 @@ export default function Board() {
   const { data: tracksStats } = useQuery({
     queryKey: ["tracks", "stats"],
     queryFn: getTracksStats,
+  });
+  const { data: callHistory = [] } = useQuery({
+    queryKey: ["call-history"],
+    queryFn: getCallHistory,
   });
 
   return (
@@ -97,6 +102,23 @@ export default function Board() {
                 ) : (
                   <p>Списки сообщений</p>
                 )}
+              </div>
+            </TapScaleButton>
+
+            <TapScaleButton
+              type="button"
+              onClick={() => setLocation("/board/calls")}
+              className="rounded-2xl p-5 border border-border/60 bg-card/80 backdrop-blur-sm aspect-square flex flex-col justify-between text-left hover:bg-muted/50 active:scale-[0.98] transition-all shadow-sm hover:shadow-md hover:border-border"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <Captions className="w-5 h-5 text-primary" />
+                </div>
+                <h3 className="font-semibold text-base">Звонки</h3>
+              </div>
+              <div className="space-y-1 text-[13px] text-muted-foreground">
+                <p className="font-medium text-foreground">{callHistory.length} {callHistory.length === 1 ? "созвон" : callHistory.length < 5 ? "созвона" : "созвонов"}</p>
+                <p>{callHistory.length > 0 ? "Реплики и команды" : "История титров"}</p>
               </div>
             </TapScaleButton>
 

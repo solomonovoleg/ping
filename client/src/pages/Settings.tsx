@@ -41,6 +41,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getSavedTheme, setTheme, type ThemeId } from "@/lib/theme";
 import { getMicroSoundsEnabled, setMicroSoundsEnabled } from "@/lib/micro-feedback";
 import { getSpellCheckEnabled, setSpellCheckEnabled } from "@/lib/spellcheck-prefs";
+import { getStoryBeautyEnabled, setStoryBeautyEnabled } from "@/lib/story-prefs";
 import { getMyReferralCodes, createReferralCode, getInvitedUsers, type InvitedUser } from "@/lib/referrals";
 import { formatDateWithYearLocal } from "@/lib/timezone";
 import { startDm } from "@/lib/search";
@@ -71,6 +72,7 @@ export default function Settings() {
   const [pushSaving, setPushSaving] = useState(false);
   const [microSounds, setMicroSoundsState] = useState(getMicroSoundsEnabled);
   const [spellCheck, setSpellCheckState] = useState(getSpellCheckEnabled);
+  const [storyBeauty, setStoryBeautyState] = useState(getStoryBeautyEnabled);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [, setLocation] = useLocation();
@@ -382,6 +384,24 @@ export default function Settings() {
                 onCheckedChange={(checked) => {
                   setSpellCheckEnabled(checked);
                   setSpellCheckState(checked);
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 p-4 rounded-2xl border border-border/50 bg-card shadow-sm mt-2">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-medium text-foreground">Beauty для кружков</p>
+                  <p className="text-xs text-muted-foreground">Лёгкая маска только для кружков, не для просмотра сториз</p>
+                </div>
+              </div>
+              <Switch
+                checked={storyBeauty}
+                onCheckedChange={(checked) => {
+                  setStoryBeautyEnabled(checked);
+                  setStoryBeautyState(checked);
                 }}
               />
             </div>

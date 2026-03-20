@@ -24,15 +24,35 @@ export class CallSignalingClient {
 
   /** Send a client call event to the server. */
   send(event: ClientCallEvent): void {
-    const queueable = event.type === "call.invite" ||
-      event.type === "call.accept" ||
-      event.type === "call.reject" ||
-      event.type === "call.cancel" ||
-      event.type === "call.hangup";
+    const t = event.type;
+    const queueable =
+      t === "call.invite" ||
+      t === "call.accept" ||
+      t === "call.reject" ||
+      t === "call.cancel" ||
+      t === "call.hangup" ||
+      t === "call.resume-check" ||
+      t === "call.resume-request" ||
+      t === "call.offer" ||
+      t === "call.answer" ||
+      t === "call.ice-candidate" ||
+      /** Каждая строка отдельно — dedupe не используем, иначе съедутся при очереди. */
+      t === "call.caption";
+
+    let dedupeKey: string | undefined;
+    if (queueable) {
+      if (t === "call.ice-candidate" || t === "call.caption") {
+        dedupeKey = undefined;
+      } else if ("callId" in event && typeof event.callId === "string") {
+        dedupeKey = `${t}:${event.callId}`;
+      } else {
+        dedupeKey = t;
+      }
+    }
 
     this.sendJson(event as unknown as Record<string, unknown>, {
       queueOnDisconnect: queueable,
-      dedupeKey: queueable ? `${event.type}:${event.callId}` : undefined,
+      dedupeKey,
     });
   }
 

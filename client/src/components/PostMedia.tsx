@@ -5,6 +5,12 @@ import { getMediaDisplayFormat, type MediaDisplayFormat } from "@/lib/media-form
 import { getExifOrientation, shouldSwapDimensionsForOrientation } from "@/lib/exif-orientation";
 import type { PostMediaLayout } from "@shared/post-media-layout";
 
+/** Единая оболочка коллажа и одиночного медиа в ленте / профиле */
+const MEDIA_TOP = "mt-[var(--uix-space-3)]";
+const COLLAGE_SHELL = `${MEDIA_TOP} rounded-2xl overflow-hidden border border-border/40 bg-muted/20 shadow-sm ring-1 ring-black/[0.04]`;
+const SINGLE_SHELL = `${MEDIA_TOP} rounded-2xl overflow-hidden border border-border/40 bg-muted/25 shadow-sm ring-1 ring-black/[0.04] w-full`;
+const COLLAGE_CELL = "bg-black/[0.06] flex items-center justify-center";
+
 function isVideoUrl(url: string): boolean {
   return /\.(mp4|webm|mov)(\?|$)/i.test(url);
 }
@@ -93,7 +99,7 @@ function SinglePostMedia({
 
   const isFixedAspect = effectiveFormat === "square" || effectiveFormat === "story";
   const containerClass = cn(
-    "mt-3 rounded-lg overflow-hidden bg-muted/30 w-full",
+    SINGLE_SHELL,
     effectiveFormat === "square" && "aspect-square",
     effectiveFormat === "story" && "aspect-[9/16]",
     !format && "min-h-[120px]",
@@ -164,9 +170,12 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   const renderAudioList = () => {
     if (!audio.length) return null;
     return (
-      <div className={cn("mt-3 space-y-2", className)}>
+      <div className={cn(`${MEDIA_TOP} flex flex-col gap-[var(--uix-space-2)]`, className)}>
         {audio.map((url, i) => (
-          <div key={`${url}-${i}`} className="rounded-xl border border-border/50 bg-secondary/35 px-3 py-2">
+          <div
+            key={`${url}-${i}`}
+            className="rounded-xl border border-border/40 bg-secondary/35 px-[var(--uix-space-3)] py-[var(--uix-space-2)]"
+          >
             <audio src={url} controls preload="metadata" className="w-full" />
           </div>
         ))}
@@ -208,9 +217,9 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 2 || collageVariant === "grid_2") {
     return (
       <>
-        <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 flex gap-px", className)}>
+        <div className={cn(`${COLLAGE_SHELL} flex gap-px`, className)}>
           {visual.map((url, i) => (
-            <div key={i} className="flex-1 min-w-0 aspect-square bg-black/5 flex items-center justify-center">
+            <div key={i} className={cn("flex-1 min-w-0 aspect-square", COLLAGE_CELL)}>
               {isVideoUrl(url) ? (
                 <video src={url} controls className="w-full h-full object-cover" playsInline onClick={(e) => e.stopPropagation()} />
               ) : (
@@ -228,8 +237,8 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 3 || collageVariant === "mosaic_3") {
     return (
       <>
-        <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 flex gap-px", className)}>
-          <div className="w-2/3 min-w-0 aspect-[4/3] bg-black/5 flex items-center justify-center">
+        <div className={cn(`${COLLAGE_SHELL} flex gap-px`, className)}>
+          <div className={cn("w-2/3 min-w-0 aspect-[4/3]", COLLAGE_CELL)}>
             {isVideoUrl(visual[0]) ? (
               <video src={visual[0]} controls className="w-full h-full object-cover" playsInline />
             ) : (
@@ -238,7 +247,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
           </div>
           <div className="w-1/3 flex flex-col gap-px">
             {[visual[1], visual[2]].map((url, i) => (
-              <div key={i} className="flex-1 min-h-0 bg-black/5 flex items-center justify-center">
+              <div key={i} className={cn("flex-1 min-h-0", COLLAGE_CELL)}>
                 {isVideoUrl(url) ? (
                   <video src={url} controls className="w-full h-full object-cover" playsInline />
                 ) : (
@@ -257,9 +266,9 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 4 || collageVariant === "grid_4") {
     return (
       <>
-        <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 grid grid-cols-2 gap-px", className)}>
+        <div className={cn(`${COLLAGE_SHELL} grid grid-cols-2 gap-px`, className)}>
           {visual.map((url, i) => (
-            <div key={i} className="aspect-square bg-black/5 flex items-center justify-center">
+            <div key={i} className={cn("aspect-square", COLLAGE_CELL)}>
               {isVideoUrl(url) ? (
                 <video src={url} controls className="w-full h-full object-cover" playsInline />
               ) : (
@@ -277,9 +286,9 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   const rest = n - 5;
   return (
     <>
-      <div className={cn("mt-3 rounded-2xl overflow-hidden border border-border/50 grid grid-cols-2 gap-px", className)}>
+      <div className={cn(`${COLLAGE_SHELL} grid grid-cols-2 gap-px`, className)}>
         {visual.slice(0, 4).map((url, i) => (
-          <div key={i} className="aspect-square bg-black/5 flex items-center justify-center relative">
+          <div key={i} className={cn("aspect-square relative", COLLAGE_CELL)}>
             {isVideoUrl(url) ? (
               <video src={url} controls className="w-full h-full object-cover" playsInline />
             ) : (
@@ -287,14 +296,14 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
             )}
           </div>
         ))}
-        <div className="col-span-2 aspect-[2/1] bg-black/5 flex items-center justify-center relative">
+        <div className={cn("col-span-2 aspect-[2/1] relative", COLLAGE_CELL)}>
           {isVideoUrl(visual[4]) ? (
             <video src={visual[4]} controls className="w-full h-full object-cover" playsInline />
           ) : (
             <img src={visual[4]} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
           )}
           {rest > 0 && (
-            <span className="absolute inset-0 flex items-center justify-center bg-black/50 text-white text-2xl font-bold">
+            <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-white text-xl font-bold tabular-nums backdrop-blur-[1px]">
               +{rest}
             </span>
           )}

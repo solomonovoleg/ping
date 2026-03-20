@@ -7,6 +7,9 @@ import { usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCallContext } from "@/contexts/CallContext";
+import { useGroupCallContext } from "@/contexts/GroupCallContext";
+import { isGroupCallModuleEnabled } from "@/features/group-call/flags";
+import { fetchActiveGroupCall, type GroupCallMedia } from "@/lib/group-calls-api";
 import { UserAvatar } from "@/components/UserAvatar";
 import { getMessages, uploadVoice, uploadChatMedia, sendMessage, addMessageReaction, REACTION_EMOJIS, saveMessage, unsaveMessage, isMessageSaved, updateChat, createChatFolder, listChatFolders } from "@/lib/chat";
 import { compressImage } from "@/lib/compress-image";
@@ -636,6 +639,33 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const lastMessageIdRef = useRef<string>("");
   const { startCall } = useCallContext();
+  const groupCallCtx = useGroupCallContext();
+  const [groupCallLobby, setGroupCallLobby] = useState<{
+    roomId: string;
+    mediaType: GroupCallMedia;
+    participantCount: number;
+  } | null>(null);
+
+  const startCallUnlessInGroup = useCallback(
+    (
+      otherUserId: string,
+      otherDisplayName: string | null,
+      cid: string,
+      video: boolean,
+      avatarUrl?: string | null,
+    ) => {
+      if (groupCallCtx.active) {
+        toast({ title: "Сначала завершите групповой созвон", variant: "destructive" });
+        return;
+      }
+      const messageContext =
+        chat?.type === "group"
+          ? { kind: "group" as const, folderId: currentFolderId }
+          : { kind: "dm" as const };
+      startCall(otherUserId, otherDisplayName, cid, video, avatarUrl, messageContext);
+    },
+    [groupCallCtx.active, startCall, toast, chat?.type, currentFolderId],
+  );
 
   const scrollToBottom = useCallback((smooth = true) => {
     const el = scrollContainerRef.current;
@@ -684,6 +714,30 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     const el = document.querySelector(`[data-message-id="${messageIdFromUrl}"]`);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!isGroupCallModuleEnabled() || !chatId || chat?.type !== "group" || groupCallCtx.active) {
+      setGroupCallLobby(null);
+      return;
+    }
+    let alive = true;
+    const tick = () => {
+      void fetchActiveGroupCall(chatId).then((r) => {
+        if (!alive) return;
+        if (r.active && r.participantCount > 0) {
+          setGroupCallLobby({ roomId: r.roomId, mediaType: r.mediaType, participantCount: r.participantCount });
+        } else {
+          setGroupCallLobby(null);
+        }
+      });
+    };
+    tick();
+    const id = window.setInterval(tick, 14_000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [chatId, chat?.type, groupCallCtx.active]);
 
   useEffect(() => {
     if (!showAttachSource) return;
@@ -819,10 +873,6 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const displayNameShort =
     displayName && displayName !== "Диалог"
       ? (displayName.length > HEADER_NAME_MAX_LENGTH ? displayName.slice(0, HEADER_NAME_MAX_LENGTH) + "…" : displayName)
-      : null;
-  const composerRecipientName =
-    displayName && displayName !== "Диалог"
-      ? (displayName.length > 10 ? displayName.slice(0, 10) + "…" : displayName)
       : null;
   const callerDisplayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || user.phone || "Абонент" : "Абонент";
   const trimmedComposerText = send.message.trim();
@@ -1005,7 +1055,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               <button
                 type="button"
                 className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, false, chat.otherMember?.avatarUrl)}
+                onClick={() =>
+                  startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, false, chat.otherMember?.avatarUrl)
+                }
                 aria-label="Аудиозвонок"
               >
                 <Phone className="w-5 h-5" />
@@ -1013,7 +1065,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               <button
                 type="button"
                 className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                onClick={() => startCall(chat.otherMember!.id, callerDisplayName, chatId, true, chat.otherMember?.avatarUrl)}
+                onClick={() =>
+                  startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, true, chat.otherMember?.avatarUrl)
+                }
                 aria-label="Видеозвонок"
               >
                 <Video className="w-5 h-5" />
@@ -1062,6 +1116,32 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                 <Users className="h-5 w-5 shrink-0 text-primary" />
                 <span className="flex-1 text-sm font-medium">Участники ({chat.members?.length ?? 0})</span>
               </button>
+              {isGroupCallModuleEnabled() && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGroupMenu(false);
+                      void groupCallCtx.startGroupCall(chatId, displayName, false);
+                    }}
+                    className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
+                  >
+                    <Phone className="h-5 w-5 shrink-0 text-primary" />
+                    <span className="flex-1 text-sm font-medium">Групповой звонок</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGroupMenu(false);
+                      void groupCallCtx.startGroupCall(chatId, displayName, true);
+                    }}
+                    className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
+                  >
+                    <Video className="h-5 w-5 shrink-0 text-primary" />
+                    <span className="flex-1 text-sm font-medium">Групповое видео</span>
+                  </button>
+                </>
+              )}
               {chat.myRole === "admin" && (
                 <button
                   type="button"
@@ -1389,6 +1469,31 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
         </div>
       )}
 
+      {isGroupCallModuleEnabled() && chat.type === "group" && groupCallLobby && !groupCallCtx.active && (
+        <div className="shrink-0 uix-content-x py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/8 px-3 py-2.5">
+            <p className="text-sm font-medium text-foreground min-w-0 flex-1">
+              Идёт групповой {groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок · {groupCallLobby.participantCount}{" "}
+              {groupCallLobby.participantCount === 1 ? "участник" : groupCallLobby.participantCount < 5 ? "участника" : "участников"}
+            </p>
+            <TapScaleButton
+              type="button"
+              className="shrink-0 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground min-h-[var(--uix-touch-min)]"
+              onClick={() => {
+                groupCallCtx.joinGroupCall({
+                  roomId: groupCallLobby.roomId,
+                  chatId,
+                  mediaType: groupCallLobby.mediaType,
+                  chatTitle: displayName,
+                });
+              }}
+            >
+              Подключиться
+            </TapScaleButton>
+          </div>
+        </div>
+      )}
+
       <input
         ref={groupAvatarInputRef}
         type="file"
@@ -1445,8 +1550,12 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
 
       {/* Messages: min-h-0 чтобы flex дал высоту; -webkit-overflow-scrolling: touch для инерции на iOS; overscroll для предсказуемого скролла */}
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
-        {vibe.isActive && <ChatVibeBackground tokens={vibe.tokens} isActive={vibe.isActive} />}
-        {vibe.isActive && <ChatVibeOverlay tokens={vibe.tokens} isActive={vibe.isActive} />}
+        {vibe.isActive && (
+          <ChatVibeBackground theme={vibe.theme} tokens={vibe.tokens} isActive={vibe.isActive} />
+        )}
+        {vibe.isActive && (
+          <ChatVibeOverlay theme={vibe.theme} tokens={vibe.tokens} isActive={vibe.isActive} />
+        )}
       <div
         ref={scrollContainerRef}
         className={cn("uix-content-x-tight relative z-[1] flex flex-1 min-h-0 flex-col gap-0 overflow-y-auto overflow-x-hidden overscroll-y-auto touch-pan-y", spacing.messageTopPaddingClass)}
@@ -1510,6 +1619,16 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
             const calleeId = payload.calleeId ?? "";
             const video = payload.video ?? false;
             const iAmCallee = user?.id === calleeId;
+            const callerMember = callerId ? chat?.members?.find((m) => m.id === callerId) : undefined;
+            const otherDm =
+              chat?.type === "dm" && chat.otherMember?.id === callerId ? chat.otherMember : undefined;
+            const redialPeer = callerMember ?? otherDm;
+            const redialName = redialPeer
+              ? [redialPeer.displayName, redialPeer.surname].filter(Boolean).join(" ").trim() || null
+              : chat?.type === "dm"
+                ? displayName
+                : null;
+            const redialAvatar = redialPeer?.avatarUrl ?? undefined;
             return (
               <div key={msg.id} data-message-id={msg.id} data-created-at={msg.createdAt} className="flex justify-center my-2">
                 <div className="bg-secondary/50 text-muted-foreground text-[12px] px-4 py-2 rounded-xl flex flex-col items-center gap-2">
@@ -1518,7 +1637,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                     <button
                       type="button"
                       className="text-primary font-medium hover:underline"
-                      onClick={() => startCall(callerId, displayName, chatId, video)}
+                      onClick={() => startCallUnlessInGroup(callerId, redialName, chatId, video, redialAvatar ?? null)}
                     >
                       Перезвонить
                     </button>
@@ -1873,8 +1992,8 @@ onClick={() => actions.setForwardingMessage(null)}
         </div>
       )}
 
-      {/* Input — как в ВК: при редактировании тот же поле ввода, отправка = сохранить */}
-      <div className={cn("uix-content-x relative z-[105] border-t border-indigo-500/15 bg-white/65 backdrop-blur-2xl pb-safe dark:bg-slate-900/75", spacing.bottomBarYClass)}>
+      {/* Input — Telegram-style тулбар: круги по краям, капсула по центру; цвета от темы (--chat-composer-*) */}
+      <div className={cn("uix-content-x relative z-[105] chat-composer-bar pb-safe-offset-4", spacing.bottomBarYClass)}>
         {send?.editingId && (
           <div className="flex items-center justify-between gap-2 mb-1.5 px-1">
             <span className="text-xs text-muted-foreground">Редактирование сообщения</span>
@@ -1943,11 +2062,11 @@ onClick={() => actions.setForwardingMessage(null)}
               </button>
             </div>
           )}
-        <div className="relative flex min-w-0 items-end gap-1.5 overflow-hidden rounded-3xl border border-white/30 bg-white/75 p-1.5 shadow-[0_10px_32px_rgba(70,71,211,0.12)] dark:border-slate-700/40 dark:bg-slate-900/80">
+        <div className="relative flex min-w-0 items-end gap-2 overflow-visible pt-0.5">
           {showAttachSource && isNative() && (
             <div
               ref={attachSourceRef}
-              className="absolute bottom-full left-0 mb-1 flex flex-col rounded-lg border border-border bg-background shadow-lg py-1 z-[110]"
+              className="absolute bottom-full left-0 mb-2 flex flex-col rounded-xl border border-border bg-popover text-popover-foreground shadow-lg py-1 z-[110]"
             >
               <button
                 type="button"
@@ -1984,12 +2103,12 @@ onClick={() => actions.setForwardingMessage(null)}
               if (isNative()) setShowAttachSource((v) => !v);
               else send.fileInputRef.current?.click();
             }}
-            className="flex min-h-[var(--uix-touch-min,44px)] min-w-[var(--uix-touch-min,44px)] flex-shrink-0 items-center justify-center rounded-full p-2.5 text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+            className="chat-composer-round flex-shrink-0"
             aria-label="Прикрепить фото или видео"
           >
-            <Paperclip className="w-5 h-5 pointer-events-none" />
+            <Paperclip className="h-[22px] w-[22px] pointer-events-none stroke-[1.85]" aria-hidden />
           </TapScaleButton>
-          <div className="relative flex flex-1 min-w-0 items-end overflow-hidden rounded-2xl border border-border/40 bg-secondary/70 dark:bg-slate-800/60">
+          <div className="chat-composer-pill relative flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 items-end overflow-hidden">
             {showCanvasCommandOption && (
               <div className="absolute bottom-full left-0 right-0 mb-1 z-[121]">
                 <button
@@ -2106,29 +2225,44 @@ onClick={() => actions.setForwardingMessage(null)}
                 send.handleKeyPress(e);
               }}
               placeholder={
-                send?.editingId
-                  ? "Измените текст и нажмите отправить"
-                  : composerRecipientName
-                    ? `Для ${composerRecipientName}`
-                    : "Сообщение..."
+                send?.editingId ? "Измените текст и нажмите отправить" : "Сообщение..."
               }
               className={cn(
-                "max-h-28 min-h-[38px] w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2.5 pl-3 pr-1 text-base leading-5 outline-none focus:ring-0",
+                "max-h-28 min-h-[36px] w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 pr-1 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
                 !send.message.trim() && "overflow-hidden whitespace-nowrap placeholder:whitespace-nowrap text-ellipsis"
               )}
               rows={1}
             />
+            {!send.message.trim() && !send?.editingId && (
+              <TapScaleButton
+                type="button"
+                onClick={send.handleVideoNoteButtonClick}
+                onPointerDown={send.handleVideoNotePointerDown}
+                onPointerUp={send.handleVideoNotePointerUp}
+                onPointerMove={send.handleVideoNotePointerMove}
+                onPointerLeave={send.handleVideoNotePointerLeave}
+                onPointerCancel={send.handleVideoNotePointerLeave}
+                disabled={send.sendingMedia || !send.videoNoteSupported}
+                haptic
+                className="chat-composer-pill-action mr-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8 disabled:opacity-40"
+                title="Видеокружок: нажмите для выбора, удерживайте для записи"
+                aria-label="Видеокружок: нажмите для выбора, удерживайте для записи"
+              >
+                {send.sendingMedia ? <span className="text-[10px]">…</span> : <Video className="h-[20px] w-[20px]" strokeWidth={1.75} />}
+              </TapScaleButton>
+            )}
             <TapScaleButton
               type="button"
               haptic
+              data-active={showEmojiPicker ? "true" : undefined}
               className={cn(
-                "flex-shrink-0 rounded-full p-2 transition-all duration-150",
-                showEmojiPicker ? "bg-primary/10 text-primary scale-105" : "text-muted-foreground hover:text-primary hover:bg-primary/5"
+                "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
+                showEmojiPicker && "bg-primary/12 text-primary"
               )}
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
               aria-label="Эмодзи"
             >
-              <Smile className="w-4 h-4" />
+              <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
             </TapScaleButton>
           </div>
           {send.message.trim() ? (
@@ -2138,9 +2272,10 @@ onClick={() => actions.setForwardingMessage(null)}
               send.setMessage("```\n" + raw + "\n```");
               requestAnimationFrame(() => send.handleSend());
             };
-            return <>
+            return (
+              <div className="flex shrink-0 items-end gap-2">
               {isCanvasMode && (
-                <div className="flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-600 dark:text-amber-400">
+                <div className="flex max-h-[var(--uix-touch-min)] items-center gap-1.5 self-end rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-600 dark:text-amber-400">
                   <Code className="w-3.5 h-3.5" />
                   <span className="text-[11px] font-semibold">Холст</span>
                 </div>
@@ -2151,13 +2286,13 @@ onClick={() => actions.setForwardingMessage(null)}
                     type="button"
                     haptic
                     className={cn(
-                      "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex-shrink-0 items-center justify-center rounded-full p-2 transition-colors",
-                      send.scheduledAt ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-primary hover:bg-primary/5"
+                      "chat-composer-round",
+                      send.scheduledAt && "border-primary/35 bg-primary/12 text-primary"
                     )}
                     aria-label="Отложенная отправка"
                     title={send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отложить отправку"}
                   >
-                    <Clock className="w-4 h-4" />
+                    <Clock className="h-[20px] w-[20px]" strokeWidth={1.75} />
                   </TapScaleButton>
                 </PopoverTrigger>
                 <PopoverContent side="top" align="end" className="w-52 p-1">
@@ -2217,61 +2352,44 @@ onClick={() => actions.setForwardingMessage(null)}
                 disabled={send.sending}
                 haptic
                 className={cn(
-                  "flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full shadow-lg transition-all duration-150 animate-in zoom-in-95 hover:brightness-110 active:scale-95 disabled:opacity-50",
+                  "flex h-[var(--uix-touch-min)] w-[var(--uix-touch-min)] shrink-0 items-center justify-center rounded-full border border-transparent shadow-md transition-all duration-150 animate-in zoom-in-95 hover:brightness-110 active:scale-95 disabled:opacity-50",
                   isCanvasMode
-                    ? "bg-gradient-to-br from-amber-600 to-amber-400 text-white shadow-amber-500/20"
-                    : "bg-gradient-to-br from-indigo-600 to-indigo-400 text-white shadow-indigo-500/20"
+                    ? "bg-gradient-to-br from-amber-600 to-amber-400 text-white shadow-amber-500/25"
+                    : "bg-primary text-primary-foreground shadow-primary/20"
                 )}
                 title={isCanvasMode ? "Отправить холст" : send?.editingId ? "Сохранить изменения" : send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отправить"}
               >
-                {isCanvasMode ? <Code className="w-4 h-4" /> : <Send className="w-4 h-4 translate-x-[-1px] translate-y-[1px]" />}
+                {isCanvasMode ? <Code className="h-[20px] w-[20px]" /> : <Send className="h-[20px] w-[20px] translate-x-[-0.5px] translate-y-[0.5px]" strokeWidth={1.85} />}
               </TapScaleButton>
-            </>;
+              </div>
+            );
             })()
           ) : send.voiceState === "recording" ? (
             <TapScaleButton
               type="button"
               onClick={send.handleMicClick}
               haptic
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center gap-1 rounded-full bg-red-500 text-white transition-all duration-150 active:scale-95 hover:bg-red-600"
+              className="flex min-h-[var(--uix-touch-min)] min-w-[3.25rem] shrink-0 items-center justify-center gap-1 rounded-full border border-red-400/30 bg-red-500 px-2 text-white transition-all duration-150 active:scale-95 hover:bg-red-600"
               title="Остановить запись"
             >
-              <Square className="w-4 h-4 fill-current" />
-              <span className="text-[10px] font-medium">{send.durationSec}с</span>
+              <Square className="h-3.5 w-3.5 fill-current" />
+              <span className="text-[11px] font-semibold tabular-nums">{send.durationSec}с</span>
             </TapScaleButton>
           ) : (
-            <div className="flex items-center gap-1">
-              <TapScaleButton
-                type="button"
-                onClick={send.handleVideoNoteButtonClick}
-                onPointerDown={send.handleVideoNotePointerDown}
-                onPointerUp={send.handleVideoNotePointerUp}
-                onPointerMove={send.handleVideoNotePointerMove}
-                onPointerLeave={send.handleVideoNotePointerLeave}
-                onPointerCancel={send.handleVideoNotePointerLeave}
-                disabled={send.sendingMedia || !send.videoNoteSupported}
-                haptic
-                className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex-shrink-0 items-center justify-center rounded-full border border-indigo-500/20 bg-indigo-500/10 text-indigo-700 transition-all duration-150 active:scale-95 hover:bg-indigo-500/15 disabled:opacity-50 dark:text-indigo-300"
-                title="Видеокружок: нажмите для выбора, удерживайте для записи"
-                aria-label="Видеокружок: нажмите для выбора, удерживайте для записи"
-              >
-                {send.sendingMedia ? <span className="text-[10px]">...</span> : <Video className="w-4 h-4" />}
-              </TapScaleButton>
-              <TapScaleButton
-                type="button"
-                onPointerDown={send.handleMicPointerDown}
-                onPointerUp={send.handleMicPointerUp}
-                onPointerLeave={send.handleMicPointerLeave}
-                onPointerCancel={send.handleMicPointerLeave}
-                disabled={send.sendingVoice || !send.voiceSupported}
-                haptic
-                className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex-shrink-0 items-center justify-center rounded-full bg-secondary text-foreground transition-all duration-150 active:scale-95 hover:bg-secondary/80 disabled:opacity-50"
-                title={!send.voiceSupported ? "Запись голоса недоступна в этом браузере" : "Удерживайте для записи голосового"}
-                aria-label={!send.voiceSupported ? "Запись голоса недоступна" : "Удерживайте для записи голосового"}
-              >
-                {send.sendingVoice ? <span className="text-[10px]">...</span> : <Mic className="w-4 h-4" />}
-              </TapScaleButton>
-            </div>
+            <TapScaleButton
+              type="button"
+              onPointerDown={send.handleMicPointerDown}
+              onPointerUp={send.handleMicPointerUp}
+              onPointerLeave={send.handleMicPointerLeave}
+              onPointerCancel={send.handleMicPointerLeave}
+              disabled={send.sendingVoice || !send.voiceSupported}
+              haptic
+              className="chat-composer-round shrink-0"
+              title={!send.voiceSupported ? "Запись голоса недоступна в этом браузере" : "Удерживайте для записи голосового"}
+              aria-label={!send.voiceSupported ? "Запись голоса недоступна" : "Удерживайте для записи голосового"}
+            >
+              {send.sendingVoice ? <span className="text-[10px]">…</span> : <Mic className="h-[22px] w-[22px] stroke-[1.85]" />}
+            </TapScaleButton>
           )}
         </div>
         {spellUndo ? (

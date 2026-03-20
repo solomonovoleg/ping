@@ -1,4 +1,13 @@
-import { API, apiFetch, getAuthHeaders, setAuthToken } from "@/lib/api-base";
+import {
+  API,
+  apiFetch,
+  getAuthToken,
+  hydrateNativeAuthToken,
+  setAuthToken,
+  syncAuthTokenFromStorage,
+} from "@/lib/api-base";
+import { isNative } from "@/lib/capacitor-native";
+import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
 
 export type AuthUser = {
   id: string;
@@ -22,44 +31,74 @@ export type AuthUser = {
   vibeShareWithPartner?: boolean;
 };
 
-export async function fetchMe(): Promise<AuthUser | null> {
-  const res = await fetch(`${API}/auth/me`, {
-    credentials: "include",
-    cache: "no-store",
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const data = await res.json().catch(() => ({}));
-  if (!data || typeof data.id !== "string" || typeof data.phone !== "string") {
-    return null;
-  }
+function userFromMePayload(data: unknown): AuthUser | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.id !== "string" || typeof d.phone !== "string") return null;
   return {
-    id: data.id,
-    publicId: typeof data.publicId === "number" ? data.publicId : 100,
-    phone: data.phone,
-    displayName: data.displayName ?? null,
-    surname: data.surname ?? null,
-    gender: data.gender ?? null,
-    birthDate: data.birthDate ?? null,
-    avatarUrl: data.avatarUrl ?? null,
-    coverUrl: data.coverUrl ?? null,
-    showCover: data.showCover !== false,
-    profileLink: data.profileLink ?? null,
-    platformRole: data.platformRole ?? "user",
-    hideFromSearch: data.hideFromSearch ?? false,
-    bio: data.bio ?? null,
-    pushEnabled: data.pushEnabled !== false,
-    vibeEnabled: data.vibeEnabled === true,
-    vibeShareWithPartner: data.vibeShareWithPartner === true,
+    id: d.id,
+    publicId: typeof d.publicId === "number" ? d.publicId : 100,
+    phone: d.phone,
+    displayName: (d.displayName as string | null | undefined) ?? null,
+    surname: (d.surname as string | null | undefined) ?? null,
+    gender: (d.gender as string | null | undefined) ?? null,
+    birthDate: (d.birthDate as string | null | undefined) ?? null,
+    avatarUrl: (d.avatarUrl as string | null | undefined) ?? null,
+    coverUrl: (d.coverUrl as string | null | undefined) ?? null,
+    showCover: d.showCover !== false,
+    profileLink: (d.profileLink as string | null | undefined) ?? null,
+    platformRole: (d.platformRole as string | undefined) ?? "user",
+    hideFromSearch: d.hideFromSearch === true,
+    bio: (d.bio as string | null | undefined) ?? null,
+    pushEnabled: d.pushEnabled !== false,
+    vibeEnabled: d.vibeEnabled === true,
+    vibeShareWithPartner: d.vibeShareWithPartner === true,
   };
 }
 
+export async function fetchMe(): Promise<AuthUser | null> {
+  const doReq = () =>
+    apiFetch(`${API}/auth/me`, {
+      credentials: "include",
+      cache: "no-store",
+      suppressSessionExpireOn401: true,
+    });
+
+  const readUser = async (res: Response): Promise<AuthUser | null> => {
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json().catch(() => ({}));
+    return userFromMePayload(data);
+  };
+
+  let u = await readUser(await doReq());
+  if (u) return u;
+
+  // Натив: повтор после hydrate и короткой задержки (Preferences / LS после resume иногда отстают).
+  if (isNative()) {
+    await hydrateNativeAuthToken();
+    syncAuthTokenFromStorage();
+    if (getAuthToken()) {
+      u = await readUser(await doReq());
+      if (u) return u;
+    }
+    await new Promise((r) => setTimeout(r, 220));
+    await hydrateNativeAuthToken();
+    syncAuthTokenFromStorage();
+    if (getAuthToken()) {
+      u = await readUser(await doReq());
+      if (u) return u;
+    }
+  }
+  return null;
+}
+
 export async function login(phone: string, password: string): Promise<AuthUser & { token?: string }> {
-  const res = await fetch(`${API}/auth/login`, {
+  const res = await apiFetch(`${API}/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({ phone, password }),
+    suppressSessionExpireOn401: true,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -68,8 +107,11 @@ export async function login(phone: string, password: string): Promise<AuthUser &
         (res.status === 401 ? "Неверный номер или пароль" : "Ошибка входа")
     );
   }
-  setAuthToken(data?.token ?? null);
-  return data as AuthUser & { token?: string };
+  const rawTok = (data as { token?: unknown })?.token;
+  const tokenStr =
+    rawTok != null && String(rawTok).trim().length > 0 ? String(rawTok).trim() : null;
+  setAuthToken(tokenStr);
+  return { ...(data as AuthUser), ...(tokenStr ? { token: tokenStr } : {}) };
 }
 
 export async function register(
@@ -79,11 +121,12 @@ export async function register(
 ): Promise<AuthUser> {
   const body: { phone: string; password: string; referralCode?: string } = { phone, password };
   if (referralCode?.trim()) body.referralCode = referralCode.trim();
-  const res = await fetch(`${API}/auth/register`, {
+  const res = await apiFetch(`${API}/auth/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify(body),
+    suppressSessionExpireOn401: true,
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -94,7 +137,9 @@ export async function register(
     setAuthToken(null);
     throw new Error("Неверный ответ сервера при регистрации");
   }
-  const token = data.token != null ? String(data.token) : null;
+  const rawTok = (data as { token?: unknown }).token;
+  const token =
+    rawTok != null && String(rawTok).trim().length > 0 ? String(rawTok).trim() : null;
   setAuthToken(token);
   const user = data.user ?? data;
   const out: AuthUser & { token?: string } = {
@@ -112,20 +157,18 @@ export async function register(
 }
 
 export async function logout(): Promise<void> {
-  await fetch(`${API}/auth/logout`, {
+  await apiFetch(`${API}/auth/logout`, {
     method: "POST",
     credentials: "include",
-    headers: getAuthHeaders(),
   });
   setAuthToken(null);
 }
 
 /** Удаление своего аккаунта (требование App Store). После успеха нужно вызвать logout и перенаправить на вход. */
 export async function deleteAccount(): Promise<void> {
-  const res = await fetch(`${API}/auth/me`, {
+  const res = await apiFetch(`${API}/auth/me`, {
     method: "DELETE",
     credentials: "include",
-    headers: getAuthHeaders(),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -148,10 +191,9 @@ export async function uploadAvatar(dataUrlOrBlob: string | Blob): Promise<string
   const type = file.type && file.type.startsWith("image/") ? file.type : "image/jpeg";
   const form = new FormData();
   form.append("file", file instanceof File ? file : new File([file], "avatar.jpg", { type }), "avatar.jpg");
-  const res = await fetch(`${API}/upload/avatar`, {
+  const res = await apiFetch(`${API}/upload/avatar`, {
     method: "POST",
     credentials: "include",
-    headers: getAuthHeaders(),
     body: form,
   });
   const text = await res.text();
@@ -208,9 +250,9 @@ export async function patchVibeSettings(partial: {
   vibeEnabled?: boolean;
   vibeShareWithPartner?: boolean;
 }): Promise<{ vibeEnabled: boolean; vibeShareWithPartner: boolean }> {
-  const res = await fetch(`${API}/users/me/vibe-settings`, {
+  const res = await apiFetch(`${API}/users/me/vibe-settings`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify(partial),
   });
@@ -227,7 +269,11 @@ export async function patchVibeSettings(partial: {
     throw new Error(message);
   }
   try {
-    return JSON.parse(text) as { vibeEnabled: boolean; vibeShareWithPartner: boolean };
+    const out = JSON.parse(text) as { vibeEnabled: boolean; vibeShareWithPartner: boolean };
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CHAT_VIBE_PREFS_CHANGED));
+    }
+    return out;
   } catch {
     throw new Error("Неверный ответ сервера");
   }
@@ -246,9 +292,9 @@ export async function updateProfile(data: {
   profileLink?: string | null;
   pushEnabled?: boolean;
 }): Promise<AuthUser> {
-  const res = await fetch(`${API}/users/me`, {
+  const res = await apiFetch(`${API}/users/me`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify(data),
   });

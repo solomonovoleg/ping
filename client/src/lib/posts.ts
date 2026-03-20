@@ -1,4 +1,4 @@
-import { API, apiFetch, getAuthHeaders, setAuthToken } from "@/lib/api-base";
+import { API, apiFetch } from "@/lib/api-base";
 import type { PostMediaLayout } from "@shared/post-media-layout";
 
 export type ReactionUser = { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null };
@@ -36,18 +36,10 @@ export type FeedPost = {
 export async function uploadPostMedia(file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API}/upload/post-media`, {
+  const res = await apiFetch(`${API}/upload/post-media`, {
     method: "POST",
-    credentials: "include",
-    headers: getAuthHeaders(),
     body: form,
   });
-  if (res.status === 401) {
-    setAuthToken(null);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("auth:session-expired"));
-    }
-  }
   const text = await res.text();
   let data: { message?: unknown; url?: unknown } = {};
   if (text.trim()) {
@@ -199,6 +191,18 @@ export async function recordPostView(postId: string): Promise<void> {
   await apiFetch(`${API}/posts/${encodeURIComponent(postId)}/view`, {
     method: "POST",
     credentials: "include",
+  });
+}
+
+export async function recordPostEngagement(
+  postId: string,
+  payload: { dwellMs?: number; expanded?: boolean; readFull?: boolean }
+): Promise<void> {
+  await apiFetch(`${API}/posts/${encodeURIComponent(postId)}/engage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
   });
 }
 

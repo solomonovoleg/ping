@@ -9,13 +9,15 @@ import { notifyVibeUpdate } from "../realtime/chat";
 import { getVibeThemeTokens } from "./theme-profiles";
 import type { VibeThemeCode, VibeAxes, VibeBatchResult, VibeUpdatePayload } from "@shared/chat-vibe-types";
 
-const FAST_BATCH_INTERVAL = 5;
-const DEEP_BATCH_INTERVAL = 20;
+const FAST_BATCH_INTERVAL = 4;
+const DEEP_BATCH_INTERVAL = 16;
 const FAST_WINDOW = 8;
 const DEEP_WINDOW = 20;
-const MIN_CONFIDENCE_TO_SWITCH = 0.7;
-const MIN_GAP_TO_SWITCH = 0.15;
-const COOLDOWN_MS = 60_000;
+/** Ниже 0.7 правила почти никогда не «переключали» тему — вайб оставался casual */
+const MIN_CONFIDENCE_TO_SWITCH = 0.52;
+const MIN_GAP_TO_SWITCH = 0.08;
+const COOLDOWN_MS = 35_000;
+const MIN_CONSECUTIVE_BATCHES = 1;
 const EMA_ALPHA = 0.4;
 
 /**
@@ -115,7 +117,7 @@ export async function processNewMessage(chatId: string): Promise<void> {
     themeChanged &&
     passesThreshold &&
     cooldownPassed &&
-    consecutiveCount >= 2;
+    consecutiveCount >= MIN_CONSECUTIVE_BATCHES;
 
   const finalTheme = shouldSwitch ? newTheme : currentTheme;
   const finalConfidence = shouldSwitch ? newConfidence : Math.max(Number(state.confidence), newConfidence * 0.6);
@@ -125,6 +127,7 @@ export async function processNewMessage(chatId: string): Promise<void> {
     confidence: finalConfidence,
     axes: smoothedResult.axes,
     messageCounter: counter,
+    touchLastBatchAt: true,
     ...(shouldSwitch && { themeVersion: (state.themeVersion ?? 1) + 1 }),
   });
 

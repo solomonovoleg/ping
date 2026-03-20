@@ -1,7 +1,7 @@
 /**
  * Один пузырь сообщения (текст/голос/фото/видео/пост). React.memo — при «печатает» не ре-рендерим весь список.
  */
-import { memo, createElement, Fragment, useRef, useState } from "react";
+import { memo, createElement, Fragment, useRef, useState, type CSSProperties } from "react";
 import { Clock, AlertCircle, Reply as ReplyIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
@@ -194,6 +194,7 @@ function VideoNoteBubble({
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      video.muted = false;
       if (video.currentTime < VIDEO_NOTE_PLAY_START_SEC || video.currentTime >= VIDEO_NOTE_PREVIEW_SEC) {
         video.currentTime = VIDEO_NOTE_PLAY_START_SEC;
       }
@@ -213,7 +214,7 @@ function VideoNoteBubble({
       }}
       className={cn(
         "group relative block h-[176px] w-[176px] overflow-hidden rounded-full border shadow-md transition-transform duration-300 ease-out will-change-transform",
-        isPlaying ? "z-10 scale-[1.5]" : "scale-100",
+        isPlaying ? "z-10 scale-[1.4]" : "scale-100",
         borderClass
       )}
       aria-label={isPlaying ? "Пауза видеокружка" : "Воспроизвести видеокружок"}
@@ -223,7 +224,7 @@ function VideoNoteBubble({
         src={src}
         className="h-full w-full object-cover"
         playsInline
-        muted
+        muted={false}
         preload="auto"
         controls={false}
         onLoadedData={() => setPreviewReady(true)}
@@ -328,6 +329,12 @@ function ChatMessageRowInner({
         isMe ? bubbleStyles.bubble : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
         bubbleRounding
       );
+  const vibeBubbleShadow =
+    !isMedia && msg.type === "text"
+      ? ({
+          boxShadow: `inset 0 0 52px 0 ${isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)"}, 0 1px 1px rgba(0,0,0,0.06)`,
+        } as CSSProperties)
+      : undefined;
   const showAvatarOther = !isMe && !isDm && isLastInGroup;
   const showAvatarMe = false;
 
@@ -363,6 +370,7 @@ function ChatMessageRowInner({
           <div
             ref={bubbleRef}
             className={cn(bubbleClasses, "w-fit max-w-full", isSelected && "ring-2 ring-primary", isHighlighted && "ring-2 ring-primary animate-pulse")}
+            style={vibeBubbleShadow}
             onPointerDown={(e) => {
               swipeStartXRef.current = e.clientX;
               swipeStartedRef.current = true;

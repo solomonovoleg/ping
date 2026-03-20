@@ -39,6 +39,20 @@ export async function addMessageToTrack(userId: string, trackId: string, message
   }
 }
 
+export async function addCallSegmentToTrack(userId: string, trackId: string, segmentId: string) {
+  const track = await storage.getTrack(userId, trackId);
+  if (!track) throw new TracksServiceError("NOT_FOUND", "Трек не найден");
+  try {
+    await storage.addCallSegmentToTrack(userId, trackId, segmentId);
+  } catch (e) {
+    if (e instanceof Error) {
+      if (e.message.includes("доступ")) throw new TracksServiceError("FORBIDDEN", e.message);
+      if (e.message.includes("найден")) throw new TracksServiceError("NOT_FOUND", e.message);
+    }
+    throw e;
+  }
+}
+
 export async function removeTrackItem(userId: string, trackId: string, itemId: string) {
   const track = await storage.getTrack(userId, trackId);
   if (!track) throw new TracksServiceError("NOT_FOUND", "Трек не найден");

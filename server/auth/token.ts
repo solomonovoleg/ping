@@ -1,12 +1,12 @@
 /**
  * Токены для мобильного приложения:
  * - stateless HMAC-подпись (переживает рестарты PM2/деплой),
- * - TTL 7 дней,
+ * - TTL 30 дней (мобильное приложение: реже вылетает «сессия»; веб-кука сессии независима),
  * - без хранения в памяти процесса.
  */
 import { createHmac, timingSafeEqual } from "crypto";
 
-const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней (Bearer в приложении)
 const AUTH_TOKEN_SECRET =
   process.env.AUTH_TOKEN_SECRET ||
   process.env.SESSION_SECRET ||

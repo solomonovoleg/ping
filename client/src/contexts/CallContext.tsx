@@ -17,7 +17,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     <CallContext.Provider value={call}>
       {children}
       <CallModal
+        chatId={call.chatId}
+        subscribeChat={call.subscribeChat}
+        callMessageContext={call.callMessageContext}
         state={call.state}
+        direction={call.direction}
         isVideo={call.mediaType === "video"}
         isMuted={call.isMuted}
         onSetMuted={call.setMuted}
@@ -30,6 +34,22 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         localStream={call.localStream}
         remoteStream={call.remoteStream}
         connectionState={call.connectionState}
+        networkQuality={call.networkQuality}
+        supports={call.supports}
+        isScreenShareActive={call.isScreenShareActive}
+        isCameraEnabled={call.isCameraEnabled}
+        localRecordingState={call.localRecordingState}
+        localRecordingElapsedMs={call.localRecordingElapsedMs}
+        captionsEnabled={call.captionsEnabled}
+        localReactions={call.localReactions}
+        remoteReactions={call.remoteReactions}
+        captions={call.captions}
+        onSwitchCamera={call.switchCamera}
+        onToggleCameraEnabled={call.toggleCameraEnabled}
+        onToggleScreenShare={call.toggleScreenShare}
+        onToggleRecording={call.toggleRecording}
+        onToggleRecordingPause={call.toggleRecordingPause}
+        onToggleCaptions={call.toggleCaptions}
         onRetry={call.retryCall}
         otherDisplayName={otherName}
         otherAvatarUrl={otherAvatar}

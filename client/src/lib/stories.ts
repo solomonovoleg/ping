@@ -40,6 +40,32 @@ export async function fetchStoriesArchive(): Promise<StoryItem[]> {
 
 export type StoryExpiresHours = 24 | 46 | 56;
 
+export async function uploadStoryMedia(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await apiFetch(`${API}/upload/story-media`, {
+    method: "POST",
+    body: form,
+  });
+  const text = await res.text();
+  let data: { message?: unknown; url?: unknown } = {};
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text) as { message?: unknown; url?: unknown };
+    } catch {
+      /* non-JSON body */
+    }
+  }
+  if (!res.ok) {
+    if (res.status === 413) throw new Error("Файл слишком большой");
+    const msg = typeof data.message === "string" ? data.message : null;
+    throw new Error(msg || `Не удалось загрузить сториз (${res.status})`);
+  }
+  const url = typeof data.url === "string" ? data.url.trim() : "";
+  if (!url) throw new Error("Сервер не вернул URL сториз");
+  return url;
+}
+
 export async function createStory(
   mediaUrl: string,
   options?: { thumbnailUrl?: string; expiresInHours?: StoryExpiresHours }

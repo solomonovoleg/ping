@@ -33,6 +33,8 @@ import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 import { resolveUrl } from "@/lib/api-base";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { buildProfilePath } from "@/lib/profile-route";
+import { getStoryBeautyEnabled, subscribeStoryPrefsChange } from "@/lib/story-prefs";
+import { playLikeActionSound } from "@/lib/send-sound";
 
 export default function UserProfile({ params: paramsProp }: { params?: { id: string } }) {
   const [, setLocation] = useLocation();
@@ -57,6 +59,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const [followLoading, setFollowLoading] = useState(false);
   const [addingStory, setAddingStory] = useState(false);
   const [coverLoadError, setCoverLoadError] = useState(false);
+  const [storyCircleBeauty, setStoryCircleBeauty] = useState(getStoryBeautyEnabled);
   const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
   const [pendingStoryFile, setPendingStoryFile] = useState<File | null>(null);
   const [showStoryDurationPicker, setShowStoryDurationPicker] = useState(false);
@@ -74,6 +77,13 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const isMe = id === "me";
   const authorId = isMe ? user?.id : apiProfile?.id;
   const authorIdReady = isMe ? (authLoading === false) : !!apiProfile;
+  const storyCircleFilter = storyCircleBeauty
+    ? "saturate(1.1) contrast(1.08) brightness(1.04) hue-rotate(-2deg)"
+    : "none";
+
+  useEffect(() => {
+    return subscribeStoryPrefsChange(() => setStoryCircleBeauty(getStoryBeautyEnabled()));
+  }, []);
 
   useEffect(() => {
     if (hasInvalidRouteId) setLocation("/posts");
@@ -278,6 +288,9 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       const result = liked ? await unlikeStory(storyId) : await likeStory(storyId);
       setLikedStoryIds((prev) => ({ ...prev, [storyId]: !!result.isLiked }));
       setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: Number(result.likesCount ?? optimisticCount) }));
+      if (!liked && result.isLiked) {
+        playLikeActionSound();
+      }
     } catch (err) {
       setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
       setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
@@ -458,54 +471,79 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         disabled={showStoryDurationPicker || !!activeViewersStoryId || activeStoryIndex !== null}
       >
       <div className="flex flex-col min-h-0 overflow-visible pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
-      <div className="uix-content-x sticky top-0 z-40 flex items-center justify-between border-b border-border/50 bg-background/90 py-2.5 backdrop-blur">
-        <button
-          type="button"
-          onClick={() => setLocation("/posts")}
-          className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
-          aria-label="Назад в ленту"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <p className="truncate px-2 text-[16px] font-semibold">{usernameHandle}</p>
-        <div className="flex items-center gap-1">
+      <div
+        className={cn(
+          "uix-content-x relative sticky top-0 z-40 h-14 border-b backdrop-blur",
+          hasCover ? "border-transparent bg-transparent text-white" : "border-border/50 bg-background/90 text-foreground"
+        )}
+      >
+        {hasCover && (
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/75 via-black/40 to-transparent" />
+        )}
+        <div className="relative z-10 flex h-full items-center justify-between">
           <button
             type="button"
-            onClick={handleCopyLink}
-            className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
-            aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку на профиль"}
+            onClick={() => setLocation("/posts")}
+            className={cn(
+              "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
+              hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
+            )}
+            aria-label="Назад в ленту"
           >
-            {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+            <ChevronLeft className="h-5 w-5" />
           </button>
-          {isMe ? (
+          <p className={cn("truncate px-2 text-[16px] font-semibold", hasCover && "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]")}>
+            {usernameHandle}
+          </p>
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setLocation("/settings")}
-              className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
-              aria-label="Настройки"
+              onClick={handleCopyLink}
+              className={cn(
+                "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
+                hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
+              )}
+              aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку на профиль"}
             >
-              <Settings className="h-4 w-4" />
+              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
             </button>
-          ) : (
-            <button
-              type="button"
-              className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-foreground hover:bg-secondary/70"
-              aria-label="Ещё"
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </button>
-          )}
+            {isMe ? (
+              <button
+                type="button"
+                onClick={() => setLocation("/settings")}
+                className={cn(
+                  "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
+                  hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
+                )}
+                aria-label="Настройки"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={cn(
+                  "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
+                  hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
+                )}
+                aria-label="Ещё"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {hasCover ? (
-        <div className="relative h-36 w-full overflow-hidden border-b border-border/60 bg-muted/30">
+        <div className="-mt-14 relative h-36 w-full overflow-hidden border-b border-border/60 bg-muted/30">
           <img
             src={resolvedCoverUrl}
             alt="Обложка профиля"
             className="h-full w-full object-cover"
             onError={() => setCoverLoadError(true)}
           />
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/28 via-black/12 to-transparent" />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/45 to-transparent" />
           {isMe && (
             <button
@@ -770,6 +808,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 <img 
                   src={story.thumb} 
                   alt={story.title} 
+                  style={{ filter: storyCircleFilter }}
                   className="w-full h-full rounded-full object-cover border-2 border-background"
                 />
               </div>
@@ -862,51 +901,63 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               <div className="min-h-[160px]" />
             </LoadingProgress>
           ) : (
-          profilePosts.map((post: FeedPost) => (
-            <article key={post.id} className="relative rounded-2xl border border-border/60 bg-card p-3 shadow-sm transition-colors hover:bg-secondary/10">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
+          profilePosts.map((post: FeedPost) => {
+            const caption = post.text ?? "";
+            const hasCaption = caption.trim().length > 0;
+            return (
+            <article
+              key={post.id}
+              className="relative rounded-2xl border border-border/40 bg-card/90 p-[var(--uix-space-4)] shadow-sm ring-1 ring-black/[0.04] transition-colors duration-200 ease-out hover:bg-secondary/12"
+            >
+              <div className="flex items-start justify-between gap-[var(--uix-space-3)] mb-[var(--uix-space-3)]">
+                <div className="flex min-w-0 flex-1 items-center gap-[var(--uix-space-3)]">
                   <UserAvatar
                     avatarUrl={avatarUrl ?? undefined}
                     displayName={displayName}
                     seed={authorId ?? ""}
                     size={40}
-                    className="h-10 w-10 flex-shrink-0 rounded-full"
+                    className="h-10 w-10 shrink-0 rounded-xl ring-1 ring-border/30"
                   />
-                  <div>
-                    <h3 className="text-[14px] font-semibold">{displayName}</h3>
-                    <p className="text-xs text-muted-foreground">{formatPostTime(post.createdAt)}</p>
+                  <div className="min-w-0">
+                    <h3 className="text-[15px] font-semibold leading-tight">{displayName}</h3>
+                    <p className="mt-[var(--uix-space-1)] uix-text-caption text-muted-foreground">
+                      {formatPostTime(post.createdAt)}
+                    </p>
                   </div>
                 </div>
-                
+
                 {isMe ? (
-                  <div className="flex items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setLocation(`/profile/me/post/${post.id}`);
                       }}
-                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      aria-label="Редактировать пост"
                     >
-                      <Edit3 className="w-4 h-4" />
+                      <Edit3 className="w-[18px] h-[18px]" />
                     </button>
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (window.confirm("Удалить пост?")) {
                           deletePostMutation.mutate(post.id);
                         }
                       }}
-                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
+                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
                       disabled={deletePostMutation.isPending}
+                      aria-label="Удалить пост"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-[18px] h-[18px]" />
                     </button>
                   </div>
                 ) : (
                   <button
                     type="button"
-                    className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary/80 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center pt-0.5"
                     aria-label="Меню поста"
                   >
                     <MoreHorizontal className="w-5 h-5" />
@@ -914,13 +965,14 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 )}
               </div>
 
-              <div className="mb-3">
-                <p className="whitespace-pre-wrap text-[14px] leading-relaxed">
-                  {post.text}
-                </p>
+              <div className={cn("flex flex-col min-w-0 mb-[var(--uix-space-3)]", hasCaption && "gap-[var(--uix-space-3)]")}>
+                {hasCaption && (
+                  <p className="whitespace-pre-wrap text-[15px] leading-snug tracking-[-0.01em] text-foreground">{caption}</p>
+                )}
                 <PostMedia
                   mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
                   layout={post.mediaLayout ?? null}
+                  className={hasCaption ? "!mt-0" : undefined}
                 />
               </div>
 
@@ -983,6 +1035,8 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                             key={emoji}
                             onClick={(e) => {
                               e.stopPropagation();
+                              import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                              playLikeActionSound();
                               reactionMutation.mutate({ postId: post.id, emoji });
                               setShowReactionPicker(null);
                             }}
@@ -1013,7 +1067,8 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 </div>
               </div>
             </article>
-          ))
+            );
+          })
           )
         ) : (
           <div className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">

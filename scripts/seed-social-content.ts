@@ -1,5 +1,10 @@
+/**
+ * Социальный сид: пользователи seed_social_* + посты + сториз + граф подписок.
+ * Одной командой (юзеры и посты вместе): `npm run seed:social-fresh`
+ * Только дописать посты к уже существующим сидам (если постов 0): `--fill-content --allow-fallback`
+ */
 import "dotenv/config";
-import { and, desc, eq, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { hashPassword } from "../server/auth/password";
 import { ensureUserColumns, getDb } from "../server/db";
 import {
@@ -20,8 +25,17 @@ const MIN_USERS_COUNT = 20;
 const MAX_USERS_COUNT = 30;
 const PHONE_PREFIX = "seed_social_";
 const PASSWORD = "test1234";
+/** Срок жизни сториз сидов (ч). По умолчанию 7 дней — иначе через 24 ч после сида сториз пропадают из ленты. Переопределение: SEED_STORY_TTL_HOURS=24 */
+const SEED_STORY_TTL_HOURS = (() => {
+  const raw = process.env.SEED_STORY_TTL_HOURS?.trim();
+  if (!raw) return 168;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 24 ? n : 168;
+})();
 const MIN_POSTS_PER_USER = 2;
 const MAX_POSTS_PER_USER = 6;
+/** Даты постов — в пределах последних N часов (чтобы чаще попадали в топ ленты среди свежих постов на проде). */
+const SEED_POST_RECENT_HOURS = 36;
 
 const CITIES = [
   "Москва",
@@ -62,6 +76,50 @@ const STORY_MEDIA = [
   "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?q=80&w=900&auto=format&fit=crop",
   "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=900&auto=format&fit=crop",
   "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=900&auto=format&fit=crop",
+];
+
+/**
+ * Медиа сидов: только images.unsplash.com.
+ * picsum.photos и i.pravatar.cc часто не открываются из РФ / моб. сетей → «пустые» картинки в ленте.
+ */
+const POST_FEED_IMAGES = [
+  "https://images.unsplash.com/photo-1472214103451-9374bd1c798e?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1496440737103-cd596325d314?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1519681393784-d120267933ba?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?q=80&w=1200&h=900&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1501854140801-50d01698950b?q=80&w=1200&h=900&auto=format&fit=crop",
+];
+
+const PROFILE_COVER_IMAGES = [
+  "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?q=80&w=1200&h=400&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=1200&h=400&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?q=80&w=1200&h=400&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?q=80&w=1200&h=400&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1518837695005-2083093ee35b?q=80&w=1200&h=400&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=1200&h=400&auto=format&fit=crop",
+];
+
+/** Аватары: портреты с Unsplash (facearea), без pravatar */
+const PROFILE_FACE_IMAGES = [
+  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1507591064344-4c6ce005b128?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?q=80&w=300&h=300&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1580489944761-15a19d654956?q=80&w=300&h=300&auto=format&fit=crop",
 ];
 
 const COMMENT_PHRASES = [
@@ -262,6 +320,56 @@ function buildFallbackTexts(): string[] {
   ];
 }
 
+/**
+ * Позитивный, познавательный и лёгкий развлекательный контент — всегда добавляется в пул текстов постов
+ * (подмешивается к RSS и fallback, чтобы в ленте было больше «светлых» постов).
+ */
+const POSITIVE_EDU_FUN_POST_TEXTS: string[] = [
+  // позитив / вдохновение
+  "Сегодня хочу напомнить: маленький шаг тоже прогресс. Отметь для себя одно дело, которое уже сделал — и это повод гордиться.",
+  "Хороший день начинается не с идеала, а с честного «я попробую». Пусть сегодня будет хотя бы один такой момент.",
+  "Иногда лучший план — выспаться, выпить воды и написать одному человеку доброе слово. Всё остальное подождёт.",
+  // познавательное
+  "Знаете, почему небо голубое? Коротко: солнечный свет рассеивается в атмосфере, и короткие волны (синий) рассеиваются сильнее. Простая физика — и сразу иначе смотришь в окно.",
+  "Сон — не роскошь, а часть памяти и иммунитета: во сне мозг «убирает» лишнее и укрепляет важное. Ложиться в одно время — уже инвестиция в себя.",
+  "Чтение на 15 минут в день ≈ десятки книг в год. Не гонка за объёмом, а привычка, которая расширяет кругозор без стресса.",
+  "Вода, прогулка и свет утром — три дешёвых способа подбодрить организм без кофеиновых качелей. Проверял на себе — работает.",
+  "Языки учить проще, когда смотришь сериалы с субтитрами и повторяешь фразы вслух. Мозг любит контекст, а не сухие таблицы.",
+  // развлекательное / лёгкий юмор
+  "Мой любимый спорт — перенести будильник на пять минут и чувствовать себя олимпийским хитроумцем. (Потом всё равно встаю. Иногда.)",
+  "Кот считает, что клавиатура — личный массажный коврик для лап. Я с этим не спорю, только сохраняю документ чаще.",
+  "Рецепт идеального выходного: ничего не планировать и внезапно оказаться в кафе с книгой. Бонус — если дождь за окном.",
+  "Если не знаешь, что приготовить — яйца, тост и зелень спасают репутацию кулинара в 9 случаях из 10.",
+  "Плейлист «под настроение» иногда лечит лучше советов: три любимых трека — и ты уже не тот человек, что пять минут назад.",
+  // природа / путешествия мечты
+  "Горы напоминают: мы маленькие — и это успокаивает. Не в смысле «ничтожны», а в смысле «можно выдохнуть от суеты».",
+  "Море зимой — отдельная магия: воздух проще, свет мягче, мысли становятся длиннее. Кто любит — поймёт.",
+  "Лес после дождя пахнет так, будто Земля только что сделала глубокий вдох. Прогулка 20 минут — и голова чище.",
+  // общение / отношения
+  "Спросить «как ты?» и дождаться честного ответа — редкий подарок. Сегодня попробую именно так, без спешки к следующей теме.",
+  "Комплимент коллеге по делу стоит пяти секунд, а настроение может перевернуть. Главное — конкретика, не вода.",
+  // творчество / хобби
+  "Рисовать можно каракулями в блокноте — это уже творчество. Цель не выставка, а 10 минут, когда ты не в ленте, а в своём ритме.",
+  "Фотография учит видеть свет: один и тот же двор в облако и в солнце — две разные истории. Удобно тренировать внимательность.",
+  // еда / быт
+  "Завтрак не обязан быть «правильным» — достаточно, чтобы был и в радость. Йогурт, ягоды, овсянка — выбирай, что заходит.",
+  "Уборка 10 минут по таймеру — странно эффективный лайфхак: не «весь дом», а один угол. Потом часто хочется ещё один круг.",
+  // финансы / мышление мягко
+  "Откладывать «на кофе» маленькую сумму в неделю — не про богатство, а про привычку «я могу себе позаботиться».",
+  "Список «хочу» vs «нужно» перед покупкой онлайн спасает от половины импульсивных корзин. Проверено в чёрную пятницу.",
+];
+
+function buildPostTextPool(externalTexts: string[], allowFallback: boolean): string[] {
+  const curated = [...POSITIVE_EDU_FUN_POST_TEXTS];
+  if (externalTexts.length > 0) {
+    return shuffle([...curated, ...externalTexts]);
+  }
+  if (allowFallback) {
+    return shuffle([...curated, ...buildFallbackTexts()]);
+  }
+  return [];
+}
+
 const MALE_NAMES = [
   "Алексей",
   "Дмитрий",
@@ -359,12 +467,13 @@ async function main() {
   const db = getDb();
   const usersCount = parseUsersCount();
   const reset = hasArg("--reset");
+  const fillContent = hasArg("--fill-content");
   const yandexOnly = hasArg("--yandex-only");
   const dryRun = hasArg("--dry-run");
   const allowFallback = hasArg("--allow-fallback");
 
   console.log(
-    `[seed] users=${usersCount} reset=${reset} yandexOnly=${yandexOnly} dryRun=${dryRun} allowFallback=${allowFallback}`
+    `[seed] users=${usersCount} reset=${reset} fillContent=${fillContent} yandexOnly=${yandexOnly} dryRun=${dryRun} allowFallback=${allowFallback} storyTtlHours=${SEED_STORY_TTL_HOURS}`
   );
 
   if (reset && !dryRun) {
@@ -372,20 +481,47 @@ async function main() {
     console.log(`[seed] removed old seeded users: ${removed.length}`);
   }
 
-  const existing = await db.select({ id: users.id }).from(users).where(like(users.phone, `${PHONE_PREFIX}%`)).limit(1);
-  if (existing.length > 0 && !reset) {
-    console.log(`[seed] seeded users already exist (${PHONE_PREFIX}*). Use --reset to recreate.`);
-    process.exit(0);
+  const existingSeedUsers = await db
+    .select({ id: users.id, displayName: users.displayName })
+    .from(users)
+    .where(like(users.phone, `${PHONE_PREFIX}%`));
+
+  if (existingSeedUsers.length > 0 && !reset) {
+    if (!fillContent) {
+      console.log(
+        `[seed] пользователи ${PHONE_PREFIX}* уже есть. Чтобы получить и юзеров, и посты с нуля: npm run seed:social-fresh`
+      );
+      console.log(
+        `[seed] Или: --reset (удалит сидов и создаст заново) | --fill-content (добавить посты/сториз, если постов ещё нет)`
+      );
+      process.exit(0);
+    }
+    const [cntRow] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(posts)
+      .where(inArray(posts.authorId, existingSeedUsers.map((u) => u.id)));
+    const postCount = Number(cntRow?.c ?? 0);
+    if (postCount > 0) {
+      console.error(
+        `[seed] --fill-content: у сидов уже есть посты (${postCount}). Полный пересоздать: npm run seed:social-fresh`
+      );
+      process.exit(1);
+    }
+  }
+
+  if (fillContent && existingSeedUsers.length === 0 && !reset) {
+    console.error(`[seed] --fill-content: нет пользователей ${PHONE_PREFIX}*. Сначала: npm run seed:social-fresh`);
+    process.exit(1);
   }
 
   const feedItems = await fetchExternalFeedItems();
   const yandexItems = feedItems.filter((item) => item.isYandex);
   const selectedFeedItems = yandexOnly ? yandexItems : feedItems;
   const externalTexts = selectedFeedItems.map(toPostText);
-  const postTexts = externalTexts.length ? externalTexts : allowFallback ? buildFallbackTexts() : [];
+  const postTexts = buildPostTextPool(externalTexts, allowFallback);
 
   console.log(
-    `[seed] content items: total=${feedItems.length}, yandex=${yandexItems.length}, used=${postTexts.length}`
+    `[seed] content items: total=${feedItems.length}, yandex=${yandexItems.length}, curatedPositive=${POSITIVE_EDU_FUN_POST_TEXTS.length}, pool=${postTexts.length}`
   );
 
   if (!postTexts.length) {
@@ -401,75 +537,82 @@ async function main() {
     process.exit(0);
   }
 
-  const passwordHash = hashPassword(PASSWORD);
-  const [maxPublicIdRow] = await db
-    .select({ next: sql<number>`COALESCE(MAX(${users.publicId}), 999) + 1` })
-    .from(users);
-  let nextPublicId = maxPublicIdRow?.next ?? 1000;
+  let seededUsers: SeededUser[];
 
-  const profiles = generateProfiles(usersCount);
-  const seededUsers: SeededUser[] = [];
+  if (fillContent && existingSeedUsers.length > 0 && !reset) {
+    seededUsers = existingSeedUsers;
+    console.log(`[seed] fill-content: пропуск создания юзеров — добавляем посты/сториз для ${seededUsers.length} аккаунтов`);
+  } else {
+    const passwordHash = hashPassword(PASSWORD);
+    const [maxPublicIdRow] = await db
+      .select({ next: sql<number>`COALESCE(MAX(${users.publicId}), 999) + 1` })
+      .from(users);
+    let nextPublicId = maxPublicIdRow?.next ?? 1000;
 
-  for (let i = 0; i < profiles.length; i++) {
-    const profile = profiles[i]!;
-    const [inserted] = await db
-      .insert(users)
-      .values({
-        phone: `${PHONE_PREFIX}${i + 1}`,
-        password: passwordHash,
-        publicId: nextPublicId++,
-        displayName: profile.displayName,
-        surname: profile.surname,
-        gender: profile.gender,
-        birthDate: randomBirthDate(),
-        avatarUrl: `https://i.pravatar.cc/300?img=${(i % 70) + 1}`,
-        coverUrl: `https://picsum.photos/seed/cover_${i + 1}/1200/400`,
-        city: profile.city,
-        bio: profile.bio,
-        status: profile.status,
-        profileLink: `https://t.me/${PHONE_PREFIX}${i + 1}`,
-        createdAt: randomDateInPast(120),
-      })
-      .returning({ id: users.id, displayName: users.displayName });
+    const profiles = generateProfiles(usersCount);
+    seededUsers = [];
 
-    if (inserted) seededUsers.push(inserted);
-  }
-
-  console.log(`[seed] created users: ${seededUsers.length}`);
-
-  // Граф подписок + контакты для "живой" сети.
-  let followsCreated = 0;
-  let contactsCreated = 0;
-
-  for (const user of seededUsers) {
-    const others = seededUsers.filter((u) => u.id !== user.id);
-    const followTargets = sample(others, randomBetween(6, Math.min(14, others.length)));
-    for (const target of followTargets) {
-      await db
-        .insert(follows)
+    for (let i = 0; i < profiles.length; i++) {
+      const profile = profiles[i]!;
+      const [inserted] = await db
+        .insert(users)
         .values({
-          followerId: user.id,
-          followingId: target.id,
-          createdAt: randomDateInPast(90),
+          phone: `${PHONE_PREFIX}${i + 1}`,
+          password: passwordHash,
+          publicId: nextPublicId++,
+          displayName: profile.displayName,
+          surname: profile.surname,
+          gender: profile.gender,
+          birthDate: randomBirthDate(),
+          avatarUrl: PROFILE_FACE_IMAGES[i % PROFILE_FACE_IMAGES.length]!,
+          coverUrl: PROFILE_COVER_IMAGES[i % PROFILE_COVER_IMAGES.length]!,
+          city: profile.city,
+          bio: profile.bio,
+          status: profile.status,
+          profileLink: `https://t.me/${PHONE_PREFIX}${i + 1}`,
+          createdAt: randomDateInPast(120),
         })
-        .onConflictDoNothing();
-      followsCreated++;
+        .returning({ id: users.id, displayName: users.displayName });
 
-      if (Math.random() < 0.55) {
+      if (inserted) seededUsers.push(inserted);
+    }
+
+    console.log(`[seed] created users: ${seededUsers.length}`);
+
+    // Граф подписок + контакты для "живой" сети.
+    let followsCreated = 0;
+    let contactsCreated = 0;
+
+    for (const user of seededUsers) {
+      const others = seededUsers.filter((u) => u.id !== user.id);
+      const followTargets = sample(others, randomBetween(6, Math.min(14, others.length)));
+      for (const target of followTargets) {
         await db
-          .insert(contacts)
+          .insert(follows)
           .values({
-            userId: user.id,
-            contactUserId: target.id,
-            addedAt: randomDateInPast(80),
+            followerId: user.id,
+            followingId: target.id,
+            createdAt: randomDateInPast(90),
           })
           .onConflictDoNothing();
-        contactsCreated++;
+        followsCreated++;
+
+        if (Math.random() < 0.55) {
+          await db
+            .insert(contacts)
+            .values({
+              userId: user.id,
+              contactUserId: target.id,
+              addedAt: randomDateInPast(80),
+            })
+            .onConflictDoNothing();
+          contactsCreated++;
+        }
       }
     }
-  }
 
-  console.log(`[seed] follows: ${followsCreated}, contacts: ${contactsCreated}`);
+    console.log(`[seed] follows: ${followsCreated}, contacts: ${contactsCreated}`);
+  }
 
   const autoFollow = await insertFollowsDesignatedToSeeds(
     db,
@@ -492,15 +635,14 @@ async function main() {
     for (let p = 0; p < postCount; p++) {
       const text = postTexts[textIndex % postTexts.length]!;
       textIndex++;
-      // Последние ~72 ч — чтобы посты гарантированно входили в пул ленты (не «терялись» за сотнями более новых).
-      const createdAt = randomRecentDate(72);
+      const createdAt = randomRecentDate(SEED_POST_RECENT_HOURS);
 
       const [createdPost] = await db
         .insert(posts)
         .values({
           authorId: author.id,
           text,
-          imageUrl: Math.random() < 0.7 ? `https://picsum.photos/seed/post_${textIndex}/1200/900` : null,
+          imageUrl: Math.random() < 0.7 ? POST_FEED_IMAGES[textIndex % POST_FEED_IMAGES.length]! : null,
           createdAt,
         })
         .returning({ id: posts.id });
@@ -574,7 +716,7 @@ async function main() {
     const storiesCount = randomBetween(0, 3);
     for (let i = 0; i < storiesCount; i++) {
       const createdAt = randomDateInPast(1);
-      const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(createdAt.getTime() + SEED_STORY_TTL_HOURS * 60 * 60 * 1000);
 
       const [story] = await db
         .insert(stories)

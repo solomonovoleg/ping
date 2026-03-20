@@ -1,5 +1,8 @@
 const KEY_INTENSITY = "ping:vibe-intensity";
 
+/** Событие после PATCH настроек атмосферы — перезапрос GET /chats/:id/vibe в открытом чате */
+export const CHAT_VIBE_PREFS_CHANGED = "ping:chat-vibe-prefs-changed";
+
 export type VibeIntensity = "low" | "medium" | "high";
 
 export function getVibeIntensity(): VibeIntensity {

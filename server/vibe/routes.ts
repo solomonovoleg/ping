@@ -1,14 +1,11 @@
 import type { Express, Request, Response } from "express";
+import { getUserId } from "../auth/session";
 import { storage } from "../storage";
 import { getVibeThemeTokens } from "./theme-profiles";
 import type { VibeThemeCode } from "@shared/chat-vibe-types";
 import { VIBE_THEMES } from "@shared/chat-vibe-types";
 
-function getUserId(req: Request): string | null {
-  return (req.session as any)?.userId ?? null;
-}
-
-function requireAuth(req: Request, res: Response): string | null {
+function requireVibeUser(req: Request, res: Response): string | null {
   const uid = getUserId(req);
   if (!uid) {
     res.status(401).json({ error: "Unauthorized" });
@@ -20,7 +17,7 @@ function requireAuth(req: Request, res: Response): string | null {
 export function registerVibeRoutes(app: Express): void {
   app.get("/api/chats/:chatId/vibe", async (req, res) => {
     try {
-      const userId = requireAuth(req, res);
+      const userId = requireVibeUser(req, res);
       if (!userId) return;
 
       const chatId = req.params.chatId;
@@ -89,7 +86,7 @@ export function registerVibeRoutes(app: Express): void {
 
   app.put("/api/chats/:chatId/vibe/override", async (req, res) => {
     try {
-      const userId = requireAuth(req, res);
+      const userId = requireVibeUser(req, res);
       if (!userId) return;
 
       const chatId = req.params.chatId;
@@ -112,6 +109,7 @@ export function registerVibeRoutes(app: Express): void {
           : { warmth: 50, tension: 10, playfulness: 30, intimacy: 20, formality: 30, energy: 40 },
         messageCounter: existing?.messageCounter ?? 0,
         themeVersion: (existing?.themeVersion ?? 1) + 1,
+        touchLastBatchAt: true,
       });
 
       if (existing) {
@@ -144,7 +142,7 @@ export function registerVibeRoutes(app: Express): void {
 
   app.get("/api/users/me/vibe-settings", async (req, res) => {
     try {
-      const userId = requireAuth(req, res);
+      const userId = requireVibeUser(req, res);
       if (!userId) return;
 
       const user = await storage.getUser(userId);
@@ -162,7 +160,7 @@ export function registerVibeRoutes(app: Express): void {
 
   app.patch("/api/users/me/vibe-settings", async (req, res) => {
     try {
-      const userId = requireAuth(req, res);
+      const userId = requireVibeUser(req, res);
       if (!userId) return;
 
       const { vibeEnabled, vibeShareWithPartner } = req.body ?? {};
