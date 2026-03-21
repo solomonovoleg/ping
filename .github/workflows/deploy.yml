@@ -99,7 +99,7 @@ jobs:
 
           SSH_PORT="${DEPLOY_SSH_PORT:-22}"
           REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
-          APP_PORT="${DEPLOY_APP_PORT:-3081}"
+          APP_PORT="${DEPLOY_APP_PORT:-3080}"
           APP_NAME="${DEPLOY_PM2_APP_NAME:-ping-moot}"
 
           if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
