@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Search, X, MessageCircle, UserPlus, AlertCircle } from "lucide-react";
+import { Search, X, MessageCircle, UserPlus, AlertCircle, UserCircle } from "lucide-react";
 import { searchUsers, startDm, formatUserDisplayName, type SearchUser } from "@/lib/search";
 import { followUser } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
@@ -119,6 +119,13 @@ export function GlobalSearch({
     }
   };
 
+  const handleOpenProfile = (user: SearchUser) => {
+    setOpen(false);
+    setQuery("");
+    onClear?.();
+    setLocation(`/profile/${user.publicId}`);
+  };
+
   return (
     <div ref={containerRef} className={cn("relative flex-1", className)}>
       <div className="relative group">
@@ -149,7 +156,7 @@ export function GlobalSearch({
       </div>
 
       {open && query.trim() && (
-        <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-background border border-border rounded-xl shadow-lg overflow-hidden max-h-[min(60vh,320px)] overflow-y-auto">
+        <div className="absolute top-full left-0 right-0 mt-1 z-[100] rounded-xl border border-border bg-popover text-popover-foreground shadow-xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden max-h-[min(60vh,320px)] overflow-y-auto">
           {loading ? (
             <div className="p-6 flex items-center justify-center min-h-[100px]">
               <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Поиск" />
@@ -173,40 +180,54 @@ export function GlobalSearch({
           ) : (
             <ul className="py-1">
               {results.map((user) => (
-                <li
-                  key={user.id}
-                  className="flex items-center gap-3 px-3 py-2.5 hover:bg-secondary/50 transition-colors"
-                >
-                  <UserAvatar
-                    avatarUrl={user.avatarUrl}
-                    displayName={formatUserDisplayName(user)}
-                    seed={user.id}
-                    size={40}
-                    className="w-10 h-10"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-[15px] truncate">{formatUserDisplayName(user)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      ID {user.publicId} · {user.phone}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
+                <li key={user.id} className="flex items-center gap-1 px-2 py-1 sm:gap-2 sm:px-3 sm:py-2">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenProfile(user)}
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1.5 pl-1 pr-2 text-left transition-colors hover:bg-muted/80 active:bg-muted/60"
+                    aria-label={`Профиль: ${formatUserDisplayName(user)}`}
+                  >
+                    <UserAvatar
+                      avatarUrl={user.avatarUrl}
+                      displayName={formatUserDisplayName(user)}
+                      seed={user.id}
+                      size={40}
+                      className="h-10 w-10 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[15px] font-medium">{formatUserDisplayName(user)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        ID {user.publicId} · {user.phone}
+                      </p>
+                    </div>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenProfile(user)}
+                      className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                      title="Профиль"
+                      aria-label={`Открыть профиль ${formatUserDisplayName(user)}`}
+                    >
+                      <UserCircle className="h-4 w-4" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleStartChat(user)}
-                      className="p-2 rounded-full text-primary hover:bg-primary/10 transition-colors"
+                      className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-primary transition-colors hover:bg-primary/10"
                       title="Написать"
+                      aria-label={`Написать ${formatUserDisplayName(user)}`}
                     >
-                      <MessageCircle className="w-4 h-4" />
+                      <MessageCircle className="h-4 w-4" />
                     </button>
                     <button
                       type="button"
                       onClick={() => handleFollow(user)}
-                      className="p-2 rounded-full text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                      className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                       title="Подписаться"
                       aria-label={`Подписаться на ${formatUserDisplayName(user)}`}
                     >
-                      <UserPlus className="w-4 h-4" />
+                      <UserPlus className="h-4 w-4" />
                     </button>
                   </div>
                 </li>

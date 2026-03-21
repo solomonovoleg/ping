@@ -17,6 +17,10 @@ export type FeedPost = {
   reactionUsers?: Record<string, ReactionUser[]>;
   myReaction: string | null;
   viewsCount: number;
+  /** Число пересылок поста в чаты (post_shares). */
+  sharesCount?: number;
+  /** Сохранён ли пост у текущего зрителя. */
+  isSaved?: boolean;
   createdAt: string;
   channelName: string;
   author: { id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null };
@@ -111,6 +115,8 @@ export function normalizeFeedPost(raw: unknown): FeedPost | null {
     reactionUsers: o.reactionUsers && typeof o.reactionUsers === "object" ? (o.reactionUsers as FeedPost["reactionUsers"]) : undefined,
     myReaction: typeof o.myReaction === "string" ? o.myReaction : null,
     viewsCount: typeof o.viewsCount === "number" ? o.viewsCount : 0,
+    sharesCount: typeof o.sharesCount === "number" ? o.sharesCount : 0,
+    isSaved: o.isSaved === true,
     createdAt: typeof o.createdAt === "string" ? o.createdAt : new Date().toISOString(),
     channelName: typeof o.channelName === "string" ? o.channelName : `ID ${author.publicId ?? ""}`,
     author,

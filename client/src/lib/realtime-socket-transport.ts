@@ -66,6 +66,8 @@ export class RealtimeSocketTransport {
   >();
   private scheduleReconnect: (() => void) | null = null;
   private outgoingQueue: QueuedOutgoingItem[] = [];
+  /** Один одновременный коннект: иначе два параллельных `ensureOpenWs` (звонок + фон) открывают два WS → лишняя нагрузка на сервер. */
+  private wsOpenInflight: Promise<WebSocket> | null = null;
 
   constructor(params: TransportParams) {
     this.wsRef = params.wsRef;
@@ -322,68 +324,78 @@ export class RealtimeSocketTransport {
     };
   };
 
+  private openWsWithNewToken = async (): Promise<WebSocket> => {
+    const token = await getCallToken();
+    const socket = openCallRealtimeWebSocket(token);
+    this.wsRef.current = socket;
+    this.attachWsHandlers(socket);
+    await new Promise<void>((resolve, reject) => {
+      if (socket.readyState === 1) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const done = (err: Error | null) => {
+        if (settled) return;
+        settled = true;
+        if (err) reject(err);
+        else resolve();
+      };
+      const t = setTimeout(() => done(new Error("Не удалось подключиться к серверу звонков. Проверьте интернет.")), WS_OPEN_TIMEOUT_MS);
+      const prevOnOpen = socket.onopen;
+      const prevOnError = socket.onerror;
+      const prevOnClose = socket.onclose;
+      const safeCall = (fn: unknown, ctx: WebSocket, arg?: Event) => {
+        try {
+          if (fn != null && typeof fn === "function") (fn as (ev?: Event) => void).call(ctx, arg);
+        } catch (e) {
+          console.warn("[realtime] ws handler error", e);
+        }
+      };
+      socket.onopen = (ev: Event) => {
+        clearTimeout(t);
+        safeCall(prevOnOpen, socket, ev);
+        done(null);
+      };
+      socket.onerror = () => {
+        clearTimeout(t);
+        safeCall(prevOnError, socket);
+        done(new Error("Ошибка соединения"));
+      };
+      socket.onclose = () => {
+        clearTimeout(t);
+        safeCall(prevOnClose, socket);
+        done(new Error("Соединение закрыто"));
+      };
+    });
+    return socket;
+  };
+
   ensureOpenWs = async (): Promise<WebSocket> => {
     const existing = this.wsRef.current;
     if (existing?.readyState === 1) return existing;
 
-    const openWsWithNewToken = async (): Promise<WebSocket> => {
-      const token = await getCallToken();
-      const socket = openCallRealtimeWebSocket(token);
-      this.wsRef.current = socket;
-      this.attachWsHandlers(socket);
-      await new Promise<void>((resolve, reject) => {
-        if (socket.readyState === 1) {
-          resolve();
-          return;
-        }
-        let settled = false;
-        const done = (err: Error | null) => {
-          if (settled) return;
-          settled = true;
-          if (err) reject(err);
-          else resolve();
-        };
-        const t = setTimeout(() => done(new Error("Не удалось подключиться к серверу звонков. Проверьте интернет.")), WS_OPEN_TIMEOUT_MS);
-        const prevOnOpen = socket.onopen;
-        const prevOnError = socket.onerror;
-        const prevOnClose = socket.onclose;
-        const safeCall = (fn: unknown, ctx: WebSocket, arg?: Event) => {
+    if (!this.wsOpenInflight) {
+      this.wsOpenInflight = (async () => {
+        try {
           try {
-            if (fn != null && typeof fn === "function") (fn as (ev?: Event) => void).call(ctx, arg);
-          } catch (e) {
-            console.warn("[realtime] ws handler error", e);
+            return await this.openWsWithNewToken();
+          } catch (firstErr) {
+            const isQuickClose =
+              firstErr instanceof Error &&
+              (firstErr.message === "Соединение закрыто" || firstErr.message === "Ошибка соединения");
+            if (!isQuickClose) throw firstErr;
+            this.wsRef.current?.close();
+            this.wsRef.current = null;
+            return await this.openWsWithNewToken();
           }
-        };
-        socket.onopen = (ev: Event) => {
-          clearTimeout(t);
-          safeCall(prevOnOpen, socket, ev);
-          done(null);
-        };
-        socket.onerror = () => {
-          clearTimeout(t);
-          safeCall(prevOnError, socket);
-          done(new Error("Ошибка соединения"));
-        };
-        socket.onclose = () => {
-          clearTimeout(t);
-          safeCall(prevOnClose, socket);
-          done(new Error("Соединение закрыто"));
-        };
-      });
-      return socket;
-    };
-
-    try {
-      return await openWsWithNewToken();
-    } catch (firstErr) {
-      const isQuickClose =
-        firstErr instanceof Error &&
-        (firstErr.message === "Соединение закрыто" || firstErr.message === "Ошибка соединения");
-      if (!isQuickClose) throw firstErr;
-      this.wsRef.current?.close();
-      this.wsRef.current = null;
-      return openWsWithNewToken();
+        } finally {
+          this.wsOpenInflight = null;
+        }
+      })();
     }
+
+    return this.wsOpenInflight;
   };
 
   startBackgroundConnection = (
@@ -396,29 +408,22 @@ export class RealtimeSocketTransport {
 
     let mounted = true;
     const connect = (retryCount = 0) => {
+      if (!mounted) return;
       if (this.wsRef.current?.readyState === 1) return;
-      getCallToken()
-        .then((token) => {
-          if (!mounted) return;
-          if (this.wsRef.current?.readyState === 1) return;
-          const ws = openCallRealtimeWebSocket(token);
-          this.wsRef.current = ws;
-          this.attachWsHandlers(ws);
-        })
-        .catch((err) => {
-          if (!mounted) return;
-          if (err instanceof CallTokenUnauthorizedError) {
-            if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
-              setTimeout(() => connect(retryCount + 1), 1200 * (retryCount + 1));
-            } else {
-              refetchAuth().catch(() => {});
-            }
-            return;
-          }
+      void this.ensureOpenWs().catch((err) => {
+        if (!mounted) return;
+        if (err instanceof CallTokenUnauthorizedError) {
           if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
-            setTimeout(() => connect(retryCount + 1), 1000 * (retryCount + 1));
+            setTimeout(() => connect(retryCount + 1), 1200 * (retryCount + 1));
+          } else {
+            refetchAuth().catch(() => {});
           }
-        });
+          return;
+        }
+        if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
+          setTimeout(() => connect(retryCount + 1), 1000 * (retryCount + 1));
+        }
+      });
     };
 
     this.scheduleReconnect = () => {

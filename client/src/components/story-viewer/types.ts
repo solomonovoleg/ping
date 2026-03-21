@@ -34,4 +34,6 @@ export interface StoryViewerProps {
   onShareStory?: (story: { id: string; image: string; userName: string; time: string }) => Promise<void> | void;
   onArchiveStory?: (storyId: string) => Promise<void> | void;
   onDeleteStory?: (storyId: string) => Promise<void> | void;
+  /** Свои сториз: добавить в «Закреплённое» (папки на профиле). */
+  onAddToPinned?: (storyId: string) => void;
 }

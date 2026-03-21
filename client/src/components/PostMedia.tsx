@@ -9,6 +9,9 @@ import type { PostMediaLayout } from "@shared/post-media-layout";
 const MEDIA_TOP = "mt-[var(--uix-space-3)]";
 const COLLAGE_SHELL = `${MEDIA_TOP} rounded-2xl overflow-hidden border border-border/40 bg-muted/20 shadow-sm ring-1 ring-black/[0.04]`;
 const SINGLE_SHELL = `${MEDIA_TOP} rounded-2xl overflow-hidden border border-border/40 bg-muted/25 shadow-sm ring-1 ring-black/[0.04] w-full`;
+/** Во всю ширину экрана (лента профиля PULSE), без скруглений у оболочки */
+const PROFILE_EDGE_COLLAGE = "mt-0 w-full rounded-none overflow-hidden border-0 bg-black/[0.06] shadow-none ring-0";
+const PROFILE_EDGE_SINGLE = "mt-0 w-full rounded-none overflow-hidden border-0 bg-black/20 shadow-none ring-0";
 const COLLAGE_CELL = "bg-black/[0.06] flex items-center justify-center";
 
 function isVideoUrl(url: string): boolean {
@@ -26,12 +29,15 @@ function SinglePostMedia({
   forcedFormat,
   maxHeight = "min(400px, 70vh)",
   className,
+  shellClassName,
 }: {
   url: string;
   isVideo: boolean;
   forcedFormat?: MediaDisplayFormat | null;
   maxHeight?: string;
   className?: string;
+  /** Вместо `SINGLE_SHELL` (например профиль edge-to-edge). */
+  shellClassName?: string;
 }) {
   const [format, setFormat] = useState<MediaDisplayFormat | null>(null);
   const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -99,7 +105,7 @@ function SinglePostMedia({
 
   const isFixedAspect = effectiveFormat === "square" || effectiveFormat === "story";
   const containerClass = cn(
-    SINGLE_SHELL,
+    shellClassName ?? SINGLE_SHELL,
     effectiveFormat === "square" && "aspect-square",
     effectiveFormat === "story" && "aspect-[9/16]",
     !format && "min-h-[120px]",
@@ -149,6 +155,8 @@ type PostMediaProps = {
   /** Максимальная высота контейнера (одно медиа) */
   maxHeight?: string;
   className?: string;
+  /** Медиа на всю ширину без боковых отступов/скруглений оболочки (карточка профиля). */
+  edgeToEdge?: boolean;
 };
 
 /**
@@ -159,10 +167,17 @@ type PostMediaProps = {
  * 4 — сетка 2×2;
  * 5+ — сетка 2×2 + оставшиеся, у последней ячейки оверлей «+N».
  */
-export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", className }: PostMediaProps) {
+export function PostMedia({
+  mediaUrls,
+  layout,
+  maxHeight = "min(400px, 70vh)",
+  className,
+  edgeToEdge = false,
+}: PostMediaProps) {
   if (!mediaUrls.length) return null;
 
   const resolved = mediaUrls.map((u) => resolveUrl(u));
+  const collageShell = edgeToEdge ? PROFILE_EDGE_COLLAGE : COLLAGE_SHELL;
   const visual = resolved.filter((u) => !isAudioUrl(u));
   const audio = resolved.filter((u) => isAudioUrl(u));
   const n = visual.length;
@@ -170,7 +185,12 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   const renderAudioList = () => {
     if (!audio.length) return null;
     return (
-      <div className={cn(`${MEDIA_TOP} flex flex-col gap-[var(--uix-space-2)]`, className)}>
+      <div
+        className={cn(
+          edgeToEdge ? "mt-2 flex flex-col gap-[var(--uix-space-2)] px-3" : `${MEDIA_TOP} flex flex-col gap-[var(--uix-space-2)]`,
+          className
+        )}
+      >
         {audio.map((url, i) => (
           <div
             key={`${url}-${i}`}
@@ -205,6 +225,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
           forcedFormat={singleFormat}
           maxHeight={maxHeight}
           className={className}
+          shellClassName={edgeToEdge ? PROFILE_EDGE_SINGLE : undefined}
         />
         {renderAudioList()}
       </>
@@ -217,7 +238,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 2 || collageVariant === "grid_2") {
     return (
       <>
-        <div className={cn(`${COLLAGE_SHELL} flex gap-px`, className)}>
+        <div className={cn(`${collageShell} flex gap-px`, className)}>
           {visual.map((url, i) => (
             <div key={i} className={cn("flex-1 min-w-0 aspect-square", COLLAGE_CELL)}>
               {isVideoUrl(url) ? (
@@ -237,7 +258,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 3 || collageVariant === "mosaic_3") {
     return (
       <>
-        <div className={cn(`${COLLAGE_SHELL} flex gap-px`, className)}>
+        <div className={cn(`${collageShell} flex gap-px`, className)}>
           <div className={cn("w-2/3 min-w-0 aspect-[4/3]", COLLAGE_CELL)}>
             {isVideoUrl(visual[0]) ? (
               <video src={visual[0]} controls className="w-full h-full object-cover" playsInline />
@@ -266,7 +287,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   if (n === 4 || collageVariant === "grid_4") {
     return (
       <>
-        <div className={cn(`${COLLAGE_SHELL} grid grid-cols-2 gap-px`, className)}>
+        <div className={cn(`${collageShell} grid grid-cols-2 gap-px`, className)}>
           {visual.map((url, i) => (
             <div key={i} className={cn("aspect-square", COLLAGE_CELL)}>
               {isVideoUrl(url) ? (
@@ -286,7 +307,7 @@ export function PostMedia({ mediaUrls, layout, maxHeight = "min(400px, 70vh)", c
   const rest = n - 5;
   return (
     <>
-      <div className={cn(`${COLLAGE_SHELL} grid grid-cols-2 gap-px`, className)}>
+      <div className={cn(`${collageShell} grid grid-cols-2 gap-px`, className)}>
         {visual.slice(0, 4).map((url, i) => (
           <div key={i} className={cn("aspect-square relative", COLLAGE_CELL)}>
             {isVideoUrl(url) ? (

@@ -139,6 +139,30 @@ function contactLetter(c: ContactUser): string {
 const TYPING_PREVIEW_TTL_MS = 5000;
 const VOICE_RECORDING_PREVIEW_TTL_MS = 6000;
 
+/** Превью в списке чатов: не показывать сырые пути /uploads/… */
+function formatChatLastMessagePreview(last: { type: string; content: string } | null | undefined): string {
+  if (!last) return "Нет сообщений";
+  const { type, content } = last;
+  const c = typeof content === "string" ? content : "";
+  if (type === "voice") return "Голосовое сообщение";
+  if (type === "image") return "Фото";
+  if (type === "video") return "Видео";
+  if (type === "video_note") return "Видеокружок";
+  if (type === "file" || type === "document") return "Файл";
+  if (type === "text" || !type) {
+    const t = c.trim();
+    if (!t) return "Сообщение";
+    if (t.startsWith("/uploads/") || t.startsWith("http://") || t.startsWith("https://")) {
+      if (t.includes("/voice/") || /\.(webm|m4a|ogg|opus|wav)(\?|$)/i.test(t)) return "Голосовое сообщение";
+      if (t.includes("/chat/") || t.includes("/image") || /\.(jpe?g|png|gif|webp)(\?|$)/i.test(t)) return "Фото";
+      if (t.includes("/video/") || /\.(mp4|mov|webm)(\?|$)/i.test(t)) return "Видео";
+      return "Вложение";
+    }
+    return c;
+  }
+  return "Сообщение";
+}
+
 /** Строка чата: мемоизация уменьшает перерисовку списка при обновлении «печатает»/«записывает» только в одном чате */
 const ChatRow = memo(function ChatRow({
   chat,
@@ -163,7 +187,7 @@ const ChatRow = memo(function ChatRow({
     ) : typingLabel != null ? (
       <span className="italic text-primary/90">{typingLabel} печатает...</span>
     ) : (
-      chat.lastMessage?.content ?? "Нет сообщений"
+      formatChatLastMessagePreview(chat.lastMessage ?? undefined)
     );
   const content = (
     <>
@@ -465,7 +489,7 @@ export default function Chats() {
       <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden bg-background animate-in slide-in-from-right-4 duration-150">
         <div className="w-full flex flex-col h-full relative">
           {/* Contacts Header */}
-          <div className="uix-content-x pt-6 pb-2 glass z-20 sticky top-0 border-b border-border/50">
+          <div className="uix-content-x pt-6 pb-2 glass z-40 sticky top-0 border-b border-border/50">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <TapScaleButton
@@ -780,7 +804,7 @@ export default function Chats() {
       <div className="w-full max-w-full min-w-0 flex flex-col h-full bg-background relative">
         
         {/* Header — компактно, как в TG: ~5px от краёв */}
-        <div className="uix-content-x pt-safe-offset-2 pb-2 sm:pt-4 sm:pb-2.5 glass z-20 sticky top-0 border-b border-border/50">
+        <div className="uix-content-x pt-safe-offset-2 pb-2 sm:pt-4 sm:pb-2.5 glass z-40 sticky top-0 border-b border-border/50">
           <div className="flex justify-between items-center mb-2">
             <span className="uix-text-title tracking-tight">Чаты</span>
             <DropdownMenu>

@@ -239,6 +239,7 @@ function App() {
             <Route path="/admin/settings" component={AdminApp} />
             <Route path="/admin/audit" component={AdminApp} />
             <Route path="/admin/ops" component={AdminApp} />
+            <Route path="/admin/monitors" component={AdminApp} />
             <Route path="/admin" component={AdminApp} />
             <Route>
               <ErrorBoundary>

@@ -1,4 +1,4 @@
-import { Share2, Archive, Trash2 } from "lucide-react";
+import { Share2, Archive, Trash2, Pin } from "lucide-react";
 
 export function StoryViewerActionsSheet({
   open,
@@ -7,6 +7,8 @@ export function StoryViewerActionsSheet({
   actionsBusy,
   shareDisabled,
   onShare,
+  showAddToPinned,
+  onAddToPinned,
   showArchive,
   onArchive,
   showDelete,
@@ -21,6 +23,8 @@ export function StoryViewerActionsSheet({
   actionsBusy: boolean;
   shareDisabled: boolean;
   onShare: () => void;
+  showAddToPinned: boolean;
+  onAddToPinned: () => void;
   showArchive: boolean;
   onArchive: () => void;
   showDelete: boolean;
@@ -52,6 +56,20 @@ export function StoryViewerActionsSheet({
           <Share2 className="h-4 w-4" />
           Поделиться сториз
         </button>
+        {showAddToPinned ? (
+          <button
+            type="button"
+            className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-white/90 hover:bg-white/10"
+            onClick={() => {
+              onAddToPinned();
+              onDismiss();
+            }}
+            disabled={actionsBusy}
+          >
+            <Pin className="h-4 w-4" />
+            В закреплённое
+          </button>
+        ) : null}
         {showArchive ? (
           <button
             type="button"

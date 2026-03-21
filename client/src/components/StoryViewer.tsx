@@ -42,6 +42,7 @@ export default function StoryViewer({
   onShareStory,
   onArchiveStory,
   onDeleteStory,
+  onAddToPinned,
 }: StoryViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
@@ -611,6 +612,10 @@ export default function StoryViewer({
         actionsBusy={actionsBusy}
         shareDisabled={!onShareStory}
         onShare={handleActionSheetShare}
+        showAddToPinned={!!(isOwnCurrentStory && currentStoryId && onAddToPinned)}
+        onAddToPinned={() => {
+          if (currentStoryId) onAddToPinned?.(currentStoryId);
+        }}
         showArchive={!!(isOwnCurrentStory && currentStoryId && onArchiveStory)}
         onArchive={handleActionSheetArchive}
         showDelete={!!(isOwnCurrentStory && currentStoryId && onDeleteStory)}
