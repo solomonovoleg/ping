@@ -10,6 +10,7 @@ type ActiveGroupCall = {
   chatId: string;
   mediaType: GroupCallMedia;
   chatTitle: string;
+  hostUserId?: string | null;
 };
 
 type GroupCallContextValue = {
@@ -29,27 +30,46 @@ export function GroupCallProvider({ children }: { children: React.ReactNode }) {
 
   const startGroupCall = useCallback(
     async (chatId: string, chatTitle: string, video: boolean) => {
-      if (!isGroupCallModuleEnabled()) return;
-      try {
-        const data = await createGroupCallRoom(chatId, video ? "video" : "audio");
-        setActive({
-          roomId: data.roomId,
-          chatId,
-          mediaType: data.mediaType,
-          chatTitle,
-        });
-      } catch (e) {
+      if (!isGroupCallModuleEnabled()) {
         toast({
-          title: e instanceof Error ? e.message : "Не удалось начать групповой звонок",
+          title: "Групповые звонки выключены в этой сборке",
+          description: "Добавьте в deploy.env: VITE_GROUP_CALLS_ENABLED=1 и GROUP_CALLS_ENABLED=1, затем пересоберите и задеплойте.",
           variant: "destructive",
         });
+        return;
+      }
+      const cid = chatId.trim();
+      if (!cid) {
+        toast({ title: "Чат ещё не готов", description: "Подождите загрузки и попробуйте снова.", variant: "destructive" });
+        return;
+      }
+      try {
+        const data = await createGroupCallRoom(cid, video ? "video" : "audio");
+        setActive({
+          roomId: data.roomId,
+          chatId: cid,
+          mediaType: data.mediaType,
+          chatTitle,
+          hostUserId: data.hostUserId ?? user?.id ?? null,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Не удалось начать групповой звонок";
+        toast({ title: msg, variant: "destructive" });
+        if (import.meta.env.DEV) console.warn("[group-call] startGroupCall failed", e);
       }
     },
-    [],
+    [user?.id],
   );
 
   const joinGroupCall = useCallback((opts: ActiveGroupCall) => {
-    if (!isGroupCallModuleEnabled()) return;
+    if (!isGroupCallModuleEnabled()) {
+      toast({
+        title: "Групповые звонки выключены",
+        description: "Включите VITE_GROUP_CALLS_ENABLED при сборке и GROUP_CALLS_ENABLED на сервере.",
+        variant: "destructive",
+      });
+      return;
+    }
     setActive(opts);
   }, []);
 
@@ -61,12 +81,15 @@ export function GroupCallProvider({ children }: { children: React.ReactNode }) {
       {children}
       {active && user ? (
         <GroupCallModal
+          key={active.roomId}
           open
+          chatId={active.chatId}
           chatTitle={active.chatTitle}
           roomId={active.roomId}
           mediaType={active.mediaType}
           myUserId={user.id}
           myDisplayName={myDisplayName}
+          hostUserId={active.hostUserId ?? null}
           onClose={dismissGroupCall}
         />
       ) : null}

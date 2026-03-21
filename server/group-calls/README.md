@@ -14,3 +14,11 @@
 3. При необходимости — отдельные таблицы Drizzle в `server/group-calls/db/` (позже).
 
 Лимит файлов: **≤200 строк**.
+
+## WS-сообщения (фрагмент)
+
+| Тип | Назначение |
+|-----|------------|
+| `group.roster` | Участники + `handRaisedUserIds[]` |
+| `group.raise-hand` | Клиент → сервер: `{ roomId, raised }`; сервер → всем: `{ userId, raised }` |
+| `group.reaction` | Клиент → сервер: `{ roomId, emoji, label? }`; сервер → всем: `{ fromUserId, emoji, label?, ts }` |

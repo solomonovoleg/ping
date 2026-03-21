@@ -51,6 +51,8 @@ export interface CallControllerSnapshot {
   networkQuality: CallNetworkQualityLevel;
   cameraFacingMode: CallCameraFacingMode;
   isScreenShareActive: boolean;
+  /** Собеседник шарит экран — не зеркалить удалённое видео (читаемость текста). */
+  remoteScreenShareActive: boolean;
   isCameraEnabled: boolean;
   localRecordingState: "idle" | "recording" | "paused" | "stopping" | "error";
   localRecordingElapsedMs: number;
@@ -89,6 +91,7 @@ export class CallController {
   private _networkQuality: CallNetworkQualityLevel = "unknown";
   private _cameraFacingMode: CallCameraFacingMode = "user";
   private _isScreenShareActive = false;
+  private _remoteScreenShareActive = false;
   private _isCameraEnabled = true;
   private _localRecordingState: "idle" | "recording" | "paused" | "stopping" | "error" = "idle";
   private _localRecordingElapsedMs = 0;
@@ -466,6 +469,7 @@ export class CallController {
       networkQuality: this._networkQuality,
       cameraFacingMode: this._cameraFacingMode,
       isScreenShareActive: this._isScreenShareActive,
+      remoteScreenShareActive: this._remoteScreenShareActive,
       isCameraEnabled: this._isCameraEnabled,
       localRecordingState: this._localRecordingState,
       localRecordingElapsedMs: this._localRecordingElapsedMs,
@@ -725,6 +729,7 @@ export class CallController {
 
   private handleRemoteScreenShareState(event: Extract<ServerCallEvent, { type: "call.screen-share-state" }>): void {
     if (event.callId !== this._callId) return;
+    this._remoteScreenShareActive = event.active;
     this._statusText = event.active ? "Собеседник делится экраном" : null;
     this.notify();
   }
@@ -1014,6 +1019,7 @@ export class CallController {
     this.pendingIceCandidates = [];
     this._isMuted = false;
     this._isScreenShareActive = false;
+    this._remoteScreenShareActive = false;
     this._isCameraEnabled = true;
     this._networkQuality = "unknown";
     this._cameraFacingMode = "user";
@@ -1082,6 +1088,7 @@ export class CallController {
     this._networkQuality = "unknown";
     this._cameraFacingMode = "user";
     this._isScreenShareActive = false;
+    this._remoteScreenShareActive = false;
     this._isCameraEnabled = true;
     this._localRecordingState = "idle";
     this._localRecordingElapsedMs = 0;

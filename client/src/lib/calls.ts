@@ -17,6 +17,11 @@ export async function getCallToken(): Promise<string> {
   if (res.status === 401) throw new CallTokenUnauthorizedError();
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { message?: string };
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new Error(
+        "Сервер временно не отвечает (ошибка шлюза). Обновите страницу или повторите через минуту — без токена звонок и камера в эфире не поднимутся.",
+      );
+    }
     throw new Error(err?.message || "Не удалось получить токен звонка. Проверьте интернет.");
   }
   const data = (await res.json()) as { token: string };

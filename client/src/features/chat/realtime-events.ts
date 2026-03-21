@@ -27,6 +27,7 @@ export type ChatVibeUpdateDetail = {
 };
 
 const EVT_CHAT_LIST_UPDATE = "ping:chat-list-update";
+const EVT_INCOMING_CHAT_MESSAGE_HINT = "ping:incoming-chat-message-hint";
 const EVT_CHAT_READ = "ping:chat-read";
 const EVT_MESSAGE_REACTION = "ping:message-reaction";
 const EVT_MESSAGE_EDITED = "ping:message-edited";
@@ -55,6 +56,17 @@ export function onChatListUpdate(handler: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   window.addEventListener(EVT_CHAT_LIST_UPDATE, handler);
   return () => window.removeEventListener(EVT_CHAT_LIST_UPDATE, handler);
+}
+
+export type IncomingChatMessageHintDetail = { chatId: string; senderId: string };
+
+/** Сервер прислал новое сообщение в чате — звук до подписки на chat-message (например, новая группа). */
+export function emitIncomingChatMessageHint(detail: IncomingChatMessageHintDetail): void {
+  emit(EVT_INCOMING_CHAT_MESSAGE_HINT, detail);
+}
+
+export function onIncomingChatMessageHint(handler: (detail: IncomingChatMessageHintDetail) => void): () => void {
+  return on(EVT_INCOMING_CHAT_MESSAGE_HINT, handler);
 }
 
 export function emitChatRead(detail: ChatReadEventDetail): void {

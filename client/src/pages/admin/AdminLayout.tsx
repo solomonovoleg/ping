@@ -1,6 +1,18 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { LayoutDashboard, Users, Shield, History, ArrowLeft, Ticket, Settings, LogOut, Monitor, Smartphone } from "lucide-react";
+import {
+  LayoutDashboard,
+  Users,
+  Shield,
+  History,
+  ArrowLeft,
+  Ticket,
+  Settings,
+  LogOut,
+  Monitor,
+  Smartphone,
+  SlidersHorizontal,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/lib/auth";
 
@@ -21,6 +33,7 @@ const NAV = [
   { path: "/admin/referrals", label: "Пригласительные", icon: Ticket },
   { path: "/admin/admins", label: "Админы", icon: Shield },
   { path: "/admin/settings", label: "Настройки", icon: Settings },
+  { path: "/admin/ops", label: "Операции", icon: SlidersHorizontal },
   { path: "/admin/audit", label: "Аудит", icon: History },
 ];
 

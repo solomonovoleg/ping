@@ -277,13 +277,49 @@ export async function fetchParserUsers(search?: string): Promise<AdminParserUser
   return data.users ?? [];
 }
 
-export async function fetchAuditLog(opts: { limit?: number; offset?: number }): Promise<AuditLogEntry[]> {
+export type FetchAuditLogOpts = {
+  limit?: number;
+  offset?: number;
+  action?: string;
+  adminId?: string;
+  targetType?: string;
+  since?: string;
+  until?: string;
+};
+
+export async function fetchAuditLog(opts?: FetchAuditLogOpts): Promise<AuditLogEntry[]> {
   const params = new URLSearchParams();
-  if (opts.limit != null) params.set("limit", String(opts.limit));
-  if (opts.offset != null) params.set("offset", String(opts.offset));
+  const o = opts ?? {};
+  if (o.limit != null) params.set("limit", String(o.limit));
+  if (o.offset != null) params.set("offset", String(o.offset));
+  if (o.action?.trim()) params.set("action", o.action.trim());
+  if (o.adminId?.trim()) params.set("adminId", o.adminId.trim());
+  if (o.targetType?.trim()) params.set("targetType", o.targetType.trim());
+  if (o.since?.trim()) params.set("since", o.since.trim());
+  if (o.until?.trim()) params.set("until", o.until.trim());
   const res = await adminFetch(`/admin/audit-log?${params}`);
   if (!res.ok) return [];
   return res.json();
+}
+
+/** CSV только для admin / super_admin (403 у модератора) */
+export async function downloadAdminAuditCsv(): Promise<void> {
+  const res = await adminFetch("/admin/audit-log?format=csv");
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { message?: string }).message || "Ошибка экспорта");
+    }
+    throw new Error((await res.text()) || "Ошибка экспорта");
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `audit-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export type AdminReferralCode = {

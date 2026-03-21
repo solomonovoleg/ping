@@ -21,6 +21,7 @@ const INITIAL_SNAPSHOT: CallControllerSnapshot = {
   networkQuality: "unknown",
   cameraFacingMode: "user",
   isScreenShareActive: false,
+  remoteScreenShareActive: false,
   isCameraEnabled: true,
   localRecordingState: "idle",
   localRecordingElapsedMs: 0,

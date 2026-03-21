@@ -8,6 +8,7 @@ let cachedContext: AudioContext | null = null;
 let likeAudioEl: HTMLAudioElement | null = null;
 let likeNotifyAudioEl: HTMLAudioElement | null = null;
 let likeNotifyLastPlayedAt = 0;
+let incomingChatSoundLastAt = 0;
 
 function getContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -34,6 +35,80 @@ function getUiAudio(url: string, kind: "like" | "notify"): HTMLAudioElement | nu
     return el;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Браузеры блокируют звук до первого жеста пользователя. После tap/click/keydown
+ * поднимаем AudioContext и «прогреваем» mp3 уведомлений (иначе play() тихо падает).
+ */
+export function installBrowserAudioUnlock(): () => void {
+  if (typeof document === "undefined") return () => {};
+
+  const unlock = () => {
+    const ctx = getContext();
+    if (ctx?.state === "suspended") void ctx.resume().catch(() => {});
+    try {
+      const el = getUiAudio("/sounds/like-notification.mp3", "notify");
+      if (el) {
+        const v = el.volume;
+        el.volume = 0.001;
+        void el
+          .play()
+          .then(() => {
+            el.pause();
+            el.currentTime = 0;
+            el.volume = v;
+          })
+          .catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+    document.removeEventListener("pointerdown", unlock);
+    document.removeEventListener("click", unlock);
+    document.removeEventListener("keydown", unlock);
+  };
+
+  document.addEventListener("pointerdown", unlock, { passive: true });
+  document.addEventListener("click", unlock);
+  document.addEventListener("keydown", unlock);
+
+  return () => {
+    document.removeEventListener("pointerdown", unlock);
+    document.removeEventListener("click", unlock);
+    document.removeEventListener("keydown", unlock);
+  };
+}
+
+/** Короткий двухтоновый сигнал: входящее сообщение в чате (не от вас). */
+export function playIncomingChatMessageSound(): void {
+  if (!getMicroSoundsEnabled()) return;
+  const now = Date.now();
+  if (now - incomingChatSoundLastAt < 520) return;
+  incomingChatSoundLastAt = now;
+  const ctx = getContext();
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") void ctx.resume();
+    const t0 = ctx.currentTime;
+    const playPing = (start: number, freq: number, dur: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(0.09, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.start(start);
+      osc.stop(start + dur);
+    };
+    playPing(t0, 660, 0.055);
+    playPing(t0 + 0.045, 520, 0.065);
+  } catch {
+    /* autoplay / runtime */
   }
 }
 

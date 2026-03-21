@@ -37,6 +37,8 @@ export type UserAvatarProps = {
   seed?: string;
   size?: number;
   className?: string;
+  /** Если задан — скругление в px вместо круга (сквиркл в профиле PULSE и т.п.). */
+  cornerRadius?: number;
   /** Показать зелёную точку «онлайн» (lastSeenAt в пределах 2 минут) */
   showOnlineIndicator?: boolean;
   /** ISO дата последней активности; используется только при showOnlineIndicator */
@@ -55,6 +57,7 @@ export function UserAvatar({
   seed,
   size = 40,
   className,
+  cornerRadius,
   showOnlineIndicator = false,
   lastSeenAt,
 }: UserAvatarProps) {
@@ -91,13 +94,16 @@ export function UserAvatar({
       child
     );
 
+  const radiusStyle = cornerRadius != null ? { borderRadius: cornerRadius } : undefined;
+  const shapeClass = cornerRadius != null ? "object-cover flex-shrink-0" : "rounded-full object-cover flex-shrink-0";
+
   if (showImage) {
     return wrapper(
       <img
         src={resolvedUrl}
         alt=""
-        className={cn("rounded-full object-cover flex-shrink-0", !showOnlineIndicator && className)}
-        style={{ width: size, height: size }}
+        className={cn(shapeClass, !showOnlineIndicator && className)}
+        style={{ width: size, height: size, ...radiusStyle }}
         onError={() => setImageError(true)}
       />
     );
@@ -105,13 +111,19 @@ export function UserAvatar({
 
   return wrapper(
     <div
-      className={cn("rounded-full flex items-center justify-center flex-shrink-0 font-semibold", !showOnlineIndicator && className)}
+      className={cn(
+        cornerRadius != null
+          ? "flex items-center justify-center flex-shrink-0 font-semibold"
+          : "rounded-full flex items-center justify-center flex-shrink-0 font-semibold",
+        !showOnlineIndicator && className
+      )}
       style={{
         width: size,
         height: size,
         background: bg,
         color: text,
         fontSize: Math.max(12, size * 0.45),
+        ...radiusStyle,
       }}
       aria-hidden
     >

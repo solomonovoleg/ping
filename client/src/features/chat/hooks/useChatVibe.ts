@@ -2,9 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { API, apiFetch } from "@/lib/api-base";
 import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
 import { onChatVibeUpdate, type ChatVibeUpdateDetail } from "../realtime-events";
-import { getClientVibeTokens } from "@/lib/chat-vibe-themes";
+import { getClientVibeTokens, type ChatVibeSurface } from "@/lib/chat-vibe-themes";
 import { getIntensityScale } from "@/lib/chat-vibe-prefs";
-import { usePrefersReducedMotion } from "@/lib/motion";
 import type { VibeThemeCode, VibeThemeTokens } from "@shared/chat-vibe-types";
 
 export type ChatVibeState = {
@@ -15,19 +14,27 @@ export type ChatVibeState = {
   visualIntensity: number;
 };
 
-const DEFAULT_STATE: ChatVibeState = {
-  theme: "casual",
-  tokens: getClientVibeTokens("casual"),
-  isActive: false,
-  confidence: 0,
-  visualIntensity: 0,
+function defaultState(surface: ChatVibeSurface): ChatVibeState {
+  return {
+    theme: "casual",
+    tokens: getClientVibeTokens("casual", surface),
+    isActive: false,
+    confidence: 0,
+    visualIntensity: 0,
+  };
+}
+
+export type UseChatVibeOptions = {
+  surface?: ChatVibeSurface;
 };
 
-export function useChatVibe(chatId: string | undefined): ChatVibeState {
-  const [state, setState] = useState<ChatVibeState>(DEFAULT_STATE);
+export function useChatVibe(chatId: string | undefined, options: UseChatVibeOptions = {}): ChatVibeState {
+  const surface = options.surface ?? "dark";
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
+  const [state, setState] = useState<ChatVibeState>(() => defaultState(surface));
   const [prefsEpoch, setPrefsEpoch] = useState(0);
-  const reducedMotion = usePrefersReducedMotion();
-  const containerRef = useRef<HTMLElement | null>(null);
+  const serverOverrideRef = useRef<Record<string, string | number> | null>(null);
 
   const applyTokensToCSS = useCallback(
     (tokens: VibeThemeTokens, active: boolean) => {
@@ -60,9 +67,15 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
   }, []);
 
   useEffect(() => {
+    setState((prev) => (prev.isActive ? prev : defaultState(surface)));
+  }, [surface]);
+
+  useEffect(() => {
     if (!chatId) {
-      setState(DEFAULT_STATE);
-      applyTokensToCSS(DEFAULT_STATE.tokens, false);
+      serverOverrideRef.current = null;
+      const next = defaultState(surfaceRef.current);
+      setState(next);
+      applyTokensToCSS(next.tokens, false);
       return;
     }
 
@@ -71,7 +84,6 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
     apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/vibe`, { cache: "no-store" })
       .then(async (res) => {
         if (res.status === 304) {
-          // Keep current vibe state: 304 means "not modified", not "disabled".
           return;
         }
         const data = (await res.json().catch(() => ({}))) as {
@@ -83,15 +95,20 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
         };
         if (cancelled) return;
         if (!res.ok || data.active !== true) {
-          setState(DEFAULT_STATE);
-          applyTokensToCSS(DEFAULT_STATE.tokens, false);
+          serverOverrideRef.current = null;
+          /* База: премиум-чёрный / светлый фон без узоров; атмосфера (паттерны, тинты) только при active с сервера */
+          const next = defaultState(surfaceRef.current);
+          setState(next);
+          applyTokensToCSS(next.tokens, false);
           return;
         }
 
         const theme = (data.theme ?? "casual") as VibeThemeCode;
-        const tokens = data.tokens
-          ? mergeTokens(getClientVibeTokens(theme), data.tokens)
-          : getClientVibeTokens(theme);
+        serverOverrideRef.current = data.tokens && typeof data.tokens === "object" ? data.tokens : null;
+        const tokens = mergeTokens(
+          getClientVibeTokens(theme, surfaceRef.current),
+          serverOverrideRef.current ?? {},
+        );
 
         const newState: ChatVibeState = {
           theme,
@@ -105,8 +122,10 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
       })
       .catch(() => {
         if (!cancelled) {
-          setState(DEFAULT_STATE);
-          applyTokensToCSS(DEFAULT_STATE.tokens, false);
+          serverOverrideRef.current = null;
+          const next = defaultState(surfaceRef.current);
+          setState(next);
+          applyTokensToCSS(next.tokens, false);
         }
       });
 
@@ -122,8 +141,11 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
       if (detail.chatId !== chatId) return;
 
       const theme = (detail.theme ?? "casual") as VibeThemeCode;
-      const base = getClientVibeTokens(theme);
-      const tokens = detail.tokens ? mergeTokens(base, detail.tokens) : base;
+      if (detail.tokens && typeof detail.tokens === "object") {
+        serverOverrideRef.current = detail.tokens;
+      }
+      const base = getClientVibeTokens(theme, surface);
+      const tokens = mergeTokens(base, serverOverrideRef.current ?? {});
 
       const newState: ChatVibeState = {
         theme,
@@ -137,11 +159,21 @@ export function useChatVibe(chatId: string | undefined): ChatVibeState {
     });
 
     return unsub;
-  }, [chatId, applyTokensToCSS]);
+  }, [chatId, surface, applyTokensToCSS]);
+
+  useEffect(() => {
+    if (!chatId || !state.isActive) return;
+    const merged = mergeTokens(
+      getClientVibeTokens(state.theme, surface),
+      serverOverrideRef.current ?? {},
+    );
+    setState((prev) => (prev.isActive ? { ...prev, tokens: merged } : prev));
+    applyTokensToCSS(merged, true);
+  }, [surface, chatId, state.isActive, state.theme, applyTokensToCSS]);
 
   useEffect(() => {
     return () => {
-      applyTokensToCSS(DEFAULT_STATE.tokens, false);
+      applyTokensToCSS(defaultState("dark").tokens, false);
     };
   }, [applyTokensToCSS]);
 

@@ -49,6 +49,8 @@ export CALL_TRANSCRIPTS_ASR_WS_URL="ws://127.0.0.1:8100/stream"
 
 Важно: `scripts/deploy.sh` уже пишет эти серверные переменные в `.env` на VPS.
 
+**Титры «не идут» при `VITE_GROUP_CALLS_SERVER_ASR=1`:** раньше клиент в первую очередь слал только PCM в `group.asr-pcm`, а Node обрабатывает его **только если** задан `CALL_TRANSCRIPTS_ASR_WS_URL` и жив Vosk stream. Без WS сообщения отбрасывались, а браузерный Web Speech не включался. Сейчас по умолчанию клиент сначала шлёт **webm-чанки** на HTTP (`CALL_TRANSCRIPTS_ASR_URL`). Поток PCM+WS включайте флагом **`VITE_GROUP_CALLS_ASR_PCM_STREAM=1`** в сборке, когда stream точно поднят.
+
 ## Что лучше использовать
 
 - Если хочешь максимальную стабильность на слабом VPS: можно оставить только `CALL_TRANSCRIPTS_ASR_URL` и chunk fallback.

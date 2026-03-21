@@ -3,6 +3,7 @@ import { getCallToken, getCallWsUrl, CallTokenUnauthorizedError } from "@/lib/ca
 import {
   emitChatListUpdate,
   emitChatRead,
+  emitIncomingChatMessageHint,
   emitMessageEdited,
   emitMessageReaction,
   emitChatVibeUpdate,
@@ -242,6 +243,10 @@ export class RealtimeSocketTransport {
         }
         if (raw.type === "chat-list-update") {
           emitChatListUpdate();
+          const inc = raw.incomingMessage as { chatId?: string; senderId?: string } | undefined;
+          if (typeof inc?.chatId === "string" && typeof inc?.senderId === "string") {
+            emitIncomingChatMessageHint({ chatId: inc.chatId, senderId: inc.senderId });
+          }
           return;
         }
         if (raw.type === "chat-read" && raw.chatId && raw.lastReadAt) {

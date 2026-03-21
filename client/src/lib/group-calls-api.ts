@@ -6,6 +6,7 @@ export async function createGroupCallRoom(chatId: string, mediaType: GroupCallMe
   roomId: string;
   mediaType: GroupCallMedia;
   reused: boolean;
+  hostUserId?: string;
 }> {
   const res = await apiFetch(`${API}/group-calls/rooms`, {
     method: "POST",
@@ -14,19 +15,32 @@ export async function createGroupCallRoom(chatId: string, mediaType: GroupCallMe
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(err?.message || "Не удалось создать групповой звонок");
+    const fallback =
+      res.status === 404
+        ? "Групповые звонки выключены на сервере (GROUP_CALLS_ENABLED=1 в .env)"
+        : res.status === 403
+          ? "Нет доступа к этому чату"
+          : res.status === 400
+            ? "Некорректный запрос (нужен групповой чат)"
+            : "Не удалось создать групповой звонок";
+    throw new Error((err?.message && String(err.message).trim()) || fallback);
   }
-  return res.json() as Promise<{ roomId: string; mediaType: GroupCallMedia; reused: boolean }>;
+  return res.json() as Promise<{
+    roomId: string;
+    mediaType: GroupCallMedia;
+    reused: boolean;
+    hostUserId?: string;
+  }>;
 }
 
 export async function fetchActiveGroupCall(chatId: string): Promise<
   | { active: false }
-  | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number }
+  | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number; hostUserId?: string }
 > {
   const res = await apiFetch(`${API}/group-calls/chats/${encodeURIComponent(chatId)}/active`);
   if (!res.ok) return { active: false };
   return res.json() as Promise<
     | { active: false }
-    | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number }
+    | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number; hostUserId?: string }
   >;
 }

@@ -14,6 +14,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { VoiceMessagePlayer } from "@/components/VoiceMessagePlayer";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import { CodeBlock } from "./CodeBlock";
+import { PulseDmSentVideoNote } from "@/features/chat/components/pulse/PulseDmSentVideoNote";
 import { parseCodeSegments } from "../utils/code-detect";
 import type { ApiMessage } from "../types";
 
@@ -134,6 +135,12 @@ export type ChatMessageRowProps = {
   currentUserDisplayName: string;
   /** Пресет цвета пузыря своих сообщений (primary, slate, violet, sky) */
   messageBubbleColor?: MessageBubbleColorPreset;
+  /** Активен chat vibe — заливка пузырей из CSS-переменных (PULSE-токены) */
+  chatVibeActive?: boolean;
+  /** Личный чат на мобиле: пузыри как MobileChatDark/Light (если vibe не перекрашивает текст) */
+  pulseMobileDm?: "dark" | "light" | null;
+  /** Акцент темы настроения для обводки входящих (hex #rrggbb) */
+  pulseDmAccent?: string;
   isSelected: boolean;
   isHighlighted: boolean;
   isShattering: boolean;
@@ -275,6 +282,9 @@ function ChatMessageRowInner({
   currentUserAvatarUrl,
   currentUserDisplayName,
   messageBubbleColor = "primary",
+  chatVibeActive = false,
+  pulseMobileDm = null,
+  pulseDmAccent = "#818cf8",
   isSelected,
   isHighlighted,
   isShattering,
@@ -306,34 +316,60 @@ function ChatMessageRowInner({
   const replyHintRef = useRef<HTMLDivElement | null>(null);
   const showSenderName = !isDm;
   const isMedia = msg.type === "voice" || msg.type === "image" || msg.type === "video" || msg.type === "video_note";
-  // Telegram-style: хвостик на нижнем углу (один угол меньше — «хвост» пузыря)
+  // PULSE / Telegram: основной радиус 18px, хвост 4px, стык группы ~8px
   const bubbleRounding = isMe
     ? cn(
-        "rounded-[16px]",
-        isFirstInGroup && !isLastInGroup && "rounded-br-[16px] rounded-tr-[7px] rounded-tl-[16px] rounded-bl-[16px]",
-        isLastInGroup && !isFirstInGroup && "rounded-tr-[16px] rounded-br-[5px] rounded-tl-[16px] rounded-bl-[16px]",
-        isFirstInGroup && isLastInGroup && "rounded-br-[5px]",
-        !isFirstInGroup && !isLastInGroup && "rounded-tr-[7px] rounded-br-[5px] rounded-tl-[16px] rounded-bl-[16px]"
+        "rounded-[18px]",
+        isFirstInGroup && !isLastInGroup && "rounded-br-[18px] rounded-tr-[8px] rounded-tl-[18px] rounded-bl-[18px]",
+        isLastInGroup && !isFirstInGroup && "rounded-tr-[18px] rounded-br-[4px] rounded-tl-[18px] rounded-bl-[18px]",
+        isFirstInGroup && isLastInGroup && "rounded-br-[4px]",
+        !isFirstInGroup && !isLastInGroup && "rounded-tr-[8px] rounded-br-[4px] rounded-tl-[18px] rounded-bl-[18px]"
       )
     : cn(
-        "rounded-[16px]",
-        isFirstInGroup && !isLastInGroup && "rounded-bl-[16px] rounded-tl-[7px] rounded-tr-[16px] rounded-br-[16px]",
-        isLastInGroup && !isFirstInGroup && "rounded-tl-[16px] rounded-bl-[5px] rounded-tr-[16px] rounded-br-[16px]",
-        isFirstInGroup && isLastInGroup && "rounded-bl-[5px]",
-        !isFirstInGroup && !isLastInGroup && "rounded-tl-[7px] rounded-bl-[5px] rounded-tr-[16px] rounded-br-[16px]"
+        "rounded-[18px]",
+        isFirstInGroup && !isLastInGroup && "rounded-bl-[18px] rounded-tl-[8px] rounded-tr-[18px] rounded-br-[18px]",
+        isLastInGroup && !isFirstInGroup && "rounded-tl-[18px] rounded-bl-[4px] rounded-tr-[18px] rounded-br-[18px]",
+        isFirstInGroup && isLastInGroup && "rounded-bl-[4px]",
+        !isFirstInGroup && !isLastInGroup && "rounded-tl-[8px] rounded-bl-[4px] rounded-tr-[18px] rounded-br-[18px]"
       );
+  const vibeTextBubble = chatVibeActive && !isMedia && msg.type === "text";
+  const pulseTextShell =
+    Boolean(pulseMobileDm) && !isMedia && msg.type === "text" && !vibeTextBubble;
   const bubbleClasses = isMedia
-    ? "p-0 rounded-[14px] overflow-hidden relative select-none touch-none bg-transparent"
+    ? "p-0 rounded-[18px] overflow-hidden relative select-none touch-none bg-transparent"
     : cn(
         "px-2.5 py-1.5 relative select-none touch-none",
-        isMe ? bubbleStyles.bubble : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
+        vibeTextBubble
+          ? isMe
+            ? "text-white border-0 shadow-[0_1px_2px_rgba(0,0,0,0.14)]"
+            : "text-foreground border border-black/[0.08] dark:border-white/10 shadow-[0_1px_1px_rgba(0,0,0,0.06)]"
+          : pulseTextShell && pulseMobileDm === "dark"
+            ? isMe
+              ? "border border-indigo-400/35 bg-[rgba(79,70,229,0.92)] text-white shadow-[0_1px_2px_rgba(0,0,0,0.22)] backdrop-blur-md"
+              : "border border-white/15 bg-white/[0.06] text-white/[0.9] shadow-[0_1px_2px_rgba(0,0,0,0.12)] backdrop-blur-md"
+            : pulseTextShell && pulseMobileDm === "light"
+              ? isMe
+                ? "border-0 bg-[#6366f1] text-white shadow-[0_1px_2px_rgba(99,102,241,0.25)]"
+                : "border border-black/[0.08] bg-white text-[#1a1a2e] shadow-sm"
+              : isMe
+                ? bubbleStyles.bubble
+                : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
         bubbleRounding
       );
   const vibeBubbleShadow =
-    !isMedia && msg.type === "text"
+    !vibeTextBubble && !isMedia && msg.type === "text"
       ? ({
           boxShadow: `inset 0 0 52px 0 ${isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)"}, 0 1px 1px rgba(0,0,0,0.06)`,
         } as CSSProperties)
+      : undefined;
+  const vibeFillStyle: CSSProperties | undefined = vibeTextBubble
+    ? {
+        backgroundColor: isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)",
+      }
+    : undefined;
+  const pulseIncomingBorderStyle: CSSProperties | undefined =
+    pulseTextShell && pulseMobileDm === "dark" && !isMe && pulseDmAccent.length === 7 && pulseDmAccent.startsWith("#")
+      ? { borderColor: `${pulseDmAccent}33` }
       : undefined;
   const showAvatarOther = !isMe && !isDm && isLastInGroup;
   const showAvatarMe = false;
@@ -370,7 +406,7 @@ function ChatMessageRowInner({
           <div
             ref={bubbleRef}
             className={cn(bubbleClasses, "w-fit max-w-full", isSelected && "ring-2 ring-primary", isHighlighted && "ring-2 ring-primary animate-pulse")}
-            style={vibeBubbleShadow}
+            style={{ ...vibeFillStyle, ...vibeBubbleShadow, ...pulseIncomingBorderStyle }}
             onPointerDown={(e) => {
               swipeStartXRef.current = e.clientX;
               swipeStartedRef.current = true;
@@ -536,7 +572,15 @@ function ChatMessageRowInner({
                   onClick={(e) => { e.stopPropagation(); if (replyTargetId) onScrollToReply(replyTargetId); }}
                   className={cn(
                     "mb-2 min-w-0 w-full cursor-pointer rounded-[8px] border-l-[3px] py-1 pr-2 pl-2 text-left transition-opacity hover:opacity-90",
-                    isMe ? bubbleStyles.replyBlock : "bg-black/5 dark:bg-white/10 border-primary/45"
+                    isMe
+                      ? pulseMobileDm === "dark" && !isMedia && !vibeTextBubble
+                        ? "bg-black/25 border-l-white/35"
+                        : bubbleStyles.replyBlock
+                      : pulseMobileDm === "dark" && !isMedia
+                        ? "bg-white/[0.06] border-l-indigo-400/50"
+                        : pulseMobileDm === "light" && !isMedia
+                          ? "bg-slate-100/90 border-l-indigo-500/35"
+                          : "bg-black/5 dark:bg-white/10 border-primary/45"
                   )}
                 >
                   <p className="mb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground">{replyAuthor}</p>
@@ -599,7 +643,24 @@ function ChatMessageRowInner({
                 <video src={resolveUrl(msg.content)} className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]" playsInline muted />
               </button>
             ) : msg.type === "video_note" ? (
-              <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
+              pulseMobileDm && isMe ? (
+                <PulseDmSentVideoNote
+                  src={resolveUrl(msg.content)}
+                  accentColor={pulseDmAccent}
+                  footerLabel={
+                    msg.sendStatus === "sending" || msg.sendStatus === "failed"
+                      ? null
+                      : (() => {
+                          const t = formatMessageTime(msg.createdAt);
+                          const isRead =
+                            lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
+                          return isRead ? `${t} ✓✓` : `${t} ✓`;
+                        })()
+                  }
+                />
+              ) : (
+                <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
+              )
             ) : msg.type === "post_share" ? (
               (() => {
                 let preview: { postId?: string; text?: string; imageUrl?: string | null; authorName?: string; authorId?: string } = {};
@@ -693,7 +754,21 @@ function ChatMessageRowInner({
               </>
             )}
             {showFooter && (
-              <div className={cn("text-[11px] flex justify-end items-center gap-0.5", isMedia ? "mt-1 px-0.5" : "mt-0.5", isMe && !isMedia ? bubbleStyles.footer : "text-muted-foreground")}>
+              <div
+                className={cn(
+                  "text-[11px] flex justify-end items-center gap-0.5",
+                  isMedia ? "mt-1 px-0.5" : "mt-0.5",
+                  vibeTextBubble && isMe
+                    ? "text-white/85"
+                    : pulseTextShell && pulseMobileDm === "dark" && isMe
+                      ? "text-white/65"
+                      : pulseTextShell && pulseMobileDm === "light" && isMe
+                        ? "text-white/85"
+                        : isMe && !isMedia
+                          ? bubbleStyles.footer
+                          : "text-muted-foreground",
+                )}
+              >
                 {formatMessageTime(msg.createdAt)}
                 {translatedFromLang && (
                   <button
@@ -716,9 +791,26 @@ function ChatMessageRowInner({
                   );
                   const isRead = lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
                   const title = isRead && lastReadAt ? `Просмотрено в ${formatMessageTime(lastReadAt)}` : "Доставлено";
-                  const checkGlow = "drop-shadow-[0_0_5px_hsl(var(--primary)/0.6)]";
+                  const checkGlow = vibeTextBubble
+                    ? "drop-shadow-[0_0_4px_rgba(255,255,255,0.45)]"
+                    : pulseTextShell && pulseMobileDm === "dark" && isMe
+                      ? "drop-shadow-[0_0_5px_rgba(165,180,252,0.55)]"
+                      : "drop-shadow-[0_0_5px_hsl(var(--primary)/0.6)]";
                   return (
-                    <span className={cn("inline-flex items-center gap-0.5", isRead && "text-primary")} title={title}>
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-0.5",
+                        isRead &&
+                          (vibeTextBubble
+                            ? "text-white"
+                            : pulseTextShell && pulseMobileDm === "dark" && isMe
+                              ? "text-indigo-200"
+                              : pulseTextShell && pulseMobileDm === "light" && isMe
+                                ? "text-white"
+                                : "text-primary"),
+                      )}
+                      title={title}
+                    >
                       <svg className={cn("w-3 h-3 flex-shrink-0", isRead && checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>
                       {isRead && <svg className={cn("w-3 h-3 flex-shrink-0 -ml-2.25", checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>}
                     </span>
@@ -737,7 +829,7 @@ function ChatMessageRowInner({
             ))}
           </div>
           )}
-          {isShattering && <ShatterEffect className="absolute inset-0 rounded-[14px]" shardClassName={isMe ? bubbleStyles.shatter : "bg-white/85 dark:bg-slate-900/70"} onComplete={() => onShatterComplete(msg.id)} />}
+          {isShattering && <ShatterEffect className="absolute inset-0 rounded-[18px]" shardClassName={isMe ? bubbleStyles.shatter : "bg-white/85 dark:bg-slate-900/70"} onComplete={() => onShatterComplete(msg.id)} />}
         </div>
         {showSenderName && isLastInGroup && (
           <span className={cn("text-[10px] font-medium text-muted-foreground/80 mt-0.5 px-1", isMe && "text-right")}>

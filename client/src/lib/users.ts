@@ -6,6 +6,7 @@ export type PublicProfile = {
   publicId: number;
   displayName: string | null;
   surname: string | null;
+  nickname?: string | null;
   gender: string | null;
   avatarUrl: string | null;
   coverUrl?: string | null;

@@ -10,7 +10,10 @@ export type AuditAction =
   | "message.delete"
   | "chat.delete"
   | "parser.config.update"
-  | "parser.run";
+  | "parser.run"
+  | "ops.platform.update"
+  | "ops.report.resolve"
+  | "ops.report.dismiss";
 
 export async function writeAuditLog(params: {
   adminId: string;

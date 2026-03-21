@@ -47,29 +47,41 @@ export async function startGroupScreenShare(
     stopped = true;
     displayTrack.onended = null;
     try {
-      await mesh.replaceOutgoingVideoTrackOnAllLinks(cameraTrack);
-    } catch {
-      /* ignore */
-    }
-    for (const c of screenClones) {
       try {
-        c.stop();
+        await mesh.replaceOutgoingVideoTrackOnAllLinks(cameraTrack);
       } catch {
         /* ignore */
       }
-    }
-    screenClones = [];
-    try {
-      localStream.removeTrack(displayTrack);
-      if (cameraTrack.readyState === "live") {
-        localStream.addTrack(cameraTrack);
+      for (const c of screenClones) {
+        try {
+          c.stop();
+        } catch {
+          /* ignore */
+        }
       }
-    } catch {
-      /* ignore */
+      screenClones = [];
+      try {
+        localStream.removeTrack(displayTrack);
+        if (cameraTrack.readyState === "live") {
+          localStream.addTrack(cameraTrack);
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        displayTrack.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        displayStream.getTracks().forEach((t) => t.stop());
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      // Всегда сбрасываем UI/рефы — иначе кнопка «выкл» не отрабатывает при ошибке stop()
+      options?.onStopped?.();
     }
-    displayTrack.stop();
-    displayStream.getTracks().forEach((t) => t.stop());
-    options?.onStopped?.();
   };
 
   displayTrack.onended = () => {

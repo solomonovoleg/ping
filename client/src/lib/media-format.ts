@@ -1,40 +1,42 @@
 /**
  * Три формата отображения медиа в ленте:
- * - horizontal — горизонтальное (ширина > высоты);
- * - square — квадрат (1:1);
- * - story — вертикальное сториз (9:16 и уже).
+ * - horizontal — заметный ландшафт (ширина заметно больше высоты);
+ * - square — почти квадрат;
+ * - story — вытянутый портрет (ближе к 9:16, чем к квадрату).
  *
- * Логика выбора: по ближайшему каноническому ratio.
- * Каноны:
- * - story: 9/16
- * - square: 1/1
- * - horizontal: 16/9
+ * Раньше выбирали «ближайший» к 1:1 / 9:16 / 16:9 — из‑за этого 4:3 горизонталка
+ * попадала в square и получала letterbox в квадратной рамке.
  */
 
 export type MediaDisplayFormat = "horizontal" | "square" | "story";
 
 const STORY_RATIO = 9 / 16;
 const SQUARE_RATIO = 1;
-const HORIZONTAL_RATIO = 16 / 9;
+
+/** Полоса «почти квадрат» по width/height. */
+const NEAR_SQUARE_MIN = 0.92;
+const NEAR_SQUARE_MAX = 1.08;
 
 /**
  * Возвращает формат по соотношению сторон (width/height).
  * Учитывать EXIF: для ориентации 6 или 8 передавать уже (logicalWidth, logicalHeight).
  */
+
 export function getMediaDisplayFormat(width: number, height: number): MediaDisplayFormat {
   if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
     return "square";
   }
   const ratio = width / height;
-  const distance = (target: number) => Math.abs(Math.log(ratio) - Math.log(target));
 
-  const distances: Array<{ format: MediaDisplayFormat; d: number }> = [
-    { format: "story", d: distance(STORY_RATIO) },
-    { format: "square", d: distance(SQUARE_RATIO) },
-    { format: "horizontal", d: distance(HORIZONTAL_RATIO) },
-  ];
-  distances.sort((a, b) => a.d - b.d);
-  return distances[0]?.format ?? "square";
+  if (ratio > NEAR_SQUARE_MAX) {
+    return "horizontal";
+  }
+  if (ratio < NEAR_SQUARE_MIN) {
+    const distance = (target: number) => Math.abs(Math.log(ratio) - Math.log(target));
+    return distance(STORY_RATIO) <= distance(SQUARE_RATIO) ? "story" : "square";
+  }
+
+  return "square";
 }
 
 /**

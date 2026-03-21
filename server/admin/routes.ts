@@ -7,6 +7,9 @@ import { registerAdminAuditRoutes } from "./audit/routes";
 import { registerAdminFeedRoutes } from "./feed/routes";
 import { registerAdminReferralRoutes } from "./referrals/routes";
 import { registerAdminContentIngestRoutes } from "./content-ingest/routes";
+import { registerOpsPlatformAdminRoutes } from "./ops/platform.admin-http";
+import { registerOpsReportsAdminRoutes } from "./ops/reports.admin-http";
+import { registerOpsTrafficShieldAdminRoutes } from "./ops/traffic-shield.admin-http";
 
 export function registerAdminRoutes(app: Express): void {
   app.use("/api/admin", requireAdmin);
@@ -14,6 +17,9 @@ export function registerAdminRoutes(app: Express): void {
   registerAdminUsersRoutes(app);
   registerAdminAdminsRoutes(app);
   registerAdminAuditRoutes(app);
+  registerOpsPlatformAdminRoutes(app);
+  registerOpsReportsAdminRoutes(app);
+  registerOpsTrafficShieldAdminRoutes(app);
   registerAdminFeedRoutes(app);
   registerAdminReferralRoutes(app);
   registerAdminContentIngestRoutes(app);

@@ -5,21 +5,22 @@ import type { CSSProperties } from "react";
  */
 export const PULSE_CALL_BACKDROP_CLASS = "bg-[#080810]";
 
+/** Нижняя панель звонка: плотный чёрный, лёгкая прозрачность (без «стекла»). */
 export const pulseGhostPillStyle: CSSProperties = {
-  background: "rgba(255,255,255,0.025)",
-  border: "1px solid rgba(255,255,255,0.055)",
-  boxShadow: "0 8px 48px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.035)",
+  background: "rgba(0,0,0,0.86)",
+  border: "1px solid rgba(255,255,255,0.14)",
+  boxShadow: "0 10px 40px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.06)",
 };
 
-/** Плотная панель на телефоне — иконки не «растворяются» на светлом видео. */
+/** Та же плотность на телефоне. */
 export const pulseGhostPillStyleMobile: CSSProperties = {
-  background: "rgba(18,18,26,0.88)",
-  border: "1px solid rgba(255,255,255,0.2)",
-  boxShadow: "0 12px 40px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.1)",
+  background: "rgba(0,0,0,0.88)",
+  border: "1px solid rgba(255,255,255,0.16)",
+  boxShadow: "0 12px 40px rgba(0,0,0,0.72), inset 0 1px 0 rgba(255,255,255,0.07)",
 };
 
 export const pulseToolbarDividerStyle: CSSProperties = {
-  background: "rgba(255,255,255,0.06)",
+  background: "rgba(255,255,255,0.12)",
 };
 
 /** Mic / camera OFF (PULSE §4.3) */
@@ -40,10 +41,10 @@ export const pulseEndOrbOuterGlowStyle: CSSProperties = {
   boxShadow: "0 0 30px rgba(220,38,38,0.65), 0 0 8px rgba(220,38,38,0.45), inset 0 1px 0 rgba(255,180,180,0.25)",
 };
 
-/** Ручка над панелью (PULSE §4.6) */
+/** Ручка над панелью — тот же чёрный корпус, что у пилюли. */
 export const pulseDrawerHandleIdleStyle: CSSProperties = {
-  background: "rgba(255,255,255,0.025)",
-  border: "1px solid rgba(255,255,255,0.07)",
+  background: "rgba(0,0,0,0.82)",
+  border: "1px solid rgba(255,255,255,0.14)",
 };
 
 /** Подсветка как у «чата» в макете при активном состоянии */

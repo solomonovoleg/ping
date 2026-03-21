@@ -98,6 +98,7 @@ const Subscribers = lazyWithRetry(() => import("@/pages/Subscribers"), "subscrib
 const FollowersList = lazyWithRetry(() => import("@/pages/FollowersList"), "followers-list");
 const Notifications = lazyWithRetry(() => import("@/pages/Notifications"), "notifications");
 const AdminApp = lazyWithRetry(() => import("@/admin/AdminApp").then((m) => ({ default: m.AdminApp })), "admin-app");
+const PulseTemplatePreview = lazyWithRetry(() => import("@/pages/PulseTemplatePreview"), "pulse-template");
 
 const PageFallback = () => (
   <div className="flex flex-1 items-center justify-center min-h-[200px]">
@@ -128,6 +129,14 @@ function Router() {
       <Suspense fallback={<PageFallback />}>
         <Switch>
           <Route path="/" component={Chats} />
+          {import.meta.env.DEV ? (
+            <>
+              <Route path="/dev/pulse-template/desktop-light" component={PulseTemplatePreview} />
+              <Route path="/dev/pulse-template/desktop" component={PulseTemplatePreview} />
+              <Route path="/dev/pulse-template/stories" component={PulseTemplatePreview} />
+              <Route path="/dev/pulse-template" component={PulseTemplatePreview} />
+            </>
+          ) : null}
           <Route path="/chat/:id" component={ChatDetail} />
           <Route path="/posts" component={Posts} />
           <Route path="/create-post" component={CreatePost} />
@@ -217,6 +226,7 @@ function App() {
             <Route path="/admin/admins" component={AdminApp} />
             <Route path="/admin/settings" component={AdminApp} />
             <Route path="/admin/audit" component={AdminApp} />
+            <Route path="/admin/ops" component={AdminApp} />
             <Route path="/admin" component={AdminApp} />
             <Route>
               <ErrorBoundary>

@@ -93,6 +93,8 @@ type Props = {
   networkQuality: CallNetworkQualityLevel;
   supports: CallFeatureSupport;
   isScreenShareActive: boolean;
+  /** Собеседник ведёт демонстрацию экрана — удалённое видео без зеркала. */
+  remoteScreenShareActive: boolean;
   isCameraEnabled: boolean;
   localRecordingState: "idle" | "recording" | "paused" | "stopping" | "error";
   localRecordingElapsedMs: number;
@@ -203,6 +205,7 @@ export function CallModal({
   networkQuality,
   supports,
   isScreenShareActive,
+  remoteScreenShareActive,
   isCameraEnabled,
   localRecordingState,
   localRecordingElapsedMs,
@@ -233,6 +236,11 @@ export function CallModal({
     (): CSSProperties => ({ transform: `scaleX(-1) rotate(${localVideoRotation}deg)` }),
     [localVideoRotation],
   );
+  /** Как локальное превью: фронтальная камера собеседника зеркально; экран — без зеркала. */
+  const remoteVideoTransformStyle = useMemo((): CSSProperties | undefined => {
+    if (!isVideo || remoteScreenShareActive) return undefined;
+    return { transform: "scaleX(-1)" };
+  }, [isVideo, remoteScreenShareActive]);
   /** В режиме «пополам»: кто сверху — исходящий поток (локальный у звонящего) или наоборот. */
   const [preferCallerOnTop, setPreferCallerOnTop] = useState(true);
   /** Видео: два равных кадра или картинка-в-картинке (как в FaceTime). */
@@ -831,7 +839,7 @@ export function CallModal({
       <TapScaleButton
         type="button"
         onClick={onEndCall}
-        className="absolute right-4 top-[max(0.85rem,env(safe-area-inset-top,0px))] z-[60] flex h-11 w-11 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border border-white/15 bg-black/35 text-white/85 shadow-lg backdrop-blur-md transition-colors hover:border-white/25 hover:bg-black/50 hover:text-white"
+        className="absolute right-4 top-[max(0.85rem,env(safe-area-inset-top,0px))] z-[60] flex h-11 w-11 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border border-white/18 bg-black/82 text-white shadow-lg transition-colors hover:border-white/26 hover:bg-black/90 hover:text-white"
         aria-label={isTerminal ? "Закрыть" : "Закрыть звонок"}
         haptic
       >
@@ -873,7 +881,7 @@ export function CallModal({
         </div>
       ) : null}
       {showPulseTopBar && showVideo && !isMobile ? (
-        <div className="absolute left-1/2 top-5 z-20 flex max-w-[min(calc(100vw-2.5rem),680px)] -translate-x-1/2 flex-nowrap items-center gap-3 overflow-hidden rounded-full border border-white/[0.08] bg-white/[0.06] px-5 py-2 shadow-xl backdrop-blur-xl">
+        <div className="absolute left-1/2 top-5 z-20 flex max-w-[min(calc(100vw-2.5rem),680px)] -translate-x-1/2 flex-nowrap items-center gap-3 overflow-hidden rounded-full border border-white/14 bg-black/82 px-5 py-2 shadow-xl">
           <span className="min-w-0 max-w-[min(36vw,220px)] shrink truncate text-[13px] font-semibold tracking-wide text-white/90">
             {otherDisplayName || "Звонок"}
           </span>
@@ -996,6 +1004,7 @@ export function CallModal({
                 autoPlay
                 playsInline
                 className="h-full w-full bg-black object-cover"
+                style={remoteVideoTransformStyle}
               />
               <div className="absolute top-3 left-3 px-2 py-1 rounded-full bg-black/55 text-xs">
                 {otherDisplayName || "Абонент"}
@@ -1023,6 +1032,7 @@ export function CallModal({
                   autoPlay
                   playsInline
                   className="h-full w-full min-h-full min-w-full bg-black object-cover"
+                  style={remoteVideoTransformStyle}
                 />
               )}
               {!(isMobile && showVideo) ? (
@@ -1112,6 +1122,7 @@ export function CallModal({
                   playsInline
                   muted={false}
                   className="h-full w-full bg-black object-cover"
+                  style={remoteVideoTransformStyle}
                 />
               ) : (
                 <div className="absolute inset-0 overflow-hidden bg-black">
@@ -1323,7 +1334,7 @@ export function CallModal({
         {showActiveControls && localRecordingState !== "idle" && (
           <div className="w-full max-w-[200px] shrink-0 px-0">
             <div
-              className="flex items-center gap-2 rounded-full border border-white/18 bg-black/45 px-2 py-1 backdrop-blur-md"
+              className="flex items-center gap-2 rounded-full border border-white/14 bg-black/82 px-2 py-1"
               role="status"
               aria-live="polite"
             >
@@ -1430,7 +1441,7 @@ export function CallModal({
                     : "mb-0 max-h-0 opacity-0",
                 )}
               >
-                <div className="rounded-3xl border border-white/[0.08] bg-white/[0.06] px-5 pb-5 pt-4 shadow-[0_-8px_48px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
+                <div className="rounded-3xl border border-white/14 bg-black/86 px-5 pb-5 pt-4 shadow-[0_-8px_48px_rgba(0,0,0,0.75)]">
                   <div className="mb-5 flex justify-center">
                     <div className="h-[3px] w-10 rounded-full bg-white/15" />
                   </div>
@@ -1513,10 +1524,8 @@ export function CallModal({
                   className={cn(
                     "h-3 w-3 transition-all duration-500",
                     pulseDrawerOpen
-                      ? "rotate-180 text-white/80"
-                      : isMobile
-                        ? "text-white/75 group-hover/handle:text-white/90"
-                        : "text-white/22 group-hover/handle:text-white/50",
+                      ? "rotate-180 text-white/90"
+                      : "text-white/72 group-hover/handle:text-white/92",
                   )}
                 />
               </button>
@@ -1539,9 +1548,9 @@ export function CallModal({
                       "absolute inset-0 rounded-full transition-all duration-300",
                       isMuted
                         ? "bg-red-500/10 group-hover/b:bg-red-500/[0.17]"
-                        : isMobile
+                        :                         isMobile
                           ? "bg-white/[0.06] group-hover/b:bg-white/[0.12]"
-                          : "bg-transparent group-hover/b:bg-white/[0.07]",
+                          : "bg-white/[0.06] group-hover/b:bg-white/12",
                     )}
                   />
                   {isMuted ? (
@@ -1550,7 +1559,7 @@ export function CallModal({
                     <Mic
                       className={cn(
                         "relative z-10 h-[19px] w-[19px] transition-colors",
-                        isMobile ? "text-white/92 group-hover/b:text-white" : "text-white/55 group-hover/b:text-white/90",
+                        isMobile ? "text-white/92 group-hover/b:text-white" : "text-white/78 group-hover/b:text-white",
                       )}
                     />
                   )}
@@ -1572,7 +1581,7 @@ export function CallModal({
                         isCameraEnabled
                           ? isMobile
                             ? "bg-white/[0.06] group-hover/b:bg-white/[0.12]"
-                            : "bg-transparent group-hover/b:bg-white/[0.07]"
+                            : "bg-white/[0.06] group-hover/b:bg-white/12"
                           : "bg-red-500/10 group-hover/b:bg-red-500/[0.17]",
                       )}
                     />
@@ -1580,7 +1589,7 @@ export function CallModal({
                       <Video
                         className={cn(
                           "relative z-10 h-[19px] w-[19px] transition-colors",
-                          isMobile ? "text-white/92 group-hover/b:text-white" : "text-white/55 group-hover/b:text-white/90",
+                          isMobile ? "text-white/92 group-hover/b:text-white" : "text-white/78 group-hover/b:text-white",
                         )}
                       />
                     ) : (
@@ -1614,7 +1623,7 @@ export function CallModal({
                           ? "bg-indigo-500/18 group-hover/b:bg-indigo-500/[0.26]"
                           : isMobile
                             ? "bg-white/[0.06] group-hover/b:bg-white/[0.12]"
-                            : "bg-transparent group-hover/b:bg-white/[0.07]",
+                            : "bg-white/[0.06] group-hover/b:bg-white/12",
                       )}
                     />
                     <MessageSquare
@@ -1624,7 +1633,7 @@ export function CallModal({
                           ? "text-indigo-300"
                           : isMobile
                             ? "text-white/92 group-hover/b:text-white"
-                            : "text-white/55 group-hover/b:text-white/90",
+                            : "text-white/78 group-hover/b:text-white",
                       )}
                     />
                     {remoteChatUnread && !callChatOpen && linkedChat ? (
@@ -1646,7 +1655,7 @@ export function CallModal({
                         "absolute inset-0 rounded-full transition-all duration-300",
                         captionsEnabled
                           ? "bg-amber-500/18 group-hover/b:bg-amber-500/[0.26]"
-                          : "bg-transparent group-hover/b:bg-white/[0.07]",
+                          : "bg-white/[0.06] group-hover/b:bg-white/12",
                       )}
                     />
                     {captionsEnabled ? (
@@ -1655,7 +1664,7 @@ export function CallModal({
                     <Subtitles
                       className={cn(
                         "relative z-10 h-[19px] w-[19px] transition-colors",
-                        captionsEnabled ? "text-amber-300" : "text-white/55 group-hover/b:text-white/90",
+                        captionsEnabled ? "text-amber-300" : "text-white/78 group-hover/b:text-white",
                       )}
                     />
                   </TapScaleButton>
@@ -1703,7 +1712,7 @@ export function CallModal({
             <TapScaleButton
               type="button"
               onClick={onEndCall}
-              className="min-h-[var(--uix-touch-min)] rounded-full border border-white/20 bg-white/20 p-4 backdrop-blur-xl transition-colors hover:bg-white/30"
+              className="min-h-[var(--uix-touch-min)] rounded-full border border-white/18 bg-black/82 p-4 transition-colors hover:border-white/24 hover:bg-black/90"
               aria-label="Закрыть звонок"
               haptic
             >

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -10,27 +12,111 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fetchAuditLog } from "@/lib/admin";
+import {
+  downloadAdminAuditCsv,
+  fetchAuditLog,
+  type AuditLogEntry,
+  type FetchAuditLogOpts,
+} from "@/lib/admin";
+import { fetchMe } from "@/lib/auth";
+import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale";
 
 const PAGE_SIZE = 50;
 
 export default function AdminAudit() {
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const { data: log, isLoading, error } = useQuery({
-    queryKey: ["admin", "audit", limit],
-    queryFn: () => fetchAuditLog({ limit }),
+  const { toast } = useToast();
+  const [filters, setFilters] = useState<FetchAuditLogOpts>({ limit: PAGE_SIZE, offset: 0 });
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
+  const canCsv = me?.platformRole === "admin" || me?.platformRole === "super_admin";
+
+  const { data: log, isLoading, error, refetch } = useQuery({
+    queryKey: ["admin", "audit", filters],
+    queryFn: () => fetchAuditLog(filters),
   });
+
+  const setF = (patch: Partial<FetchAuditLogOpts>) => {
+    setFilters((prev) => ({ ...prev, ...patch, offset: patch.offset !== undefined ? patch.offset : 0 }));
+  };
+
+  const onCsv = async () => {
+    try {
+      await downloadAdminAuditCsv();
+      toast({ title: "CSV скачан" });
+    } catch (e) {
+      toast({
+        title: e instanceof Error ? e.message : "Не удалось выгрузить CSV",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Аудит</h1>
       <Card>
-        <CardHeader>
-          <CardTitle>Последние действия админов</CardTitle>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <CardTitle>Действия админов</CardTitle>
+          {canCsv ? (
+            <Button type="button" variant="outline" size="sm" onClick={onCsv}>
+              Скачать CSV (до 2000)
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground">CSV — только у администратора</p>
+          )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-1">
+              <Label htmlFor="audit-action">Действие</Label>
+              <Input
+                id="audit-action"
+                value={filters.action ?? ""}
+                onChange={(e) => setF({ action: e.target.value })}
+                placeholder="user.ban"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="audit-admin">adminId</Label>
+              <Input
+                id="audit-admin"
+                value={filters.adminId ?? ""}
+                onChange={(e) => setF({ adminId: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="audit-target">targetType</Label>
+              <Input
+                id="audit-target"
+                value={filters.targetType ?? ""}
+                onChange={(e) => setF({ targetType: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="audit-since">С даты (ISO)</Label>
+              <Input
+                id="audit-since"
+                value={filters.since ?? ""}
+                onChange={(e) => setF({ since: e.target.value })}
+                placeholder="2025-01-01"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="audit-until">По дату (ISO)</Label>
+              <Input
+                id="audit-until"
+                value={filters.until ?? ""}
+                onChange={(e) => setF({ until: e.target.value })}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button type="button" variant="secondary" size="sm" onClick={() => refetch()}>
+                Обновить
+              </Button>
+            </div>
+          </div>
+
           {isLoading && <p className="text-muted-foreground py-4">Загрузка...</p>}
           {error && (
             <p className="text-destructive py-4">
@@ -38,7 +124,7 @@ export default function AdminAudit() {
             </p>
           )}
           {log && log.length === 0 && (
-            <p className="text-muted-foreground py-4">Записей пока нет (или БД не используется).</p>
+            <p className="text-muted-foreground py-4">Записей нет по текущим фильтрам.</p>
           )}
           {log && log.length > 0 && (
             <>
@@ -52,7 +138,7 @@ export default function AdminAudit() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {log.map((entry) => (
+                  {log.map((entry: AuditLogEntry) => (
                     <TableRow key={entry.id}>
                       <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
                         {formatDistanceToNow(new Date(entry.createdAt), { addSuffix: true, locale: ru })}
@@ -68,15 +154,30 @@ export default function AdminAudit() {
                   ))}
                 </TableBody>
               </Table>
-              {log.length === limit && limit < 200 && (
-                <div className="mt-4">
+              {log.length === (filters.limit ?? PAGE_SIZE) && (
+                <div className="mt-4 flex gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setLimit((prev) => prev + PAGE_SIZE)}
+                    onClick={() =>
+                      setF({ offset: (filters.offset ?? 0) + (filters.limit ?? PAGE_SIZE) })
+                    }
                   >
-                    Загрузить ещё
+                    Следующая страница
                   </Button>
+                  {(filters.offset ?? 0) > 0 ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setF({
+                          offset: Math.max(0, (filters.offset ?? 0) - (filters.limit ?? PAGE_SIZE)),
+                        })
+                      }
+                    >
+                      Назад
+                    </Button>
+                  ) : null}
                 </div>
               )}
             </>

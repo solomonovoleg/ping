@@ -19,7 +19,7 @@ export async function takePhotoFromCamera(): Promise<string | null> {
     const { Camera, CameraResultType } = await import("@capacitor/camera");
     const photo = await Camera.getPhoto({
       quality: 90,
-      allowEditing: true,
+      allowEditing: false,
       resultType: CameraResultType.DataUrl,
       source: (await import("@capacitor/camera")).CameraSource.Camera,
     });
@@ -36,7 +36,7 @@ export async function pickPhotoFromGallery(): Promise<string | null> {
     const { Camera, CameraResultType } = await import("@capacitor/camera");
     const photo = await Camera.getPhoto({
       quality: 90,
-      allowEditing: true,
+      allowEditing: false,
       resultType: CameraResultType.DataUrl,
       source: (await import("@capacitor/camera")).CameraSource.Photos,
     });

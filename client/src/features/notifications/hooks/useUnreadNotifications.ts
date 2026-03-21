@@ -46,25 +46,21 @@ export function useUnreadNotifications(): UnreadNotificationsState {
     return list.reduce((sum, n) => sum + (n.readAt ? 0 : 1), 0);
   }, [query.data]);
   const isInitializedRef = useRef(false);
-  const prevUnreadReactionIdsRef = useRef<Set<string>>(new Set());
+  const prevUnreadIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const list = Array.isArray(query.data) ? (query.data as NotificationItem[]) : [];
-    const unreadReactionIds = new Set(
-      list.filter((n) => !n.readAt && n.type === "reaction").map((n) => n.id)
-    );
+    const unreadIds = new Set(list.filter((n) => !n.readAt).map((n) => n.id));
     if (!isInitializedRef.current) {
-      prevUnreadReactionIdsRef.current = unreadReactionIds;
+      prevUnreadIdsRef.current = unreadIds;
       isInitializedRef.current = true;
       return;
     }
-    const hasNewUnreadReaction = Array.from(unreadReactionIds).some(
-      (id) => !prevUnreadReactionIdsRef.current.has(id)
-    );
-    if (hasNewUnreadReaction) {
+    const hasNewUnread = Array.from(unreadIds).some((id) => !prevUnreadIdsRef.current.has(id));
+    if (hasNewUnread) {
       playLikeNotificationSound();
     }
-    prevUnreadReactionIdsRef.current = unreadReactionIds;
+    prevUnreadIdsRef.current = unreadIds;
   }, [query.data]);
 
   return {

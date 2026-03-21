@@ -1,6 +1,7 @@
-import { createContext, useContext, useMemo, useRef, type MutableRefObject } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRealtimeSocket } from "@/hooks/useRealtimeSocket";
+import { installBrowserAudioUnlock } from "@/lib/send-sound";
 
 type CallMessageHandlerRef = MutableRefObject<(raw: Record<string, unknown>) => void>;
 type SocketDisconnectedRef = MutableRefObject<() => void>;
@@ -37,6 +38,10 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     onSocketDisconnectedRef,
     onSocketConnectedRef,
   });
+
+  useEffect(() => {
+    return installBrowserAudioUnlock();
+  }, []);
 
   const value = useMemo(
     () => ({

@@ -263,6 +263,7 @@ export interface CallStoreState {
   networkQuality: CallNetworkQualityLevel;
   cameraFacingMode: CallCameraFacingMode;
   isScreenShareActive: boolean;
+  remoteScreenShareActive: boolean;
   isCameraEnabled: boolean;
   localRecordingState: "idle" | "recording" | "paused" | "stopping" | "error";
   localRecordingElapsedMs: number;

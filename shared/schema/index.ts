@@ -26,3 +26,5 @@ export * from "./scheduled-messages";
 export * from "./chat-vibe";
 export * from "./message-translations";
 export * from "./call-transcripts";
+export * from "./platform-settings";
+export * from "./content-reports";

@@ -92,17 +92,21 @@ export function useVoiceRecorder() {
     }
   }, [cleanup]);
 
-  const stop = useCallback((): Promise<Blob | null> => {
+  const stop = useCallback((): Promise<{ blob: Blob | null; durationSec: number }> => {
     return new Promise((resolve) => {
       const recorder = mediaRecorderRef.current;
       if (!recorder || recorder.state !== "recording") {
         cleanup();
         setState("idle");
         setDurationSec(0);
-        resolve(null);
+        resolve({ blob: null, durationSec: 0 });
         return;
       }
       recorder.onstop = () => {
+        const durationAtStop =
+          startedAtRef.current != null
+            ? Math.min(MAX_VOICE_DURATION_SEC, Math.floor((Date.now() - startedAtRef.current) / 1000))
+            : 0;
         cleanup();
         setState("idle");
         setDurationSec(0);
@@ -117,7 +121,7 @@ export function useVoiceRecorder() {
             ? new Blob(chunksRef.current, { type: fallbackType })
             : null;
         chunksRef.current = [];
-        resolve(blob);
+        resolve({ blob, durationSec: durationAtStop });
       };
       recorder.stop();
     });

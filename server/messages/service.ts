@@ -172,8 +172,14 @@ export async function sendChatMessage(input: SendMessageInput) {
       });
   }
 
+  if (rawType === "text" && content.trim()) {
+    import("../ai-search/schedule")
+      .then((m) => m.scheduleAiSearchIngest(userId, chatId))
+      .catch(() => {});
+  }
+
   for (const memberId of memberIds) {
-    notifyChatListUpdate(memberId);
+    notifyChatListUpdate(memberId, { incomingMessage: { chatId, senderId: userId } });
   }
 
   const sender = await storage.getUser(userId);
@@ -181,11 +187,13 @@ export async function sendChatMessage(input: SendMessageInput) {
   const bodyPreview =
     message.type === "text"
       ? String(message.content).slice(0, 80)
-      : message.type === "voice"
-        ? "Голосовое сообщение"
-        : message.type === "video_note"
-          ? "Видеокружок"
-          : "Фото/медиа";
+      : message.type === "system"
+        ? String(message.content).slice(0, 80)
+        : message.type === "voice"
+          ? "Голосовое сообщение"
+          : message.type === "video_note"
+            ? "Видеокружок"
+            : "Фото/медиа";
   for (const memberId of memberIds) {
     if (memberId === userId) continue;
     sendPushToUser(memberId, senderName, bodyPreview, { chatId }).catch(() => {});

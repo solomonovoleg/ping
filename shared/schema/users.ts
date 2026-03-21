@@ -6,6 +6,9 @@ import { z } from "zod";
 /** Максимальная длина имени и фамилии (символов) */
 export const NAME_MAX_LENGTH = 12;
 
+/** Никнейм в плашке шапки профиля (@handle), без пробелов */
+export const NICKNAME_MAX_LENGTH = 24;
+
 /** Пол: обязательное поле в профиле после регистрации */
 export const GENDER_VALUES = ["male", "female", "other"] as const;
 export type Gender = (typeof GENDER_VALUES)[number];
@@ -21,6 +24,8 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   displayName: text("display_name"),
   surname: text("surname"),
+  /** Публичный ник в шапке профиля (плашка с @); не уникален в БД */
+  nickname: text("nickname"),
   /** Пол: обязателен в профиле */
   gender: varchar("gender", { length: 20 }),
   /** Дата рождения: по желанию */
@@ -83,6 +88,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export const updateProfileSchema = createInsertSchema(users).pick({
   displayName: true,
   surname: true,
+  nickname: true,
   gender: true,
   birthDate: true,
   avatarUrl: true,

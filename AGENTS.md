@@ -46,12 +46,15 @@
 - **`docs/SEED_SOCIAL_AND_FEED.md`** — почему не видно постов/сториз сидов (TTL сториз, лимит 800 постов в ленте, `--reset`, моки в UI).
 - **`docs/CALLS_GROUP.md`** — групповые звонки (флаги, nginx `/group-calls`, mesh, лимиты).
 - **`docs/VOSK_ASR_SETUP.md`** — бесплатный self-hosted ASR backend для титров/команд на VPS.
+- **`docs/AI_SEARCH_ALGORITHM.md`** — алгоритм AI Search: инкрементальный батч, курсор, извлечение JSON, hot vs долгий профиль, L1-кеш, API.
 
 ---
 
 ## Важные пути в репозитории
 
 - Клиент: `client/src/` — страницы (`pages/`), компоненты (`components/`), хуки (`hooks/`), API и утилиты (`lib/`).
+- **Эталон UI чата PULSE (макет 1:1):** `client/src/features/chat/pulse-template/` — `DESIGN_RULES.md`, мобильные `MobileChatDark` / `MobileChatLight`, десктоп **`MessengerChatDark` / `MessengerChatLight`** (большой экран, сайдбар списка чатов). В dev: **`/dev/pulse-template`** (мобильный тёмный), **`/dev/pulse-template/desktop`** и **`/dev/pulse-template/desktop-light`** (десктоп). Продакшен-экран — `ChatDetail`; переносить из шаблона по частям, не подменять страницу целиком (см. `docs/CHAT_DETAIL_RULES.md`).
+- **Профиль по макету PULSE:** `client/src/features/profile/pulse-profile/` — оболочка `PulseProfileLayout` (параллакс, сториз-кольцо, вкладки, сетка постов); страница **`UserProfile`** подключает реальные данные, посты, `StoryViewer`. Тема оболочки = глобальная из **Настроек** (`html.dark`). Эталон UI сториз (мок): `client/src/features/chat/pulse-template/MobileStoriesViewer.tsx`, dev **`/dev/pulse-template/stories`** (док: `STORIES_README.md` в той же папке).
 - Общая схема/типы: `shared/schema/`.
 - Сервер: `server/` — маршруты по доменам (auth, chats, messages, posts, calls, ws, upload и т.д.).
 - Деплой и окружение: `scripts/deploy.sh`, `deploy.env.example`, `docs/DEPLOY_RULES.md`.

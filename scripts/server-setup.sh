@@ -79,10 +79,12 @@ if grep -q '^DATABASE_URL=.\+' .env 2>/dev/null; then
   sed -i.bak 's/@base/@localhost/g; s/:base:5432/:localhost:5432/g' .env 2>/dev/null || true
   DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
   export DATABASE_URL=$(echo "$DB_URL_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
-  # Сначала снимаем процесс с PM2 — пул приложения держит слоты PostgreSQL; иначе часто 53300 при миграциях
-  if command -v pm2 &>/dev/null; then
-    echo "Остановка $PM2_APP_NAME перед миграциями (освобождение соединений к БД)..."
-    pm2 delete "$PM2_APP_NAME" 2>/dev/null || true
+  # По умолчанию приложение не останавливаем: nginx продолжает проксировать на :PORT, нет длинного «connection refused».
+  # run-migrations.cjs сам ретраит 53300 (too many clients). Если на слабом Postgres всё равно падает — один раз:
+  #   DEPLOY_STOP_PM2_BEFORE_MIGRATE=1 bash scripts/server-setup.sh
+  if command -v pm2 &>/dev/null && [ "${DEPLOY_STOP_PM2_BEFORE_MIGRATE:-0}" = "1" ]; then
+    echo "Остановка $PM2_APP_NAME перед миграциями (DEPLOY_STOP_PM2_BEFORE_MIGRATE=1)..."
+    pm2 stop "$PM2_APP_NAME" 2>/dev/null || true
     sleep 2
   fi
   echo "Миграции БД..."
@@ -117,8 +119,20 @@ fi
 
 cd "$(dirname "$0")/.."
 PM2_APP_NAME="${PM2_APP_NAME:-ping-moot}"
-pm2 delete "$PM2_APP_NAME" 2>/dev/null || true
-PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 start ecosystem.config.cjs
+if pm2 describe "$PM2_APP_NAME" >/dev/null 2>&1; then
+  RUN_PID=$(pm2 pid "$PM2_APP_NAME" 2>/dev/null || true)
+  if [ -n "${RUN_PID:-}" ] && [ "${RUN_PID:-0}" -gt 0 ] 2>/dev/null; then
+    echo "PM2: reload $PM2_APP_NAME (новый dist и PORT из ecosystem, --update-env)..."
+    PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 reload ecosystem.config.cjs --update-env
+  else
+    echo "PM2: процесс был остановлен — restart $PM2_APP_NAME..."
+    PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 restart "$PM2_APP_NAME" --update-env || \
+      PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 start ecosystem.config.cjs
+  fi
+else
+  echo "PM2: первый запуск $PM2_APP_NAME..."
+  PORT="$PORT" PM2_APP_NAME="$PM2_APP_NAME" pm2 start ecosystem.config.cjs
+fi
 pm2 save
 pm2 startup 2>/dev/null || true
 

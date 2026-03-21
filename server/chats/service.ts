@@ -1,5 +1,6 @@
 import { storage } from "../storage";
 import { notifyChatListUpdate } from "../calls/ws";
+import { sendChatMessage } from "../messages/service";
 import { notifyChatRead } from "../realtime/chat";
 import { enrichMessagesWithReply } from "../messages/reply";
 import {
@@ -303,6 +304,17 @@ export async function createChatForUser(
   }
   if (chat.type === "group") {
     await storage.getOrCreateMainFolder(chat.id);
+    const creator = await storage.getUser(userId);
+    const creatorName =
+      creator ? [creator.displayName, creator.surname].filter(Boolean).join(" ").trim() : "";
+    const who = creatorName || "Участник";
+    const title = typeof name === "string" && name.trim() ? ` «${name.trim()}»` : "";
+    await sendChatMessage({
+      userId,
+      chatId: chat.id,
+      type: "system",
+      content: `${who} создал(а) группу${title}`,
+    });
   }
   return chat;
 }

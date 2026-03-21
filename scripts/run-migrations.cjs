@@ -80,6 +80,8 @@ const scripts = [
   "scripts/migrate-messages-timestamptz.cjs",
   "scripts/migrate-message-translations.cjs",
   "scripts/migrate-chat-vibe.cjs",
+  "scripts/migrate-admin-ops.cjs",
+  "scripts/migrate-ai-search.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

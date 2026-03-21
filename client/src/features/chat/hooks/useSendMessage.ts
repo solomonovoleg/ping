@@ -75,6 +75,10 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
   const sendingVoiceLockRef = useRef(false);
   const voicePressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voicePressStartedRef = useRef(false);
+  const voiceBlobRef = useRef<Blob | null>(null);
+  const voiceFinishingRef = useRef(false);
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null);
+  const [voicePreviewDurationSec, setVoicePreviewDurationSec] = useState(0);
   const videoNoteRecorderRef = useRef<MediaRecorder | null>(null);
   const videoNoteStreamRef = useRef<MediaStream | null>(null);
   const videoNoteChunksRef = useRef<Blob[]>([]);
@@ -114,6 +118,15 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+  }, []);
+
+  const revokeVoicePreview = useCallback(() => {
+    setVoicePreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    voiceBlobRef.current = null;
+    setVoicePreviewDurationSec(0);
   }, []);
 
   const detachVideoNoteLive = useCallback(() => {
@@ -330,6 +343,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       const file = e.target.files?.[0];
       e.target.value = "";
       if (!file || !user || !chatId) return;
+      revokeVoicePreview();
       const isVideo = file.type.startsWith("video/");
       const isImage = file.type.startsWith("image/");
       if (!isImage && !isVideo) {
@@ -356,13 +370,14 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         setSendingMedia(false);
       }
     },
-    [chatId, folderId, user?.id, toast, setMessages]
+    [chatId, folderId, user?.id, toast, setMessages, revokeVoicePreview]
   );
 
   const handleAttachFromNative = useCallback(
     async (source: "camera" | "gallery") => {
       if (!user || !chatId) return;
       if (sendingMediaLockRef.current) return;
+      revokeVoicePreview();
       let dataUrl: string | null = null;
       try {
         if (source === "camera") dataUrl = await takePhotoFromCamera();
@@ -391,7 +406,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         setSendingMedia(false);
       }
     },
-    [chatId, folderId, user?.id, toast, dataUrlToFile, setMessages]
+    [chatId, folderId, user?.id, toast, dataUrlToFile, setMessages, revokeVoicePreview]
   );
 
   const handleVideoNoteFile = useCallback(
@@ -399,6 +414,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       const file = e.target.files?.[0];
       e.target.value = "";
       if (!file || !user || !chatId) return;
+      revokeVoicePreview();
       if (!file.type.startsWith("video/")) {
         toast({ title: "Нужен видеофайл для видеокружка", variant: "destructive" });
         return;
@@ -421,11 +437,12 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         setSendingMedia(false);
       }
     },
-    [chatId, folderId, user?.id, setMessages, toast]
+    [chatId, folderId, user?.id, setMessages, toast, revokeVoicePreview]
   );
 
   const startVideoNoteRecording = useCallback(async () => {
     if (!videoNoteSupported || videoNoteState === "recording" || sendingMedia) return;
+    revokeVoicePreview();
     setVideoNoteError(null);
     revokeVideoNotePreview();
     videoNoteBlobRef.current = null;
@@ -509,7 +526,16 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       setVideoNoteState("idle");
       setVideoNoteError(mapMediaAccessError(err));
     }
-  }, [videoNoteSupported, videoNoteState, sendingMedia, revokeVideoNotePreview, clearVideoNoteMirrorPipeline, clearVideoNoteTimer, stopVideoNoteStream]);
+  }, [
+    videoNoteSupported,
+    videoNoteState,
+    sendingMedia,
+    revokeVoicePreview,
+    revokeVideoNotePreview,
+    clearVideoNoteMirrorPipeline,
+    clearVideoNoteTimer,
+    stopVideoNoteStream,
+  ]);
 
   const stopVideoNoteRecording = useCallback(async () => {
     const recorder = videoNoteRecorderRef.current;
@@ -661,6 +687,13 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
   const VOICE_PRESS_MS = 300;
 
   useEffect(() => {
+    revokeVoicePreview();
+    cancelVideoNote();
+    // Сброс медиа при смене чата; колбэки стабильны по смыслу операции
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- только chatId
+  }, [chatId]);
+
+  useEffect(() => {
     return () => {
       clearVideoNotePressTimer();
       clearVideoNoteTimer();
@@ -677,6 +710,12 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     };
   }, [clearVideoNotePressTimer, clearVideoNoteMirrorPipeline, clearVideoNoteTimer, stopVideoNoteStream, videoNotePreviewUrl]);
 
+  useEffect(() => {
+    return () => {
+      revokeVoicePreview();
+    };
+  }, [revokeVoicePreview]);
+
   const clearVoicePressTimer = useCallback(() => {
     if (voicePressTimerRef.current) {
       clearTimeout(voicePressTimerRef.current);
@@ -685,48 +724,78 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     voicePressStartedRef.current = false;
   }, []);
 
-  const finalizeVoiceMessage = useCallback(
-    async (origin: "pointer" | "click"): Promise<void> => {
-      if (sendingVoiceLockRef.current) return;
-      sendingVoiceLockRef.current = true;
+  const finishVoiceRecording = useCallback(
+    async (_origin: "pointer" | "click"): Promise<void> => {
+      if (voiceFinishingRef.current) return;
+      voiceFinishingRef.current = true;
       try {
         const displayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || null : null;
         if (chatId && displayName !== undefined) sendVoiceRecording(chatId, displayName, false);
-        const blob = await stopVoice();
+        const { blob, durationSec: recordedSec } = await stopVoice();
         clearVoicePressTimer();
-        if (!(blob && blob.size > 0 && user)) return;
+        if (!blob || blob.size === 0 || !user) return;
         setVoiceError(null);
-        setSendingVoice(true);
-        try {
-          const url = await uploadVoice(blob);
-          const sent = await sendMessage(chatId, { type: "voice", content: url, folderId: folderId ?? undefined });
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === sent.id)) return prev;
-            return [...prev, { id: sent.id, chatId, senderId: user.id, type: "voice", content: url, createdAt: sent.createdAt }];
-          });
-          playSendSound();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "Ошибка отправки";
-          if (import.meta.env.DEV || typeof console !== "undefined") {
-            console.error(`[voice] upload/send failed (${origin}):`, err);
-          }
-          setVoiceError(msg);
-          toast({ title: msg || "Голосовое не отправлено", variant: "destructive" });
-        } finally {
-          setSendingVoice(false);
-        }
+        voiceBlobRef.current = blob;
+        setVoicePreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(blob);
+        });
+        setVoicePreviewDurationSec(Math.max(0, recordedSec));
       } finally {
-        sendingVoiceLockRef.current = false;
+        voiceFinishingRef.current = false;
       }
     },
-    [user, chatId, folderId, sendVoiceRecording, stopVoice, clearVoicePressTimer, setMessages, toast]
+    [user, chatId, sendVoiceRecording, stopVoice, clearVoicePressTimer]
   );
+
+  const cancelVoicePreview = useCallback(() => {
+    revokeVoicePreview();
+  }, [revokeVoicePreview]);
+
+  const rerecordVoiceFromPreview = useCallback(async () => {
+    if (!voiceSupported || !user || !chatId) return;
+    revokeVoicePreview();
+    setVoiceError(null);
+    triggerLightHaptic();
+    await startVoice();
+    const displayName = [user.displayName, user.surname].filter(Boolean).join(" ") || null;
+    if (displayName !== undefined) sendVoiceRecording(chatId, displayName, true);
+  }, [voiceSupported, user, chatId, revokeVoicePreview, startVoice, sendVoiceRecording]);
+
+  const sendRecordedVoice = useCallback(async () => {
+    if (sendingVoiceLockRef.current || !user || !chatId) return;
+    const blob = voiceBlobRef.current;
+    if (!blob || blob.size === 0) return;
+    sendingVoiceLockRef.current = true;
+    setSendingVoice(true);
+    setVoiceError(null);
+    try {
+      const url = await uploadVoice(blob);
+      const sent = await sendMessage(chatId, { type: "voice", content: url, folderId: folderId ?? undefined });
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === sent.id)) return prev;
+        return [...prev, { id: sent.id, chatId, senderId: user.id, type: "voice", content: url, createdAt: sent.createdAt }];
+      });
+      playSendSound();
+      revokeVoicePreview();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Ошибка отправки";
+      if (import.meta.env.DEV || typeof console !== "undefined") {
+        console.error("[voice] upload/send failed:", err);
+      }
+      setVoiceError(msg);
+      toast({ title: msg || "Голосовое не отправлено", variant: "destructive" });
+    } finally {
+      setSendingVoice(false);
+      sendingVoiceLockRef.current = false;
+    }
+  }, [user, chatId, folderId, revokeVoicePreview, setMessages, toast]);
 
   const handleMicPointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (voiceState === "recording" || sendingVoice || !voiceSupported) return;
+      if (voicePreviewUrl || voiceState === "recording" || sendingVoice || !voiceSupported) return;
       voicePressTimerRef.current = setTimeout(async () => {
         voicePressTimerRef.current = null;
         voicePressStartedRef.current = true;
@@ -737,7 +806,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         if (chatId && displayName !== undefined) sendVoiceRecording(chatId, displayName, true);
       }, VOICE_PRESS_MS);
     },
-    [voiceState, sendingVoice, voiceSupported, user, chatId, startVoice, sendVoiceRecording]
+    [voicePreviewUrl, voiceState, sendingVoice, voiceSupported, user, chatId, startVoice, sendVoiceRecording]
   );
 
   const handleMicPointerUp = useCallback(
@@ -748,9 +817,9 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         clearVoicePressTimer();
         return;
       }
-      await finalizeVoiceMessage("pointer");
+      await finishVoiceRecording("pointer");
     },
-    [voiceState, clearVoicePressTimer, finalizeVoiceMessage]
+    [voiceState, clearVoicePressTimer, finishVoiceRecording]
   );
 
   const handleMicPointerLeave = useCallback(() => {
@@ -766,9 +835,25 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     e?.preventDefault();
     e?.stopPropagation();
     if (voiceState === "recording") {
-      await finalizeVoiceMessage("click");
+      await finishVoiceRecording("click");
     }
-  }, [voiceState, finalizeVoiceMessage]);
+  }, [voiceState, finishVoiceRecording]);
+
+  /** Сброс записи без предпросмотра (корзина в PULSE-панели) */
+  const discardVoiceRecording = useCallback(async () => {
+    clearVoicePressTimer();
+    voicePressStartedRef.current = false;
+    if (voiceState !== "recording") return;
+    voiceFinishingRef.current = true;
+    try {
+      const displayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || null : null;
+      if (chatId && displayName !== undefined) sendVoiceRecording(chatId, displayName, false);
+      await stopVoice();
+      voiceBlobRef.current = null;
+    } finally {
+      voiceFinishingRef.current = false;
+    }
+  }, [voiceState, user, chatId, sendVoiceRecording, stopVoice, clearVoicePressTimer]);
 
   return {
     message,
@@ -790,6 +875,11 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     startVoice,
     stopVoice,
     voiceSupported,
+    voicePreviewUrl,
+    voicePreviewDurationSec,
+    cancelVoicePreview,
+    rerecordVoiceFromPreview,
+    sendRecordedVoice,
     handleSend,
     handleRetryFailedMessage,
     handleKeyPress,
@@ -817,6 +907,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     handleMicPointerDown,
     handleMicPointerUp,
     handleMicPointerLeave,
+    discardVoiceRecording,
     fileInputRef,
     videoNoteInputRef,
   };

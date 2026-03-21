@@ -12,6 +12,8 @@ export interface GroupRoomLive {
   /** WS-подключённые участники */
   connected: Set<string>;
   displayNameByUser: Map<string, string>;
+  /** Поднятая рука (синхронизируется с клиентами и входящим roster) */
+  handRaised: Set<string>;
 }
 
 const rooms = new Map<string, GroupRoomLive>();
@@ -33,14 +35,18 @@ export function getRoom(roomId: string): GroupRoomLive | undefined {
   return rooms.get(roomId);
 }
 
+/**
+ * Только чтение: «есть ли живой созвон» для UI.
+ * Не трогаем activeRoomIdByChatId при connected=0 — иначе гонка: клиент после POST
+ * долго ждёт getUserMedia, параллельно поллинг /active сбрасывает маппинг, и после
+ * group.join комната живая, но чат уже не указывает на неё (/active всегда false).
+ */
+/** Активная комната для чата: пока запись в activeRoomIdByChatId и объект в памяти есть — даже при 0 в WS (организатор ещё в getUserMedia). */
 export function getActiveRoomIdForChat(chatId: string): string | undefined {
   const id = activeRoomIdByChatId.get(chatId);
   if (!id) return undefined;
   const r = rooms.get(id);
-  if (!r || r.connected.size === 0) {
-    activeRoomIdByChatId.delete(chatId);
-    return undefined;
-  }
+  if (!r) return undefined;
   return id;
 }
 
@@ -68,6 +74,7 @@ export function createOrReuseRoom(params: {
     createdAt: Date.now(),
     connected: new Set(),
     displayNameByUser: new Map(),
+    handRaised: new Set(),
   };
   rooms.set(roomId, room);
   activeRoomIdByChatId.set(params.chatId, roomId);
@@ -99,6 +106,7 @@ export function roomAttachUser(
   room.displayNameByUser.set(userId, displayName);
   room.connected.add(userId);
   userActiveGroupRoom.set(userId, roomId);
+  activeRoomIdByChatId.set(room.chatId, roomId);
   return { ok: true, room };
 }
 
@@ -107,20 +115,39 @@ export function roomDetachUser(roomId: string, userId: string): GroupRoomLive | 
   if (!room) return undefined;
   room.connected.delete(userId);
   room.displayNameByUser.delete(userId);
+  room.handRaised.delete(userId);
   userActiveGroupRoom.delete(userId);
   removeRoomIfEmpty(roomId);
+  return room;
+}
+
+export function setUserHandRaised(roomId: string, userId: string, raised: boolean): GroupRoomLive | undefined {
+  const room = rooms.get(roomId);
+  if (!room || !room.connected.has(userId)) return undefined;
+  if (raised) room.handRaised.add(userId);
+  else room.handRaised.delete(userId);
   return room;
 }
 
 export function rosterPayload(room: GroupRoomLive): {
   roomId: string;
   mediaType: GroupRoomMedia;
+  hostUserId: string;
   participants: { userId: string; displayName: string }[];
+  handRaisedUserIds: string[];
 } {
   const participants = Array.from(room.connected).map((userId) => ({
     userId,
     displayName: room.displayNameByUser.get(userId) || "Участник",
   }));
   participants.sort((a, b) => a.userId.localeCompare(b.userId));
-  return { roomId: room.roomId, mediaType: room.mediaType, participants };
+  const handRaisedUserIds = Array.from(room.handRaised).filter((id) => room.connected.has(id));
+  handRaisedUserIds.sort((a, b) => a.localeCompare(b));
+  return {
+    roomId: room.roomId,
+    mediaType: room.mediaType,
+    hostUserId: room.createdByUserId,
+    participants,
+    handRaisedUserIds,
+  };
 }

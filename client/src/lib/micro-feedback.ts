@@ -70,6 +70,26 @@ export function playSoftTapSound(): void {
   playTone(ctx, 600, 0.028, 0.06);
 }
 
+/**
+ * Групповой звонок: «рука поднята» — короткий яркий трёхнотный сигнал (~в 3 раза громче soft tap).
+ */
+export function playGroupHandRaiseSound(): void {
+  if (isNative() || !getMicroSoundsEnabled()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  const run = () => {
+    const g = 0.17;
+    playTone(ctx, 392, 0.055, g);
+    setTimeout(() => playTone(ctx, 494, 0.06, g * 0.92), 72);
+    setTimeout(() => playTone(ctx, 587, 0.075, g * 0.85), 148);
+  };
+  if (ctx.state === "suspended") {
+    void ctx.resume().then(run).catch(() => {});
+    return;
+  }
+  run();
+}
+
 /** Короткий «успех» — два мягких тона вверх (лайк, реакция, сохранение). */
 function playSuccessSound(): void {
   if (isNative() || !getMicroSoundsEnabled()) return;

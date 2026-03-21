@@ -1380,6 +1380,7 @@ export class DbStorage implements IStorage {
     const update: Record<string, unknown> = {};
     if (data.displayName !== undefined) update.displayName = data.displayName;
     if (data.surname !== undefined) update.surname = data.surname;
+    if (data.nickname !== undefined) update.nickname = data.nickname;
     if (data.gender !== undefined) update.gender = data.gender;
     if (data.birthDate !== undefined) update.birthDate = data.birthDate;
     if (data.avatarUrl !== undefined) update.avatarUrl = data.avatarUrl;

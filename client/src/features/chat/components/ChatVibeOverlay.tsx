@@ -2,9 +2,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useId, type FC } from "react";
 import {
   usePrefersReducedMotion,
-  DURATION_EMPHASIS_MS,
+  DURATION_CHAT_VIBE_CROSSFADE_MS,
   DURATION_FAST_MS,
-  EASING_OUT_BEZIER,
+  EASING_CHAT_VIBE_BEZIER,
 } from "@/lib/motion";
 import type { VibeThemeTokens, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getIntensityScale } from "@/lib/chat-vibe-prefs";
@@ -129,8 +129,8 @@ export function ChatVibeOverlay({ theme, tokens, isActive }: Props) {
         exit={{ opacity: 0 }}
         transition={
           reducedMotion
-            ? { duration: DURATION_FAST_MS / 1000, ease: EASING_OUT_BEZIER }
-            : { duration: DURATION_EMPHASIS_MS / 1000, ease: EASING_OUT_BEZIER }
+            ? { duration: DURATION_FAST_MS / 1000, ease: EASING_CHAT_VIBE_BEZIER }
+            : { duration: DURATION_CHAT_VIBE_CROSSFADE_MS / 1000, ease: EASING_CHAT_VIBE_BEZIER }
         }
       >
         <motion.div

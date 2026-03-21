@@ -24,6 +24,7 @@ import {
   roomDetachUser,
   rosterPayload,
   getGroupRoomIdForUser,
+  setUserHandRaised,
 } from "./room-runtime";
 
 type WsG = WebSocket & { userId?: string; roomId?: string; isAlive?: boolean };
@@ -357,6 +358,35 @@ export function attachGroupCallTransport(httpServer: HttpServer): void {
             candidate: parsed.candidate,
           };
           sendToUser(toUserId, forward);
+          return;
+        }
+
+        if (type === "group.raise-hand") {
+          const roomId = typeof parsed.roomId === "string" ? parsed.roomId : "";
+          if (!roomId || !ws.userId || ws.roomId !== roomId) return;
+          const room = getRoom(roomId);
+          if (!room || !room.connected.has(ws.userId)) return;
+          const raised = parsed.raised === true;
+          setUserHandRaised(roomId, ws.userId, raised);
+          broadcastRoom(roomId, { type: "group.raise-hand", roomId, userId: ws.userId, raised });
+          return;
+        }
+
+        if (type === "group.reaction") {
+          const roomId = typeof parsed.roomId === "string" ? parsed.roomId : "";
+          const emoji = typeof parsed.emoji === "string" ? parsed.emoji.trim().slice(0, 16) : "";
+          if (!roomId || !emoji || !ws.userId || ws.roomId !== roomId) return;
+          const room = getRoom(roomId);
+          if (!room || !room.connected.has(ws.userId)) return;
+          const label = typeof parsed.label === "string" ? parsed.label.trim().slice(0, 48) : "";
+          broadcastRoom(roomId, {
+            type: "group.reaction",
+            roomId,
+            fromUserId: ws.userId,
+            emoji,
+            label: label || undefined,
+            ts: Date.now(),
+          });
           return;
         }
       } catch {

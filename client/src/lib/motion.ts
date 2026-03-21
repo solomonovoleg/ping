@@ -18,6 +18,12 @@ export const DURATION_NORMAL_S = DURATION_NORMAL_MS / 1000;
 /** Акцентные анимации (рассыпание, «магические» эффекты) */
 export const DURATION_EMPHASIS_MS = 420;
 
+/** Плавная смена настроения чата (PULSE: кроссфейд фона и паттерна) */
+export const DURATION_CHAT_VIBE_CROSSFADE_MS = 5000;
+
+/** Easing как в PULSE mood transition */
+export const EASING_CHAT_VIBE_BEZIER = [0.4, 0, 0.2, 1] as const;
+
 /** Кривая: лёгкое ускорение в конце (уверенное, не резкое) */
 export const EASING_OUT = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 

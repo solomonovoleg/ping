@@ -1,12 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "@/hooks/use-toast";
 import type { GroupCallMedia } from "@/lib/group-calls-api";
 import { getMediaConstraints } from "@/features/call/call-ice-config";
 import { mapMediaAccessError, isWebRtcSupported } from "@/features/call/webrtc-peer";
+import { CallTokenUnauthorizedError } from "@/lib/calls";
 import { connectGroupCallWebSocket } from "../ws/group-call-ws-url";
 import { GroupMeshRegistry, type RosterParticipant } from "./mesh-registry";
 import { createStreamLevelReader, pickDominantSpeaker } from "../audio/speaker-levels";
 import { useGroupCallTranscripts } from "../transcripts/useGroupCallTranscripts";
 import { startGroupScreenShare } from "../utils/group-screen-share";
+import type { GroupTranscriptSegment } from "../transcripts/types";
+
+function pickTranscriptSegmentText(seg: Record<string, unknown>): string {
+  for (const key of ["textNormalized", "text_normalized", "text", "textRaw", "text_raw"] as const) {
+    const v = seg[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
 
 export type GroupCallUiPhase = "connecting" | "active" | "error" | "ended";
 
@@ -17,6 +28,8 @@ export function useGroupCallSession(params: {
   myDisplayName: string;
   open: boolean;
   onEnded: () => void;
+  /** Пока ждём первый roster — чтобы плитка организатора была первой. */
+  initialHostUserId?: string | null;
 }): {
   phase: GroupCallUiPhase;
   error: string | null;
@@ -59,12 +72,20 @@ export function useGroupCallSession(params: {
   toggleScreenShare: () => Promise<void>;
   /** Сбрасывает привязку video к локальному превью при смене трека (камера ↔ экран). */
   localStreamRenderKey: number;
+  /** userId с поднятой рукой (синхронизация через WS). */
+  handRaisedUserIds: string[];
+  setHandRaised: (raised: boolean) => void;
+  /** Реакция всем в комнате (сервер рассылает `group.reaction`). */
+  sendGroupReaction: (emoji: string, label: string) => void;
+  /** Организатор комнаты (первая плитка в сетке). */
+  hostUserId: string | null;
 } {
-  const { roomId, mediaType, myUserId, myDisplayName, open, onEnded } = params;
+  const { roomId, mediaType, myUserId, myDisplayName, open, onEnded, initialHostUserId = null } = params;
   const [phase, setPhase] = useState<GroupCallUiPhase>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [participants, setParticipants] = useState<RosterParticipant[]>([]);
+  const [rosterParticipants, setRosterParticipants] = useState<RosterParticipant[]>([]);
+  const [hostUserId, setHostUserId] = useState<string | null>(initialHostUserId ?? null);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
   /** Крупная плитка: только после ≥3 с непрерывного VAD у того же участника (резкие вставки не перехватывают экран). */
   const [stableFocusUserId, setStableFocusUserId] = useState<string | null>(null);
@@ -73,8 +94,27 @@ export function useGroupCallSession(params: {
   const [remoteStreamsVersion, bumpRemote] = useState(0);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localStreamRenderKey, setLocalStreamRenderKey] = useState(0);
+  const [handRaisedUserIds, setHandRaisedUserIds] = useState<string[]>([]);
+
+  /** Пока нет `group.roster` или он без себя — показываем локальную плитку (в т.ч. при connecting и при ошибке сети, если камера ещё жива). */
+  const participants = useMemo((): RosterParticipant[] => {
+    const list = [...rosterParticipants];
+    const showSelfTile =
+      localStream &&
+      !list.some((p) => p.userId === myUserId) &&
+      (phase === "active" || phase === "connecting" || phase === "error");
+    if (showSelfTile) {
+      list.push({
+        userId: myUserId,
+        displayName: myDisplayName.trim() || "Вы",
+      });
+    }
+    return list;
+  }, [rosterParticipants, phase, localStream, myUserId, myDisplayName]);
 
   const meshRef = useRef(new GroupMeshRegistry());
+  const participantsRef = useRef<RosterParticipant[]>([]);
+  participantsRef.current = participants;
   const screenShareStopRef = useRef<(() => Promise<void>) | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -82,6 +122,7 @@ export function useGroupCallSession(params: {
   const localLevelRef = useRef<() => number>(() => 0);
   const speakerHoldRef = useRef<{ userId: string; since: number } | null>(null);
   const silenceStartRef = useRef<number | null>(null);
+  const activeSpeakerIdRef = useRef<string | null>(null);
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
   const endedOnceRef = useRef(false);
@@ -90,6 +131,28 @@ export function useGroupCallSession(params: {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }, []);
+
+  const setHandRaised = useCallback(
+    (raised: boolean) => {
+      sendWs({ type: "group.raise-hand", roomId, raised });
+      setHandRaisedUserIds((prev) => {
+        const s = new Set(prev);
+        if (raised) s.add(myUserId);
+        else s.delete(myUserId);
+        return Array.from(s).sort();
+      });
+    },
+    [roomId, myUserId, sendWs],
+  );
+
+  const sendGroupReaction = useCallback(
+    (emoji: string, label: string) => {
+      const e = emoji.trim().slice(0, 16);
+      if (!e) return;
+      sendWs({ type: "group.reaction", roomId, emoji: e, label: label.trim().slice(0, 48) });
+    },
+    [roomId, sendWs],
+  );
   const {
     segments: transcriptSegments,
     pendingSuggestions,
@@ -142,6 +205,7 @@ export function useGroupCallSession(params: {
       setIsCameraOff(false);
       levelsRef.current.clear();
       stopLocalRecognition();
+      setHandRaisedUserIds([]);
       setPhase("ended");
       notifyEndedOnce();
     })();
@@ -159,6 +223,11 @@ export function useGroupCallSession(params: {
       } catch {
         /* ignore */
       }
+      // Дубль на случай если onStopped не отработал; idempotent для UI
+      screenShareStopRef.current = null;
+      setIsScreenSharing(false);
+      setLocalStreamRenderKey((k) => k + 1);
+      bumpRemote((n) => n + 1);
       return;
     }
 
@@ -185,8 +254,11 @@ export function useGroupCallSession(params: {
 
     let cancelled = false;
     endedOnceRef.current = false;
+    setRosterParticipants([]);
+    setHostUserId(initialHostUserId ?? null);
     setActiveSpeakerId(null);
     setStableFocusUserId(null);
+    setHandRaisedUserIds([]);
     speakerHoldRef.current = null;
     silenceStartRef.current = null;
     const mesh = new GroupMeshRegistry();
@@ -235,11 +307,35 @@ export function useGroupCallSession(params: {
             const type = msg.type as string;
             if (type === "group.roster") {
               const list = (msg.participants as RosterParticipant[]) ?? [];
-              setParticipants(list);
+              setRosterParticipants(list);
+              const hid = typeof msg.hostUserId === "string" && msg.hostUserId.trim() ? msg.hostUserId.trim() : null;
+              setHostUserId(hid);
+              const hands = msg.handRaisedUserIds;
+              setHandRaisedUserIds(
+                Array.isArray(hands) ? hands.filter((id): id is string => typeof id === "string").sort() : [],
+              );
               const ls = localStreamRef.current;
               if (ls) mesh.onRoster(ls, list);
               levelsRef.current.clear();
               bumpRemote((n) => n + 1);
+            } else if (type === "group.raise-hand") {
+              const uid = typeof msg.userId === "string" ? msg.userId : "";
+              const raised = msg.raised === true;
+              if (!uid) return;
+              setHandRaisedUserIds((prev) => {
+                const s = new Set(prev);
+                if (raised) s.add(uid);
+                else s.delete(uid);
+                return Array.from(s).sort();
+              });
+            } else if (type === "group.reaction") {
+              const fromUserId = typeof msg.fromUserId === "string" ? msg.fromUserId : "";
+              const emoji = typeof msg.emoji === "string" ? msg.emoji : "";
+              const label = typeof msg.label === "string" ? msg.label : "";
+              if (!fromUserId || !emoji) return;
+              const name =
+                participantsRef.current.find((p) => p.userId === fromUserId)?.displayName?.trim() || "Участник";
+              toast({ title: name, description: [emoji, label].filter(Boolean).join(" · ") });
             } else if (type === "group.signal") {
               const from = msg.fromUserId as string;
               const st = msg.signalType as string;
@@ -258,18 +354,31 @@ export function useGroupCallSession(params: {
                   bumpRemote((n) => n + 1);
                 });
             } else if (type === "group.error") {
-              setError((msg.message as string) || "Ошибка созвона");
+              const m = (msg.message as string) || "Ошибка созвона";
+              localStreamRef.current?.getTracks().forEach((t) => t.stop());
+              setLocalStream(null);
+              localStreamRef.current = null;
+              setError(m);
               setPhase("error");
             } else if (type === "group.transcript-segment" && msg.segment) {
-              onTranscriptSegment(msg.segment as {
-                id: string;
-                callId: string;
-                speakerUserId: string;
-                speakerDisplayName: string;
-                textNormalized: string;
-                isFinal: boolean;
-                createdAt: string;
-              });
+              const seg = msg.segment as Record<string, unknown>;
+              const id = typeof seg.id === "string" ? seg.id : "";
+              if (!id) return;
+              const normalized: GroupTranscriptSegment = {
+                id,
+                callId: typeof seg.callId === "string" && seg.callId ? seg.callId : roomId,
+                speakerUserId: typeof seg.speakerUserId === "string" ? seg.speakerUserId : "",
+                speakerDisplayName:
+                  typeof seg.speakerDisplayName === "string" && seg.speakerDisplayName.trim()
+                    ? seg.speakerDisplayName
+                    : "Участник",
+                textNormalized: pickTranscriptSegmentText(seg),
+                isFinal: seg.isFinal === true,
+                createdAt:
+                  typeof seg.createdAt === "string" && seg.createdAt ? seg.createdAt : new Date().toISOString(),
+                updatedAt: typeof seg.updatedAt === "string" ? seg.updatedAt : undefined,
+              };
+              onTranscriptSegment(normalized);
             } else if (type === "group.command-suggestion" && msg.suggestion) {
               onCommandSuggestion(msg.suggestion as {
                 id: string;
@@ -293,21 +402,42 @@ export function useGroupCallSession(params: {
           notifyEndedOnce();
         };
 
-        ws.onopen = () => {
-          ws.send(
-            JSON.stringify({
-              type: "group.join",
-              roomId,
-              displayName: myDisplayName,
-            }),
-          );
-          setPhase("active");
-        };
+        ws.send(
+          JSON.stringify({
+            type: "group.join",
+            roomId,
+            displayName: myDisplayName,
+          }),
+        );
+        setPhase("active");
       } catch (e) {
-        if (!cancelled) {
-          setError(mapMediaAccessError(e));
-          setPhase("error");
+        // Не гасим камеру при сбое после getUserMedia (токен/WS/502) — превью остаётся, треки остановит cleanup модалки.
+        const hadAcquiredMedia = localStreamRef.current != null;
+        if (!hadAcquiredMedia) {
+          localStreamRef.current?.getTracks().forEach((t) => t.stop());
+          localStreamRef.current = null;
+          setLocalStream(null);
         }
+        if (cancelled) return;
+        if (e instanceof CallTokenUnauthorizedError) {
+          setError("Сессия истекла. Войдите снова — иначе токен для созвона не выдаётся.");
+        } else if (e instanceof DOMException) {
+          setError(mapMediaAccessError(e));
+        } else if (e instanceof Error) {
+          const mediaNames = new Set([
+            "NotAllowedError",
+            "PermissionDeniedError",
+            "NotFoundError",
+            "NotReadableError",
+            "OverconstrainedError",
+            "NotSupportedError",
+          ]);
+          if (mediaNames.has(e.name)) setError(mapMediaAccessError(e));
+          else setError(e.message || "Не удалось войти в групповой созвон");
+        } else {
+          setError(mapMediaAccessError(e));
+        }
+        setPhase("error");
       }
     }
 
@@ -327,7 +457,19 @@ export function useGroupCallSession(params: {
       levelsRef.current.clear();
       stopLocalRecognition();
     };
-  }, [open, roomId, mediaType, myUserId, myDisplayName, sendWs, notifyEndedOnce, onCommandSuggestion, onTranscriptSegment, stopLocalRecognition]);
+  }, [
+    open,
+    roomId,
+    mediaType,
+    myUserId,
+    myDisplayName,
+    initialHostUserId,
+    sendWs,
+    notifyEndedOnce,
+    onCommandSuggestion,
+    onTranscriptSegment,
+    stopLocalRecognition,
+  ]);
 
   const STABLE_FOCUS_MS = 3000;
   const SILENCE_CLEAR_MS = 5000;
@@ -349,7 +491,7 @@ export function useGroupCallSession(params: {
           m.set(p.userId, reader);
         }
       }
-      const dom = pickDominantSpeaker(m, myUserId, localLevelRef.current);
+      const dom = pickDominantSpeaker(m, myUserId, localLevelRef.current, 0.06, activeSpeakerIdRef.current);
       setActiveSpeakerId((prev) => (prev === dom ? prev : dom));
 
       if (dom) {
@@ -371,6 +513,10 @@ export function useGroupCallSession(params: {
     }, 180);
     return () => clearInterval(t);
   }, [phase, localStream, participants, myUserId]);
+
+  useEffect(() => {
+    activeSpeakerIdRef.current = activeSpeakerId;
+  }, [activeSpeakerId]);
 
   const setMuted = useCallback((m: boolean) => {
     setIsMuted(m);
@@ -415,5 +561,9 @@ export function useGroupCallSession(params: {
     isScreenSharing,
     toggleScreenShare,
     localStreamRenderKey,
+    handRaisedUserIds,
+    setHandRaised,
+    sendGroupReaction,
+    hostUserId,
   };
 }

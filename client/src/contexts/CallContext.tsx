@@ -37,6 +37,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         networkQuality={call.networkQuality}
         supports={call.supports}
         isScreenShareActive={call.isScreenShareActive}
+        remoteScreenShareActive={call.remoteScreenShareActive}
         isCameraEnabled={call.isCameraEnabled}
         localRecordingState={call.localRecordingState}
         localRecordingElapsedMs={call.localRecordingElapsedMs}

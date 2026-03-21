@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
-import { ChevronLeft, MoreHorizontal, Bell, Link as LinkIcon, Grid, Bookmark, MessageSquare, Share2, Copy, Check, Settings, PenSquare, Trash2, Edit3, BarChart2, Plus, UserX, Eye } from "lucide-react";
+import { ChevronLeft, MoreHorizontal, Bookmark, MessageSquare, Share2, Copy, Settings, PenSquare, Trash2, Edit3, BarChart2, Plus, UserX, Eye, Play, Tag } from "lucide-react";
 import { useLocation, useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -29,12 +29,123 @@ import {
 } from "@/lib/stories";
 import { sendMessage, uploadChatMedia } from "@/lib/chat";
 import { UserAvatar } from "@/components/UserAvatar";
-import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 import { resolveUrl } from "@/lib/api-base";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { buildProfilePath } from "@/lib/profile-route";
-import { getStoryBeautyEnabled, subscribeStoryPrefsChange } from "@/lib/story-prefs";
 import { playLikeActionSound } from "@/lib/send-sound";
+import {
+  PulseProfileLayout,
+  PulseProfileIconButton,
+  PulseProfileAddContentStrip,
+  PulseProfileThemedPostCard,
+  PULSE_PROFILE_AVATAR_INNER_PX,
+  PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX,
+  usePulseProfileTheme,
+} from "@/features/profile/pulse-profile";
+
+function formatGenderChip(g: string | null | undefined): string | null {
+  if (!g) return null;
+  const x = g.toLowerCase();
+  if (x === "male" || x === "мужской") return "♂ Мужской";
+  if (x === "female" || x === "женский") return "♀ Женский";
+  if (x === "other" || x === "другое") return "Другое";
+  return null;
+}
+
+function formatBirthChip(iso: string | null | undefined): string | null {
+  if (!iso?.trim()) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const months = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"] as const;
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** Строка под заголовком поста в макете PULSE: «Видео · 2 дн» без «назад». */
+function pulseProfilePostMeta(post: FeedPost): string {
+  const url = firstPostMediaUrl(post);
+  const video = url ? isVideoMediaUrl(url) : false;
+  const photo = url && !video;
+  const t = formatPostTime(post.createdAt).replace(/\s*назад\s*$/i, "").trim();
+  if (video) return `Видео · ${t}`;
+  if (photo) return `Фото · ${t}`;
+  return t;
+}
+
+function firstPostMediaUrl(post: FeedPost): string {
+  const urls = post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : [];
+  const u = urls[0];
+  return u ? resolveUrl(u) : "";
+}
+
+function isVideoMediaUrl(url: string) {
+  return /\.(mp4|webm|mov|m4v|mkv)(\?|$)/i.test(url);
+}
+
+function PulseProfileCaption({ children }: { children: string }) {
+  const { th } = usePulseProfileTheme();
+  return (
+    <p
+      className="whitespace-pre-wrap text-[15px] leading-snug tracking-[-0.01em]"
+      style={{ color: th.text, opacity: 0.9 }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function ProfileMePulseActions({ onEdit, onShare }: { onEdit: () => void; onShare: () => void }) {
+  return (
+    <div className="flex gap-2">
+      <PulseProfileIconButton variant="primary" icon={Edit3} label="Редактировать" onClick={onEdit} />
+      <PulseProfileIconButton variant="surface" icon={BarChart2} label="Статистика" onClick={() => {}} />
+      <PulseProfileIconButton variant="surface" icon={Share2} label="Поделиться" onClick={onShare} />
+    </div>
+  );
+}
+
+function ProfileOtherPulseActions({
+  isFollowing,
+  followLoading,
+  onFollow,
+  onMessage,
+  canMessage,
+}: {
+  isFollowing: boolean;
+  followLoading: boolean;
+  onFollow: () => void;
+  onMessage: () => void;
+  canMessage: boolean;
+}) {
+  const { th } = usePulseProfileTheme();
+  return (
+    <div className="flex gap-2">
+      <button
+        type="button"
+        onClick={onFollow}
+        disabled={followLoading}
+        className="flex-1 flex items-center justify-center rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-transform disabled:opacity-60"
+        style={{
+          height: 40,
+          background: isFollowing ? th.surface : th.accentDim,
+          border: `1px solid ${isFollowing ? th.border : th.accentBorder}`,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: isFollowing ? th.text : th.accent }}>
+          {followLoading ? "…" : isFollowing ? "Подписки" : "Подписаться"}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onMessage}
+        disabled={!canMessage}
+        className="flex-1 flex items-center justify-center rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-transform disabled:opacity-50"
+        style={{ height: 40, background: th.surface, border: `1px solid ${th.border}` }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: th.textSub }}>Написать</span>
+      </button>
+    </div>
+  );
+}
 
 export default function UserProfile({ params: paramsProp }: { params?: { id: string } }) {
   const [, setLocation] = useLocation();
@@ -45,9 +156,11 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       : "";
   const id = (paramsProp?.id ?? paramsFromRoute?.id ?? fromPath) ?? "";
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"posts" | "saved">("posts");
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "tagged">("posts");
+  const [postViewMode, setPostViewMode] = useState<"list" | "grid">("list");
+  const [pulseAvatarMenuOpen, setPulseAvatarMenuOpen] = useState(false);
+  const [profileMoreOpen, setProfileMoreOpen] = useState(false);
+  const pulseScrollRef = useRef<HTMLDivElement>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
   const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
   const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
@@ -59,7 +172,6 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const [followLoading, setFollowLoading] = useState(false);
   const [addingStory, setAddingStory] = useState(false);
   const [coverLoadError, setCoverLoadError] = useState(false);
-  const [storyCircleBeauty, setStoryCircleBeauty] = useState(getStoryBeautyEnabled);
   const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
   const [pendingStoryFile, setPendingStoryFile] = useState<File | null>(null);
   const [showStoryDurationPicker, setShowStoryDurationPicker] = useState(false);
@@ -77,14 +189,6 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const isMe = id === "me";
   const authorId = isMe ? user?.id : apiProfile?.id;
   const authorIdReady = isMe ? (authLoading === false) : !!apiProfile;
-  const storyCircleFilter = storyCircleBeauty
-    ? "saturate(1.1) contrast(1.08) brightness(1.04) hue-rotate(-2deg)"
-    : "none";
-
-  useEffect(() => {
-    return subscribeStoryPrefsChange(() => setStoryCircleBeauty(getStoryBeautyEnabled()));
-  }, []);
-
   useEffect(() => {
     if (hasInvalidRouteId) setLocation("/posts");
   }, [hasInvalidRouteId, setLocation]);
@@ -203,15 +307,18 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
 
   const handleCopyLink = () => {
     const base = typeof window !== "undefined" ? window.location.origin : "";
-    const segment = apiProfile?.publicId != null ? String(apiProfile.publicId) : id;
+    const segment = isMe
+      ? String(user?.publicId ?? "me")
+      : apiProfile?.publicId != null
+        ? String(apiProfile.publicId)
+        : normalizedRouteId;
     const url = `${base}/profile/${segment}`;
     if (!navigator.clipboard?.writeText) {
       toast({ title: "Копирование недоступно", variant: "destructive" });
       return;
     }
     navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      toast({ title: "Ссылка скопирована" });
     }).catch(() => {
       toast({ title: "Не удалось скопировать ссылку", variant: "destructive" });
     });
@@ -445,7 +552,15 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       : apiProfile
         ? [apiProfile.displayName, apiProfile.surname].filter(Boolean).join(" ") || `ID ${apiProfile.publicId}`
         : "";
-  const usernameHandle = `@${String((isMe ? user?.publicId : apiProfile?.publicId) ?? id)}`;
+  const nicknameForPill = (
+    (isMe ? (user as { nickname?: string | null })?.nickname : apiProfile?.nickname) ?? ""
+  )
+    .trim()
+    .replace(/^@+/, "");
+  const usernamePillText =
+    nicknameForPill.length > 0
+      ? nicknameForPill
+      : String((isMe ? user?.publicId : apiProfile?.publicId) ?? id);
   const avatarUrl = isMe ? user?.avatarUrl : apiProfile?.avatarUrl;
   const profileCoverUrl = isMe ? (user as { coverUrl?: string | null })?.coverUrl : apiProfile?.coverUrl;
   const isCoverEnabled = isMe
@@ -454,487 +569,157 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
   const resolvedCoverUrl = profileCoverUrl ? resolveUrl(profileCoverUrl) : "";
   const hasCoverAsset = !!resolvedCoverUrl && !coverLoadError;
   const hasCover = isCoverEnabled && hasCoverAsset;
-  const storiesForStrip = (apiStories ?? []).filter((s) => s && (s as { id?: string }).id != null).map((s) => {
-    const thumb = (s as { thumbnailUrl?: string | null; mediaUrl?: string }).thumbnailUrl || (s as { mediaUrl?: string }).mediaUrl || "";
-    return {
-      id: (s as { id: string }).id,
-      thumb: thumb ? resolveUrl(thumb) : "",
-      title: formatPostTime((s as { createdAt?: string }).createdAt ?? ""),
-    };
-  });
 
-  return (
-    <div className="relative flex h-full min-h-0 min-w-0 w-full max-w-full overflow-x-hidden bg-background overscroll-y-none">
-      <PullToRefresh
-        onRefresh={handlePullRefresh}
-        className="min-h-0 flex-1"
-        disabled={showStoryDurationPicker || !!activeViewersStoryId || activeStoryIndex !== null}
-      >
-      <div className="flex flex-col min-h-0 overflow-visible pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
-      <div
-        className={cn(
-          "uix-content-x relative sticky top-0 z-40 h-14 border-b backdrop-blur",
-          hasCover ? "border-transparent bg-transparent text-white" : "border-border/50 bg-background/90 text-foreground"
-        )}
-      >
-        {hasCover && (
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/75 via-black/40 to-transparent" />
-        )}
-        <div className="relative z-10 flex h-full items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setLocation("/posts")}
-            className={cn(
-              "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
-              hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
-            )}
-            aria-label="Назад в ленту"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <p className={cn("truncate px-2 text-[16px] font-semibold", hasCover && "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]")}>
-            {usernameHandle}
-          </p>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={handleCopyLink}
-              className={cn(
-                "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
-                hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
-              )}
-              aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку на профиль"}
-            >
-              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-            </button>
-            {isMe ? (
-              <button
-                type="button"
-                onClick={() => setLocation("/settings")}
-                className={cn(
-                  "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
-                  hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
-                )}
-                aria-label="Настройки"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                className={cn(
-                  "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-colors",
-                  hasCover ? "text-white hover:bg-black/20" : "text-foreground hover:bg-secondary/70"
-                )}
-                aria-label="Ещё"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+  const publicIdStr = String((isMe ? user?.publicId : apiProfile?.publicId) ?? normalizedRouteId);
+  const genderChip = formatGenderChip(isMe ? (user as { gender?: string | null })?.gender : apiProfile?.gender);
+  const birthChip = isMe ? formatBirthChip((user as { birthDate?: string | null })?.birthDate) : null;
+  const profileLinkRaw = isMe
+    ? (user as { profileLink?: string | null })?.profileLink
+    : (apiProfile as { profileLink?: string | null })?.profileLink;
+  const profileLinkTrim = profileLinkRaw?.trim() ?? "";
+  const profileLinkHref =
+    profileLinkTrim && (profileLinkTrim.startsWith("http://") || profileLinkTrim.startsWith("https://"))
+      ? profileLinkTrim
+      : profileLinkTrim
+        ? `https://${profileLinkTrim}`
+        : null;
 
-      {hasCover ? (
-        <div className="-mt-14 relative h-36 w-full overflow-hidden border-b border-border/60 bg-muted/30">
-          <img
-            src={resolvedCoverUrl}
-            alt="Обложка профиля"
-            className="h-full w-full object-cover"
-            onError={() => setCoverLoadError(true)}
+  const handleAvatarMainClick = () => {
+    setPulseAvatarMenuOpen(false);
+    if (!isMe) {
+      setActiveStoryIndex(0);
+      return;
+    }
+    if (avatarLongPressHandledRef.current) {
+      avatarLongPressHandledRef.current = false;
+      return;
+    }
+    if (hasStories) {
+      setActiveStoryIndex(0);
+    } else {
+      storyFileInputRef.current?.click();
+    }
+  };
+
+  const renderPulsePostsContent = () => {
+    if (activeTab === "tagged") {
+      return (
+        <div className="px-2 py-6">
+          <ListEmptyState
+            icon={Tag}
+            title="Отметки"
+            description="Раздел в разработке — скоро здесь будут публикации, где вас отметили."
           />
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/28 via-black/12 to-transparent" />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/45 to-transparent" />
-          {isMe && (
-            <button
-              type="button"
-              onClick={() => setLocation("/profile/edit")}
-              className="absolute bottom-3 right-3 min-h-[var(--uix-touch-min)] rounded-full border border-white/25 bg-black/50 px-3 text-xs font-medium text-white backdrop-blur hover:bg-black/60"
-              aria-label="Изменить обложку"
-            >
-              Изменить обложку
-            </button>
-          )}
         </div>
-      ) : isMe ? (
-        <div className="uix-content-x mt-2">
-          <TapScaleButton
-            type="button"
-            onClick={() => setLocation("/profile/edit")}
-            haptic
-            subtle
-            className="flex w-full items-center justify-between rounded-2xl border border-dashed border-border bg-secondary/20 px-4 py-3 text-left hover:bg-secondary/35"
-            aria-label={hasCoverAsset ? "Включить обложку профиля" : "Добавить обложку в профиль"}
-          >
-            <div>
-              <p className="text-[13px] font-semibold text-foreground">
-                {hasCoverAsset ? "Обложка скрыта" : "Добавьте обложку профиля"}
-              </p>
-              <p className="text-[12px] text-muted-foreground">
-                {hasCoverAsset
-                  ? "Включите показ обложки в настройках профиля"
-                  : "С ней страница будет выглядеть живее и персональнее"}
-              </p>
-            </div>
-            <Plus className="h-5 w-5 text-muted-foreground" />
-          </TapScaleButton>
+      );
+    }
+    if (activeTab === "saved") {
+      return (
+        <div className="px-2 py-6">
+          <ListEmptyState
+            icon={Bookmark}
+            title="Сохранённое"
+            description="Здесь появятся сохранённые посты, когда мы подключим раздел к аккаунту."
+          />
         </div>
-      ) : null}
-
-      <div className={cn("uix-content-x pt-3", hasCover && "-mt-8 relative z-10")}>
-        <div className={cn("mb-3 flex items-center gap-4", hasCover && "rounded-2xl border border-border/60 bg-background/95 p-3 shadow-sm backdrop-blur")}>
-          <div
-            className={cn("relative group flex-shrink-0", isMe && "cursor-pointer")}
-            onClick={() => {
-              if (!isMe) {
-                setActiveStoryIndex(0);
-                return;
-              }
-              if (avatarLongPressHandledRef.current) {
-                avatarLongPressHandledRef.current = false;
-                return;
-              }
-              if (hasStories) {
-                setActiveStoryIndex(0);
-              } else {
-                storyFileInputRef.current?.click();
-              }
-            }}
-            onPointerDown={() => {
-              if (!isMe) return;
-              avatarLongPressHandledRef.current = false;
-              clearAvatarLongPress();
-              avatarLongPressTimerRef.current = setTimeout(() => {
-                avatarLongPressHandledRef.current = true;
-                storyFileInputRef.current?.click();
-              }, 420);
-            }}
-            onPointerUp={clearAvatarLongPress}
-            onPointerLeave={clearAvatarLongPress}
-            onPointerCancel={clearAvatarLongPress}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <div
-              className={cn(
-                "h-24 w-24 rounded-full p-[3px] transition-transform duration-200 group-active:scale-95",
-                hasStories ? "bg-gradient-to-tr from-primary via-violet-500 to-fuchsia-500 animate-story-ring" : "bg-border"
-              )}
-            >
-              <UserAvatar
-                avatarUrl={avatarUrl ?? undefined}
-                displayName={displayName}
-                seed={authorId ?? ""}
-                size={96}
-                className="h-full w-full rounded-full border-2 border-background object-cover"
-              />
-            </div>
-            {isMe && (
-              <div className="absolute bottom-0 right-0 rounded-full border-2 border-background bg-primary p-1 text-white pointer-events-none">
-                <Plus className="h-3 w-3" />
-              </div>
-            )}
-          </div>
-
-          <div className="flex min-w-0 flex-1 items-center justify-around gap-1 text-center">
-            <div className="min-w-[58px]">
-              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.postsCount ?? profilePosts.length) : (apiProfile?.postsCount ?? 0)}</p>
-              <p className="text-[12px] text-muted-foreground">Посты</p>
-            </div>
-            <TapScaleDiv
-              className="min-w-[58px] cursor-pointer rounded-lg py-1 -my-1 active:bg-secondary/50"
-              onClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/followers`)}
-              aria-label="Подписчики"
-            >
-              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followersCount ?? 0) : (apiProfile?.followersCount ?? 0)}</p>
-              <p className="text-[12px] text-muted-foreground">Подписчики</p>
-            </TapScaleDiv>
-            <TapScaleDiv
-              className="min-w-[58px] cursor-pointer rounded-lg py-1 -my-1 active:bg-secondary/50"
-              onClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/following`)}
-              aria-label="Подписки"
-            >
-              <p className="text-[18px] font-bold leading-tight">{isMe ? (myProfileStats?.followingCount ?? 0) : (apiProfile?.followingCount ?? 0)}</p>
-              <p className="text-[12px] text-muted-foreground">Подписки</p>
-            </TapScaleDiv>
-          </div>
-        </div>
-
-        <div className="mb-3">
-          <p className="text-[15px] font-semibold leading-tight">{displayName}</p>
-          <p className="mt-0.5 text-[12px] text-muted-foreground">
-            ID {(isMe ? user?.publicId : apiProfile?.publicId) ?? "—"}
-          </p>
-          {(isMe ? (user as { bio?: string | null })?.bio : apiProfile?.bio) ? (
-            <p className="mt-1.5 whitespace-pre-wrap text-[14px] leading-relaxed text-foreground/90">
-              {isMe ? (user as { bio?: string | null }).bio : apiProfile?.bio}
-            </p>
-          ) : null}
-          {(() => {
-            const link = isMe ? (user as { profileLink?: string | null })?.profileLink : (apiProfile as { profileLink?: string | null })?.profileLink;
-            const url = link?.trim();
-            if (!url) return null;
-            const href = url.startsWith("http://") || url.startsWith("https://") ? url : `https://${url}`;
+      );
+    }
+    if (activeTab === "posts" && postViewMode === "grid") {
+      return (
+        <div className="grid grid-cols-3 gap-0.5">
+          {profilePosts.map((post: FeedPost) => {
+            const thumbUrl = firstPostMediaUrl(post);
+            const video = thumbUrl && isVideoMediaUrl(thumbUrl);
+            const postHref = isMe
+              ? `/profile/me/post/${post.id}`
+              : `/profile/${encodeURIComponent(normalizedRouteId)}/post/${post.id}`;
             return (
-              <a href={href} target="_blank" rel="noopener noreferrer" className="mt-1.5 block break-all text-[14px] text-primary hover:underline">
-                {url}
-              </a>
-            );
-          })()}
-        </div>
-
-        {isMe ? (
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            <TapScaleButton
-              type="button"
-              onClick={() => setLocation("/profile/edit")}
-              haptic
-              className="min-h-[var(--uix-touch-min)] rounded-xl border border-border bg-secondary/70 px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-secondary"
-              aria-label="Редактировать профиль"
-            >
-              Изменить профиль
-            </TapScaleButton>
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              className="min-h-[var(--uix-touch-min)] rounded-xl border border-border bg-secondary/70 px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-secondary"
-              aria-label="Статистика"
-            >
-              Статистика
-            </TapScaleButton>
-          </div>
-        ) : (
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            <TapScaleButton
-              type="button"
-              onClick={handleFollowToggle}
-              disabled={followLoading}
-              haptic
-              className={cn(
-                "min-h-[var(--uix-touch-min)] rounded-xl px-3 py-2 text-[13px] font-semibold transition-colors disabled:opacity-70",
-                apiProfile?.isFollowing
-                  ? "border border-border bg-secondary/80 text-foreground hover:bg-secondary"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90"
-              )}
-              aria-label={apiProfile?.isFollowing ? "Отписаться" : "Подписаться"}
-            >
-              {followLoading ? "..." : apiProfile?.isFollowing ? "Подписки" : "Подписаться"}
-            </TapScaleButton>
-            <TapScaleButton
-              type="button"
-              onClick={handleStartChat}
-              disabled={!apiProfile?.canMessage}
-              haptic
-              className={cn(
-                "min-h-[var(--uix-touch-min)] rounded-xl border border-border px-3 py-2 text-[13px] font-semibold transition-colors",
-                apiProfile?.canMessage ? "bg-secondary/70 text-foreground hover:bg-secondary" : "bg-secondary/40 text-muted-foreground"
-              )}
-              aria-label="Написать сообщение"
-            >
-              Написать
-            </TapScaleButton>
-          </div>
-        )}
-      </div>
-
-      <div className="uix-content-x mb-3">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-[12px] font-semibold tracking-[0.02em] text-muted-foreground">Актуальное</p>
-          {isMe && (
-            <button
-              type="button"
-              onClick={() => storyFileInputRef.current?.click()}
-              className="rounded-full px-2 py-1 text-[12px] font-medium text-primary hover:bg-primary/10"
-            >
-              Добавить
-            </button>
-          )}
-        </div>
-        <div className="flex gap-3 overflow-x-auto hide-scrollbar pb-2">
-          {isMe && (
-            <>
-              <input
-                ref={storyFileInputRef}
-                type="file"
-                accept="image/*,video/*"
-                className="sr-only"
-                onChange={(e) => {
-                  const file = e.target.files?.[0] ?? null;
-                  e.target.value = "";
-                  handleStoryFileSelect(file);
-                }}
-              />
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => storyFileInputRef.current?.click()}
-                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && storyFileInputRef.current?.click()}
-                className={cn(
-                  "flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group min-w-[4rem]",
-                  addingStory && "opacity-60 pointer-events-none"
-                )}
+              <button
+                key={post.id}
+                type="button"
+                onClick={() => setLocation(postHref)}
+                className="relative aspect-square overflow-hidden bg-black/25 min-h-[var(--uix-touch-min)]"
+                aria-label="Открыть пост"
               >
-                <div className="w-16 h-16 rounded-full border-2 border-dashed border-border flex items-center justify-center group-active:scale-95 transition-transform duration-200 text-muted-foreground group-hover:text-primary group-hover:border-primary/50">
-                  {addingStory ? (
-                    <span className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Plus className="w-6 h-6" />
-                  )}
-                </div>
-                <span className="text-[12px] font-medium text-foreground/80">
-                  {addingStory ? "Загрузка…" : "Новое"}
-                </span>
-              </div>
-              {storiesForStrip.length === 0 && (
-                <div className="flex w-[208px] flex-shrink-0 items-center gap-2 rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-3 py-2">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-background">
-                    <Plus className="h-4 w-4 text-muted-foreground" />
+                {thumbUrl ? (
+                  <img src={thumbUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-white/40">
+                    <PenSquare className="w-6 h-6" />
                   </div>
-                  <div>
-                    <p className="text-[12px] font-semibold text-foreground">Добавьте первое актуальное</p>
-                    <p className="text-[11px] text-muted-foreground">Сториз закрепится в профиле</p>
+                )}
+                {video ? (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="rounded-full bg-black/50 p-1.5">
+                      <Play className="w-3 h-3 text-white" fill="white" />
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
-          )}
-          {storiesForStrip.map((story, idx) => (
-            <div 
-              key={story.id} 
-              className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
-              onClick={() => setActiveStoryIndex(idx)}
-            >
-              <div className="w-16 h-16 rounded-full p-[2px] border border-border group-active:scale-95 transition-transform duration-200">
-                <img 
-                  src={story.thumb} 
-                  alt={story.title} 
-                  style={{ filter: storyCircleFilter }}
-                  className="w-full h-full rounded-full object-cover border-2 border-background"
-                />
-              </div>
-              <span className="text-[12px] font-medium text-foreground/80">
-                {story.title}
-              </span>
-            </div>
-          ))}
-          {!isMe && storiesForStrip.length === 0 && (
-            <div className="flex w-full min-w-[220px] items-center justify-center rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-4 py-4 text-center">
-              <p className="text-[12px] text-muted-foreground">Пока нет актуальных историй</p>
-            </div>
-          )}
+                ) : null}
+              </button>
+            );
+          })}
         </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="sticky top-0 z-40 flex border-b border-border/50 bg-background/90 backdrop-blur-xl">
-        <button 
-          onClick={() => setActiveTab("posts")}
-          className={cn(
-            "relative flex flex-1 items-center justify-center py-3 transition-colors",
-            activeTab === "posts" ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
-          )}
-          aria-label="Публикации"
-        >
-          <Grid className="h-5 w-5" />
-          {activeTab === "posts" && (
-            <div className="absolute bottom-0 left-1/2 h-0.5 w-14 -translate-x-1/2 rounded-t-full bg-foreground" />
-          )}
-        </button>
-        <button 
-          onClick={() => setActiveTab("saved")}
-          className={cn(
-            "relative flex flex-1 items-center justify-center py-3 transition-colors",
-            activeTab === "saved" ? "text-foreground" : "text-muted-foreground hover:text-foreground/80"
-          )}
-          aria-label="Сохранённое"
-        >
-          <Bookmark className="h-5 w-5" />
-          {activeTab === "saved" && (
-            <div className="absolute bottom-0 left-1/2 h-0.5 w-14 -translate-x-1/2 rounded-t-full bg-foreground" />
-          )}
-        </button>
-      </div>
-
-      {/* Content Area */}
-      <div className="flex flex-col gap-2 px-2 pb-2">
-        {activeTab === "posts" && isMe && (
-          <TapScaleButton
-            type="button"
-            onClick={() => setLocation("/create-post")}
-            haptic
-            className="flex w-full items-center gap-3 rounded-2xl border border-border/60 bg-secondary/20 px-4 py-3 text-left transition-colors hover:bg-secondary/30"
-            aria-label="Создать новый пост"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[14px] font-semibold text-foreground">Поделиться новостью</p>
-              <p className="truncate text-[12px] text-muted-foreground">Текст, фото или видео</p>
-            </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-background text-primary">
-              <PenSquare className="h-5 w-5" />
-            </div>
-          </TapScaleButton>
-        )}
-
-        {activeTab === "posts" ? (
-          !authorId && authorIdReady === false ? (
-            <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
-              <div className="min-h-[160px]" />
-            </LoadingProgress>
-          ) : postsError ? (
-            <ErrorWithRetry
-              title="Не удалось загрузить посты"
-              description={postsErrorDetail?.message ?? "Проверьте интернет и попробуйте снова"}
-              retryLabel="Повторить"
-              onRetry={() => refetchPosts()}
-              className="min-h-[200px]"
-            />
-          ) : profilePosts.length === 0 && !postsFetching ? (
-            <ListEmptyState
-              icon={PenSquare}
-              title="Пока нет постов"
-              description={isMe ? "Напишите первый пост — он появится здесь" : "У пользователя пока нет постов"}
-              actionLabel={isMe ? "Написать пост" : undefined}
-              onAction={isMe ? () => setLocation("/create-post") : undefined}
-            />
-          ) : postsFetching && profilePosts.length === 0 ? (
-            <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
-              <div className="min-h-[160px]" />
-            </LoadingProgress>
-          ) : (
-          profilePosts.map((post: FeedPost) => {
-            const caption = post.text ?? "";
-            const hasCaption = caption.trim().length > 0;
-            return (
-            <article
+      );
+    }
+    if (!authorId && authorIdReady === false) {
+      return (
+        <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
+          <div className="min-h-[160px]" />
+        </LoadingProgress>
+      );
+    }
+    if (postsError) {
+      return (
+        <ErrorWithRetry
+          title="Не удалось загрузить посты"
+          description={postsErrorDetail?.message ?? "Проверьте интернет и попробуйте снова"}
+          retryLabel="Повторить"
+          onRetry={() => refetchPosts()}
+          className="min-h-[200px]"
+        />
+      );
+    }
+    if (profilePosts.length === 0 && !postsFetching) {
+      return (
+        <ListEmptyState
+          icon={PenSquare}
+          title="Пока нет постов"
+          description={isMe ? "Напишите первый пост — он появится здесь" : "У пользователя пока нет постов"}
+          actionLabel={isMe ? "Написать пост" : undefined}
+          onAction={isMe ? () => setLocation("/create-post") : undefined}
+        />
+      );
+    }
+    if (postsFetching && profilePosts.length === 0) {
+      return (
+        <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
+          <div className="min-h-[160px]" />
+        </LoadingProgress>
+      );
+    }
+    return (
+      <div className="flex flex-col py-2">
+        {profilePosts.map((post: FeedPost) => {
+          const caption = post.text ?? "";
+          const hasCaption = caption.trim().length > 0;
+          return (
+            <PulseProfileThemedPostCard
               key={post.id}
-              className="relative rounded-2xl border border-border/40 bg-card/90 p-[var(--uix-space-4)] shadow-sm ring-1 ring-black/[0.04] transition-colors duration-200 ease-out hover:bg-secondary/12"
-            >
-              <div className="flex items-start justify-between gap-[var(--uix-space-3)] mb-[var(--uix-space-3)]">
-                <div className="flex min-w-0 flex-1 items-center gap-[var(--uix-space-3)]">
-                  <UserAvatar
-                    avatarUrl={avatarUrl ?? undefined}
-                    displayName={displayName}
-                    seed={authorId ?? ""}
-                    size={40}
-                    className="h-10 w-10 shrink-0 rounded-xl ring-1 ring-border/30"
-                  />
-                  <div className="min-w-0">
-                    <h3 className="text-[15px] font-semibold leading-tight">{displayName}</h3>
-                    <p className="mt-[var(--uix-space-1)] uix-text-caption text-muted-foreground">
-                      {formatPostTime(post.createdAt)}
-                    </p>
-                  </div>
-                </div>
-
-                {isMe ? (
-                  <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
+              displayName={displayName}
+              avatarUrl={avatarUrl}
+              authorSeed={authorId ?? ""}
+              showVerified
+              metaLine={pulseProfilePostMeta(post)}
+              headerRight={
+                isMe ? (
+                  <div className="flex shrink-0 items-center gap-0.5">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setLocation(`/profile/me/post/${post.id}`);
                       }}
-                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      className="rounded-full p-2 text-current opacity-70 transition-colors hover:bg-black/10 hover:opacity-100 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
                       aria-label="Редактировать пост"
                     >
                       <Edit3 className="w-[18px] h-[18px]" />
@@ -947,7 +732,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                           deletePostMutation.mutate(post.id);
                         }
                       }}
-                      className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                      className="rounded-full p-2 text-current opacity-70 transition-colors hover:bg-red-500/15 hover:text-red-500 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
                       disabled={deletePostMutation.isPending}
                       aria-label="Удалить пост"
                     >
@@ -957,18 +742,16 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                 ) : (
                   <button
                     type="button"
-                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary/80 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center pt-0.5"
+                    className="shrink-0 p-2 rounded-full text-current opacity-70 hover:opacity-100 hover:bg-black/10 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
                     aria-label="Меню поста"
                   >
                     <MoreHorizontal className="w-5 h-5" />
                   </button>
-                )}
-              </div>
-
-              <div className={cn("flex flex-col min-w-0 mb-[var(--uix-space-3)]", hasCaption && "gap-[var(--uix-space-3)]")}>
-                {hasCaption && (
-                  <p className="whitespace-pre-wrap text-[15px] leading-snug tracking-[-0.01em] text-foreground">{caption}</p>
-                )}
+                )
+              }
+            >
+              <div className={cn("flex flex-col min-w-0 mb-3", hasCaption && "gap-3")}>
+                {hasCaption ? <PulseProfileCaption>{caption}</PulseProfileCaption> : null}
                 <PostMedia
                   mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
                   layout={post.mediaLayout ?? null}
@@ -977,85 +760,84 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
               </div>
 
               <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center gap-2 relative">
-                    {/* Reactions Pill */}
-                    <div
-                      className={cn(
-                        "flex cursor-pointer select-none items-center gap-1 rounded-full border px-3 py-1.5 text-[13px] transition-colors active:scale-95",
-                        (post.myReaction ?? null)
-                          ? "border-primary/30 bg-primary/10 text-foreground"
-                          : "border-border/30 text-secondary-foreground hover:bg-secondary/80"
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (post.myReaction) {
-                          reactionMutation.mutate({ postId: post.id, emoji: null });
-                        } else {
-                          setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
-                        }
-                      }}
-                    >
-                      {post.reactions?.map((reaction: {emoji: string, count: number}, i: number) => {
-                        if ((post.myReaction ?? null) === reaction.emoji) return null;
-                        return (
-                          <div key={i} className="flex items-center gap-1 pointer-events-none">
-                            <span className="text-base leading-none">{reaction.emoji}</span>
-                          </div>
-                        );
-                      })}
-                      {(post.myReaction ?? null) && (
-                        <div className="flex items-center gap-1 pointer-events-none">
-                          <span className="text-base leading-none">{post.myReaction}</span>
-                        </div>
-                      )}
-                      <span className="text-sm font-medium ml-1 pointer-events-none">
-                        {post.reactions?.reduce((sum: number, r: {count: number}) => sum + r.count, 0) ?? 0}
-                      </span>
-                    </div>
-                    
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
+                <div className="flex items-center gap-2 relative">
+                  <div
+                    className={cn(
+                      "flex cursor-pointer select-none items-center gap-1 rounded-full border px-3 py-1.5 text-[13px] transition-colors active:scale-95",
+                      (post.myReaction ?? null)
+                        ? "border-primary/30 bg-primary/10 text-foreground"
+                        : "border-border/30 text-secondary-foreground hover:bg-secondary/80"
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (post.myReaction) {
+                        reactionMutation.mutate({ postId: post.id, emoji: null });
+                      } else {
                         setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
-                      }}
-                      className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-full border bg-secondary transition-colors",
-                        showReactionPicker === post.id 
-                          ? "text-primary border-primary/50 bg-primary/10" 
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
-                      )}
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                    
-                    {showReactionPicker === post.id && (
-                      <div className="absolute bottom-full left-0 mb-2 bg-background/95 backdrop-blur-xl border border-border shadow-lg rounded-full px-3 py-2 flex items-center gap-2 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
-                        {EMOJIS.map(emoji => (
-                          <button
-                            key={emoji}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
-                              playLikeActionSound();
-                              reactionMutation.mutate({ postId: post.id, emoji });
-                              setShowReactionPicker(null);
-                            }}
-                            className="text-2xl hover:scale-125 transition-transform active:scale-95"
-                          >
-                            {emoji}
-                          </button>
-                        ))}
+                      }
+                    }}
+                  >
+                    {post.reactions?.map((reaction: { emoji: string; count: number }, i: number) => {
+                      if ((post.myReaction ?? null) === reaction.emoji) return null;
+                      return (
+                        <div key={i} className="flex items-center gap-1 pointer-events-none">
+                          <span className="text-base leading-none">{reaction.emoji}</span>
+                        </div>
+                      );
+                    })}
+                    {(post.myReaction ?? null) && (
+                      <div className="flex items-center gap-1 pointer-events-none">
+                        <span className="text-base leading-none">{post.myReaction}</span>
                       </div>
                     )}
-                    
-                    <button
-                      onClick={() => setActiveCommentPostId(post.id)}
-                      className="ml-auto flex items-center gap-1.5 rounded-full border border-border/30 bg-secondary px-3 py-1.5 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
-                    >
-                      <MessageSquare className="w-4 h-4" />
-                      {post.commentsCount}
-                    </button>
+                    <span className="text-sm font-medium ml-1 pointer-events-none">
+                      {post.reactions?.reduce((sum: number, r: { count: number }) => sum + r.count, 0) ?? 0}
+                    </span>
                   </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                    }}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full border bg-secondary transition-colors",
+                      showReactionPicker === post.id
+                        ? "text-primary border-primary/50 bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
+                    )}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+
+                  {showReactionPicker === post.id && (
+                    <div className="absolute bottom-full left-0 mb-2 bg-background/95 backdrop-blur-xl border border-border shadow-lg rounded-full px-3 py-2 flex items-center gap-2 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
+                      {EMOJIS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            playLikeActionSound();
+                            reactionMutation.mutate({ postId: post.id, emoji });
+                            setShowReactionPicker(null);
+                          }}
+                          className="text-2xl hover:scale-125 transition-transform active:scale-95"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => setActiveCommentPostId(post.id)}
+                    className="ml-auto flex items-center gap-1.5 rounded-full border border-border/30 bg-secondary px-3 py-1.5 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    {post.commentsCount}
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-1">
                   <button type="button" className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground" aria-label="Сохранить в избранное">
@@ -1066,32 +848,189 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
                   </button>
                 </div>
               </div>
-            </article>
-            );
-          })
-          )
-        ) : (
-          <div className="flex flex-col items-center justify-center p-12 text-center text-muted-foreground">
-            <Bookmark className="w-12 h-12 mb-4 opacity-20" />
-            <p>Здесь пока ничего нет</p>
-          </div>
-        )}
+            </PulseProfileThemedPostCard>
+          );
+        })}
       </div>
+    );
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 min-w-0 w-full max-w-full overflow-x-hidden overscroll-y-none">
+      <PullToRefresh
+        scrollRef={pulseScrollRef}
+        onRefresh={handlePullRefresh}
+        className="min-h-0 flex-1"
+        disabled={showStoryDurationPicker || !!activeViewersStoryId || activeStoryIndex !== null || profileMoreOpen}
+      >
+        {isMe ? (
+          <input
+            ref={storyFileInputRef}
+            type="file"
+            accept="image/*,video/*"
+            className="sr-only"
+            onChange={(e) => {
+              const file = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              handleStoryFileSelect(file);
+            }}
+          />
+        ) : null}
+        <PulseProfileLayout
+          scrollRef={pulseScrollRef}
+          coverUrl={hasCover ? resolvedCoverUrl : null}
+          onCoverError={() => setCoverLoadError(true)}
+          onBack={() => setLocation("/posts")}
+          onMore={() => setProfileMoreOpen(true)}
+          usernamePill={usernamePillText}
+          displayName={displayName}
+          showVerified
+          idChip={Number(publicIdStr) === 2 ? "Founder · ID 2" : `ID ${publicIdStr}`}
+          genderChip={genderChip}
+          birthChip={birthChip}
+          bio={isMe ? (user as { bio?: string | null })?.bio ?? null : apiProfile?.bio ?? null}
+          linkDisplay={profileLinkTrim || null}
+          linkHref={profileLinkHref}
+          postsCount={isMe ? (myProfileStats?.postsCount ?? profilePosts.length) : (apiProfile?.postsCount ?? 0)}
+          followersCount={isMe ? (myProfileStats?.followersCount ?? 0) : (apiProfile?.followersCount ?? 0)}
+          followingCount={isMe ? (myProfileStats?.followingCount ?? 0) : (apiProfile?.followingCount ?? 0)}
+          onFollowersClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/followers`)}
+          onFollowingClick={() => setLocation(`/profile/${encodeURIComponent(isMe ? "me" : normalizedRouteId)}/following`)}
+          actionRow={
+            isMe ? (
+              <ProfileMePulseActions onEdit={() => setLocation("/profile/edit")} onShare={handleCopyLink} />
+            ) : (
+              <ProfileOtherPulseActions
+                isFollowing={!!apiProfile?.isFollowing}
+                followLoading={followLoading}
+                onFollow={handleFollowToggle}
+                onMessage={handleStartChat}
+                canMessage={!!apiProfile?.canMessage}
+              />
+            )
+          }
+          onHighlightNew={isMe ? () => !addingStory && storyFileInputRef.current?.click() : undefined}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          postView={postViewMode}
+          onTogglePostView={() => setPostViewMode((v) => (v === "list" ? "grid" : "list"))}
+          addContentStrip={
+            isMe && activeTab === "posts" ? (
+              <PulseProfileAddContentStrip onClick={() => setLocation("/create-post")} disabled={false} />
+            ) : null
+          }
+          postsContent={renderPulsePostsContent()}
+          avatarInner={
+            <UserAvatar
+              avatarUrl={avatarUrl ?? undefined}
+              displayName={displayName}
+              seed={authorId ?? ""}
+              size={PULSE_PROFILE_AVATAR_INNER_PX}
+              cornerRadius={PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX}
+              className="h-full w-full object-cover"
+            />
+          }
+          onAvatarPress={handleAvatarMainClick}
+          onAvatarPointerDown={
+            isMe
+              ? () => {
+                  avatarLongPressHandledRef.current = false;
+                  clearAvatarLongPress();
+                  avatarLongPressTimerRef.current = setTimeout(() => {
+                    avatarLongPressHandledRef.current = true;
+                    storyFileInputRef.current?.click();
+                  }, 420);
+                }
+              : undefined
+          }
+          onAvatarPointerUp={isMe ? clearAvatarLongPress : undefined}
+          onAvatarPointerLeave={isMe ? clearAvatarLongPress : undefined}
+          onAvatarPointerCancel={isMe ? clearAvatarLongPress : undefined}
+          onAvatarContextMenu={isMe ? (e) => e.preventDefault() : undefined}
+          showAvatarPlus={isMe}
+          onAvatarPlusClick={() => setPulseAvatarMenuOpen((o) => !o)}
+          avatarMenuOpen={pulseAvatarMenuOpen}
+          onAvatarMenuOpenChange={setPulseAvatarMenuOpen}
+          avatarMenuItems={
+            isMe
+              ? [
+                  { emoji: "📖", label: "Добавить сторис", onClick: () => storyFileInputRef.current?.click() },
+                  { emoji: "✏️", label: "Редактировать профиль", onClick: () => setLocation("/profile/edit") },
+                  { emoji: "🖼", label: "Обложка профиля", onClick: () => setLocation("/profile/edit") },
+                ]
+              : []
+          }
+          hasStoryGradient={hasStories}
+        />
+      </PullToRefresh>
+
+      {profileMoreOpen ? (
+        <div
+          className="fixed inset-0 z-[300] flex items-end justify-center bg-black/50 px-3 pb-[max(var(--uix-space-3),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Действия профиля"
+          onClick={() => setProfileMoreOpen(false)}
+        >
+          <div
+            className="w-full max-w-[480px] rounded-2xl border border-border bg-background p-3 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-secondary min-h-[var(--uix-touch-min)]"
+              onClick={() => {
+                handleCopyLink();
+                setProfileMoreOpen(false);
+              }}
+            >
+              <Copy className="h-4 w-4 shrink-0" aria-hidden />
+              Скопировать ссылку
+            </button>
+            {isMe ? (
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-secondary min-h-[var(--uix-touch-min)]"
+                onClick={() => {
+                  setProfileMoreOpen(false);
+                  setLocation("/settings");
+                }}
+              >
+                <Settings className="h-4 w-4 shrink-0" aria-hidden />
+                Настройки
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mt-1 flex w-full items-center justify-center rounded-xl py-3 text-sm text-muted-foreground min-h-[var(--uix-touch-min)]"
+              onClick={() => setProfileMoreOpen(false)}
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {activeStoryIndex !== null && (apiStories ?? []).length > 0 && (
-        <StoryViewer 
+        <StoryViewer
           stories={(apiStories ?? []).map((s) => ({
             id: s.id,
             image: resolveUrl((s as { mediaUrl?: string }).mediaUrl ?? ""),
             userName: displayName,
-            userAvatar: resolveUrl(avatarUrl ?? "") || resolveUrl((apiStories?.[0] as { thumbnailUrl?: string; mediaUrl?: string })?.thumbnailUrl ?? (apiStories?.[0] as { mediaUrl?: string })?.mediaUrl ?? ""),
+            userAvatar:
+              resolveUrl(avatarUrl ?? "") ||
+              resolveUrl(
+                (apiStories?.[0] as { thumbnailUrl?: string; mediaUrl?: string })?.thumbnailUrl ??
+                  (apiStories?.[0] as { mediaUrl?: string })?.mediaUrl ??
+                  ""
+              ),
             time: formatPostTime((s as { createdAt?: string }).createdAt ?? ""),
             authorId: (s as { authorId?: string }).authorId ?? (authorId ?? undefined),
             expiresAt: (s as { expiresAt?: string }).expiresAt,
             likesCount: Number((s as { likesCount?: number }).likesCount ?? 0),
             isLiked: (s as { isLiked?: boolean }).isLiked === true,
-          }))} 
-          initialIndex={Math.min(activeStoryIndex, (apiStories ?? []).length - 1)} 
+          }))}
+          initialIndex={Math.min(activeStoryIndex, (apiStories ?? []).length - 1)}
           onClose={() => setActiveStoryIndex(null)}
           viewerUserId={user?.id}
           canSeeViewers={isMe}
@@ -1242,14 +1181,8 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         </div>
       )}
 
-      <CommentsModal 
-        isOpen={activeCommentPostId !== null} 
-        onClose={() => setActiveCommentPostId(null)} 
-        postId={activeCommentPostId} 
-      />
-
-      </div>
-      </PullToRefresh>
+      <CommentsModal isOpen={activeCommentPostId !== null} onClose={() => setActiveCommentPostId(null)} postId={activeCommentPostId} />
     </div>
   );
+
 }

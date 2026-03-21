@@ -95,9 +95,18 @@ function clearDisconnectCleanupTimer(userId: string): void {
   disconnectCleanupTimers.delete(userId);
 }
 
+export type ChatListUpdateOptions = {
+  /** Подсказка клиенту: воспроизвести звук входящего, если чат не открыт (в т.ч. до подписки на новый чат). */
+  incomingMessage?: { chatId: string; senderId: string };
+};
+
 /** Notify a user that their chat list changed (new chat, etc.) */
-export function notifyChatListUpdate(userId: string): void {
-  sendToUser(userId, { type: "chat-list-update" });
+export function notifyChatListUpdate(userId: string, options?: ChatListUpdateOptions): void {
+  const payload: Record<string, unknown> = { type: "chat-list-update" };
+  if (options?.incomingMessage) {
+    payload.incomingMessage = options.incomingMessage;
+  }
+  sendToUser(userId, payload);
 }
 
 export function attachCallWebSocket(httpServer: HttpServer): void {

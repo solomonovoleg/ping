@@ -28,12 +28,16 @@ import { attachGroupCallTransport, registerGroupCallRoutes } from "./group-calls
 import { registerSavedMessagesRoutes } from "./saved-messages/routes";
 import { registerTracksRoutes } from "./tracks/routes";
 import { registerAiChatRoutes } from "./ai-chat/routes";
+import { registerAiSearchRoutes } from "./ai-search";
 import { registerSpellcheckRoutes } from "./spellcheck/routes";
 import { registerLinkPreviewRoutes } from "./link-preview/routes";
 import { registerTranslateRoutes } from "./translate/routes";
 import { registerVibeRoutes } from "./vibe/routes";
 import { registerCallTranscriptRoutes } from "./call-transcripts/routes";
 import { ensureUserColumns, ensureChatVibeSchema, ensureCallTranscriptsSchema } from "./db";
+import { registerOpsPlatformPublicRoute } from "./admin/ops/platform.public-http";
+import { registerOpsUserReportsRoute } from "./admin/ops/reports.user-http";
+import { apiTrafficRecordMiddleware, createApiShieldLimiter } from "./middleware/api-shield";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 
@@ -73,6 +77,10 @@ export async function registerRoutes(
     next();
   });
 
+  const apiShieldLimiter = createApiShieldLimiter();
+  app.use(apiTrafficRecordMiddleware);
+  app.use("/api", apiShieldLimiter);
+
   registerCallRoutes(app);
   registerGroupCallRoutes(app);
   attachCallWebSocket(httpServer);
@@ -93,13 +101,17 @@ export async function registerRoutes(
     res.json({ serverTime: now.toISOString(), serverTimeMs: now.getTime() });
   });
 
+  registerOpsPlatformPublicRoute(app);
+
   registerAuthRoutes(app);
+  registerOpsUserReportsRoute(app);
   registerAdminRoutes(app);
   registerReferralRoutes(app);
   registerUsersRoutes(app);
   registerChatsRoutes(app);
   registerMessagesRoutes(app);
   registerAiChatRoutes(app);
+  registerAiSearchRoutes(app);
   registerSpellcheckRoutes(app);
   registerLinkPreviewRoutes(app);
   registerTranslateRoutes(app);

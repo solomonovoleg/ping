@@ -164,25 +164,29 @@ export default function CreatePost() {
   }, [selectionToast]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files?.length) {
+    const input = e.currentTarget;
+    // Сразу снимок FileList: после setState модалка размонтирует input — в части браузеров живой FileList
+    // становится пустым до завершения await в цикле ниже (симптом «файл как будто не выбран»).
+    const picked = Array.from(input.files ?? []);
+    input.value = "";
+    setShowMediaPicker(false);
+    if (!picked.length) {
       console.warn("[create-post] handleFileChange: no files selected");
       return;
     }
-    e.target.value = "";
     const currentLen = mediaCountRef.current;
-    const toAdd = Math.min(files.length, MAX_MEDIA - currentLen);
+    const toAdd = Math.min(picked.length, MAX_MEDIA - currentLen);
     if (toAdd <= 0) {
       toast({ title: `Достигнут лимит: ${MAX_MEDIA} медиа`, variant: "destructive" });
       return;
     }
-    if (files.length > toAdd) {
+    if (picked.length > toAdd) {
       toast({ title: `Можно добавить ещё только ${toAdd} медиа` });
     }
     setError("");
     const acceptedFiles: Array<{ file: File; kind: MediaKind; aspectRatio: number | null }> = [];
     for (let i = 0; i < toAdd; i++) {
-      const f = files[i];
+      const f = picked[i];
       const kind = detectKindFromFile(f);
       if (!kind) {
         console.warn("[create-post] file rejected (unknown kind):", f.name, f.type);
@@ -765,17 +769,19 @@ export default function CreatePost() {
                 Добавить медиа
               </TapScaleButton>
             ) : (
-              <label className="relative flex-1 flex items-center justify-center gap-[var(--uix-space-2)] rounded-2xl border border-border/45 bg-secondary/50 px-[var(--uix-space-4)] min-h-[48px] text-[14px] font-semibold transition-colors hover:bg-secondary/80 cursor-pointer">
+              <label className="relative flex flex-1 min-h-[48px] cursor-pointer items-center justify-center rounded-2xl border border-border/45 bg-secondary/50 px-[var(--uix-space-4)] text-[14px] font-semibold transition-colors hover:bg-secondary/80">
+                <span className="pointer-events-none flex items-center justify-center gap-[var(--uix-space-2)]">
+                  <Plus className="h-[18px] w-[18px] shrink-0 opacity-90" aria-hidden />
+                  Добавить медиа
+                </span>
                 <input
                   type="file"
-                  accept="image/*,video/*"
+                  accept="image/*,video/*,audio/*,.heic,.heif"
                   multiple
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
+                  className="absolute inset-0 z-[2] h-full w-full cursor-pointer opacity-0"
                   onChange={(e) => void handleFileChange(e)}
                   aria-label="Выбрать фото или видео"
                 />
-                <Plus className="h-[18px] w-[18px] shrink-0 opacity-90" />
-                Добавить медиа
               </label>
             )}
             <TapScaleButton
@@ -807,12 +813,12 @@ export default function CreatePost() {
           >
             <button
               type="button"
-              className="absolute inset-0 bg-black/45"
+              className="absolute inset-0 z-0 bg-black/45"
               onClick={() => setShowMediaPicker(false)}
               aria-label="Закрыть выбор медиа"
             />
             <motion.div
-              className="absolute inset-x-0 bottom-0 rounded-t-[1.25rem] border-t border-border/80 bg-background px-[var(--uix-space-3)] pt-[var(--uix-space-2)] pb-[calc(var(--uix-space-4)+env(safe-area-inset-bottom,0px))] shadow-2xl"
+              className="absolute inset-x-0 bottom-0 z-10 rounded-t-[1.25rem] border-t border-border/80 bg-background px-[var(--uix-space-3)] pt-[var(--uix-space-2)] pb-[calc(var(--uix-space-4)+env(safe-area-inset-bottom,0px))] shadow-2xl"
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
@@ -852,77 +858,73 @@ export default function CreatePost() {
                 Фото из галереи
               </TapScaleButton>
             ) : (
-              <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+              <label className="relative flex w-full min-h-[52px] cursor-pointer items-stretch rounded-xl text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+                <span className="pointer-events-none flex w-full items-center gap-[var(--uix-space-3)] px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
+                    <ImageIcon className="h-[18px] w-[18px]" />
+                  </span>
+                  Фото
+                </span>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.heic,.heif"
                   multiple
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                  onChange={(e) => {
-                    setShowMediaPicker(false);
-                    void handleFileChange(e);
-                  }}
+                  className="absolute inset-0 z-[2] h-full w-full cursor-pointer opacity-0"
+                  onChange={(e) => void handleFileChange(e)}
                   aria-label="Выбрать фото"
                 />
-                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-sky-600">
-                  <ImageIcon className="h-[18px] w-[18px]" />
-                </span>
-                Фото
               </label>
             )}
 
-            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-stretch rounded-xl text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+              <span className="pointer-events-none flex w-full items-center gap-[var(--uix-space-3)] px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
+                  <Video className="h-[18px] w-[18px]" />
+                </span>
+                Видео
+              </span>
               <input
                 type="file"
-                accept="video/*"
+                accept="video/*,.mp4,.mov,.webm,.m4v"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-[2] h-full w-full cursor-pointer opacity-0"
+                onChange={(e) => void handleFileChange(e)}
                 aria-label="Выбрать видео"
               />
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-500/10 text-purple-600">
-                <Video className="h-[18px] w-[18px]" />
-              </span>
-              Видео
             </label>
 
-            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-stretch rounded-xl text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+              <span className="pointer-events-none flex w-full items-center gap-[var(--uix-space-3)] px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
+                  <Mic className="h-[18px] w-[18px]" />
+                </span>
+                Аудио
+              </span>
               <input
                 type="file"
-                accept="audio/*"
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-[2] h-full w-full cursor-pointer opacity-0"
+                onChange={(e) => void handleFileChange(e)}
                 aria-label="Выбрать аудио"
               />
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-rose-600">
-                <Mic className="h-[18px] w-[18px]" />
-              </span>
-              Аудио
             </label>
 
-            <label className="relative flex w-full min-h-[52px] cursor-pointer items-center gap-[var(--uix-space-3)] rounded-xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+            <label className="relative flex w-full min-h-[52px] cursor-pointer items-stretch rounded-xl text-left text-[15px] hover:bg-secondary/60 active:bg-secondary/80">
+              <span className="pointer-events-none flex w-full items-center gap-[var(--uix-space-3)] px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+                <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <Files className="h-[18px] w-[18px]" />
+                </span>
+                Все файлы
+              </span>
               <input
                 type="file"
-                accept="image/*,video/*"
+                accept="image/*,video/*,audio/*,.heic,.heif,.mov,.m4v"
                 multiple
-                className="absolute inset-0 h-full w-full opacity-0 cursor-pointer"
-                onChange={(e) => {
-                  setShowMediaPicker(false);
-                  void handleFileChange(e);
-                }}
+                className="absolute inset-0 z-[2] h-full w-full cursor-pointer opacity-0"
+                onChange={(e) => void handleFileChange(e)}
                 aria-label="Выбрать файлы медиа"
               />
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Files className="h-[18px] w-[18px]" />
-              </span>
-              Все файлы
             </label>
             </div>
 

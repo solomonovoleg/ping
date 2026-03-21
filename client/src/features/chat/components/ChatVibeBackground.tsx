@@ -1,18 +1,21 @@
 import { motion, AnimatePresence } from "framer-motion";
 import {
   usePrefersReducedMotion,
-  DURATION_EMPHASIS_MS,
+  DURATION_CHAT_VIBE_CROSSFADE_MS,
   DURATION_FAST_MS,
-  EASING_OUT_BEZIER,
+  EASING_CHAT_VIBE_BEZIER,
 } from "@/lib/motion";
 import type { VibeThemeTokens, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getIntensityScale } from "@/lib/chat-vibe-prefs";
+import { PULSE_THEME_ACCENTS } from "@/lib/chat-vibe-themes";
 import { cn } from "@/lib/utils";
+import { ChatPulseMoodPattern } from "./ChatPulseMoodPattern";
 
 type Props = {
   theme: VibeThemeCode;
   tokens: VibeThemeTokens;
   isActive: boolean;
+  isDarkSurface: boolean;
 };
 
 const INTENSITY_OPACITY: Record<string, number> = {
@@ -29,7 +32,7 @@ const NOISE_TILE = encodeURIComponent(
   </svg>`,
 );
 
-export function ChatVibeBackground({ theme, tokens, isActive }: Props) {
+export function ChatVibeBackground({ theme, tokens, isActive, isDarkSurface }: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const scale = getIntensityScale();
 
@@ -37,8 +40,10 @@ export function ChatVibeBackground({ theme, tokens, isActive }: Props) {
 
   const opacity = scale <= 0.4 ? INTENSITY_OPACITY.low : scale <= 0.7 ? INTENSITY_OPACITY.medium : INTENSITY_OPACITY.high;
   const grainOpacity = Math.min(0.055 + scale * 0.025, 0.11);
-  const crossfadeSec = reducedMotion ? DURATION_FAST_MS / 1000 : DURATION_EMPHASIS_MS / 1000;
+  const crossfadeSec = reducedMotion ? DURATION_FAST_MS / 1000 : DURATION_CHAT_VIBE_CROSSFADE_MS / 1000;
   const grainDriftSec = reducedMotion ? 0 : 14;
+  const patternOpacity = Math.min(0.55 + scale * 0.2, 0.92);
+  const accent = PULSE_THEME_ACCENTS[theme] ?? PULSE_THEME_ACCENTS.casual;
 
   return (
     <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden>
@@ -52,13 +57,35 @@ export function ChatVibeBackground({ theme, tokens, isActive }: Props) {
           transition={
             reducedMotion
               ? { duration: 0 }
-              : { duration: crossfadeSec, ease: EASING_OUT_BEZIER }
+              : { duration: crossfadeSec, ease: EASING_CHAT_VIBE_BEZIER }
           }
           style={{
             background: `radial-gradient(ellipse 120% 80% at 50% 28%, ${tokens.backgroundTint} 0%, transparent 68%),
               radial-gradient(ellipse 90% 55% at 80% 85%, ${tokens.backgroundTint} 0%, transparent 55%)`,
           }}
         />
+      </AnimatePresence>
+
+      <AnimatePresence mode="sync" initial={false}>
+        <motion.div
+          key={`pat-${theme}`}
+          className="absolute inset-0"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: patternOpacity }}
+          exit={{ opacity: 0 }}
+          transition={
+            reducedMotion
+              ? { duration: 0 }
+              : { duration: crossfadeSec, ease: EASING_CHAT_VIBE_BEZIER }
+          }
+        >
+          <ChatPulseMoodPattern
+            theme={theme}
+            accentColor={accent}
+            isDarkSurface={isDarkSurface}
+            reducedMotion={reducedMotion}
+          />
+        </motion.div>
       </AnimatePresence>
 
       {/* Текстура поверх градиента */}

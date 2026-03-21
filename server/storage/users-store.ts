@@ -33,6 +33,7 @@ export function createUsersStore(): UsersStore {
     if (!lower) return false;
     if (u.phone.toLowerCase().includes(lower) || u.phone.replace(/\D/g, "").includes(lower.replace(/\D/g, ""))) return true;
     if (String(u.publicId) === lower || String(u.publicId).startsWith(lower)) return true;
+    if (u.nickname && u.nickname.toLowerCase().includes(lower)) return true;
     const name = [u.displayName, u.surname].filter(Boolean).join(" ").toLowerCase();
     if (name && name.includes(lower)) return true;
     return false;
@@ -79,6 +80,7 @@ export function createUsersStore(): UsersStore {
       if (!user) return;
       if (data.displayName !== undefined) (user as User).displayName = data.displayName;
       if (data.surname !== undefined) (user as User).surname = data.surname;
+      if (data.nickname !== undefined) (user as User).nickname = data.nickname;
       if (data.gender !== undefined) (user as User).gender = data.gender;
       if (data.birthDate !== undefined) (user as User).birthDate = data.birthDate;
       if (data.avatarUrl !== undefined) (user as User).avatarUrl = data.avatarUrl;

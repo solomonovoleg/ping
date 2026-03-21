@@ -253,7 +253,7 @@ const ChatRow = memo(function ChatRow({
 });
 
 export default function Chats() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -344,7 +344,7 @@ export default function Chats() {
       Object.values(voiceTimeoutsRef.current).forEach(clearTimeout);
       voiceTimeoutsRef.current = {};
     };
-  }, [chats, user?.id, subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate]);
+  }, [chats, user?.id, location, subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate]);
 
   const { data: contactsList = [] } = useQuery({
     queryKey: ["contacts", "list"],

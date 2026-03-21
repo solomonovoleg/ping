@@ -38,6 +38,9 @@ export function pickDominantSpeaker(
   localUserId: string,
   localLevel: () => number,
   threshold = 0.06,
+  /** Предыдущий «говорящий» — не переключаемся без заметного перевеса (меньше дёрганья UI / ducking). */
+  previous: string | null = null,
+  stickiness = 0.042,
 ): string | null {
   let best: string | null = null;
   let bestV = threshold;
@@ -53,5 +56,10 @@ export function pickDominantSpeaker(
       bestV = v;
     }
   });
+
+  if (!previous || !best || previous === best) return best;
+
+  const prevV = previous === localUserId ? localLevel() : levels.get(previous)?.() ?? 0;
+  if (prevV >= threshold && bestV <= prevV + stickiness) return previous;
   return best;
 }

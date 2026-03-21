@@ -15,6 +15,8 @@ export type AuthUser = {
   phone: string;
   displayName: string | null;
   surname: string | null;
+  /** Плашка @ в шапке профиля */
+  nickname?: string | null;
   gender: string | null;
   birthDate: string | null;
   avatarUrl: string | null;
@@ -41,6 +43,7 @@ function userFromMePayload(data: unknown): AuthUser | null {
     phone: d.phone,
     displayName: (d.displayName as string | null | undefined) ?? null,
     surname: (d.surname as string | null | undefined) ?? null,
+    nickname: (d.nickname as string | null | undefined) ?? null,
     gender: (d.gender as string | null | undefined) ?? null,
     birthDate: (d.birthDate as string | null | undefined) ?? null,
     avatarUrl: (d.avatarUrl as string | null | undefined) ?? null,
@@ -282,6 +285,7 @@ export async function patchVibeSettings(partial: {
 export async function updateProfile(data: {
   displayName?: string;
   surname?: string;
+  nickname?: string | null;
   gender?: string;
   birthDate?: string | null;
   avatarUrl?: string;

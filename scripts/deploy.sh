@@ -61,15 +61,26 @@ NPM_CONFIG_PRODUCTION=false npm ci --legacy-peer-deps 2>/dev/null || NPM_CONFIG_
 # Для звонков/клиента: переменные VITE_* уже экспортированы выше.
 npm run build
 
+# Снимок dist: build делает rm -rf dist в начале; параллельная сборка во время rsync даёт ENOENT на файлах.
+DEPLOY_DIST_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/ping-moot-dist.XXXXXX")
+trap 'rm -rf "$DEPLOY_DIST_STAGE"' EXIT
+cp -a dist/. "$DEPLOY_DIST_STAGE/"
+echo "=== Снимок dist для загрузки: $DEPLOY_DIST_STAGE ==="
+
 echo "=== Загрузка на $SERVER_USER@$SERVER_HOST ==="
-run_ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p $REMOTE_DIR"
+run_ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p $REMOTE_DIR $REMOTE_DIR/dist"
+# exclude dist + P dist: иначе --delete может снести удалённый dist, раз его нет в списке источника
 run_rsync -avz --delete \
   --exclude 'node_modules' \
   --exclude '.git' \
   --exclude '.env' \
   --exclude 'uploads' \
+  --exclude 'dist' \
   --filter 'P uploads/' \
+  --filter 'P dist/' \
   . "$SERVER_USER@$SERVER_HOST:$REMOTE_DIR/"
+echo "=== Загрузка dist (снимок после сборки) ==="
+run_rsync -avz --delete "$DEPLOY_DIST_STAGE/" "$SERVER_USER@$SERVER_HOST:$REMOTE_DIR/dist/"
 
 # .env на сервере: единственный источник правды — deploy.env. Если в deploy.env задан DATABASE_URL,
 # при каждом деплое перезаписываем .env на сервере, чтобы не править его вручную и не путаться.

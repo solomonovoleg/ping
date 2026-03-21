@@ -17,7 +17,7 @@ import { setDraft, clearDraft } from "@/lib/chat-drafts";
 import { useToast } from "@/hooks/use-toast";
 
 import { isNative, takePhotoFromCamera, pickPhotoFromGallery, triggerLightHaptic } from "@/lib/capacitor-native";
-import { playSendSound } from "@/lib/send-sound";
+import { playSendSound, playIncomingChatMessageSound } from "@/lib/send-sound";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { NAME_MAX_LENGTH } from "@shared/schema";
@@ -53,6 +53,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useChatVibe } from "@/features/chat/hooks/useChatVibe";
 import { ChatVibeBackground } from "@/features/chat/components/ChatVibeBackground";
 import { ChatVibeOverlay } from "@/features/chat/components/ChatVibeOverlay";
+import { ChatHeaderStoryRing } from "@/features/chat/components/ChatHeaderStoryRing";
+import {
+  ChatComposerSttButton,
+  ChatComposerSttPhaseOverlay,
+} from "@/features/chat/components/ChatComposerSttButton";
+import { PULSE_THEME_ACCENTS } from "@/lib/chat-vibe-themes";
+import { PulseDmComposerMedia } from "@/features/chat/components/pulse/PulseDmComposerMedia";
 
 type ChatPlatformKind = "ios" | "android" | "web";
 type ChatBackgroundPreset = "matte_black" | "velvet_gradient" | "obsidian_black";
@@ -176,7 +183,7 @@ function AIChatView() {
   };
 
   return (
-    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)] pb-[var(--uix-nav-bottom)] uix-screen">
+    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)] pb-[var(--uix-chat-bottom-pad)] uix-screen">
       <header className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center justify-between rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76", spacing.headerYClass)}>
         <div className="flex min-w-0 items-center gap-2">
           <TapScaleButton
@@ -285,7 +292,7 @@ function AIChatView() {
         </div>
       </main>
 
-      <section className={cn("uix-content-x absolute inset-x-0 bottom-[var(--uix-nav-bottom)] z-20 pb-4 pb-safe", spacing.bottomBarYClass)}>
+      <section className={cn("uix-content-x absolute inset-x-0 bottom-0 z-20 pb-4 pb-safe", spacing.bottomBarYClass)}>
         <div className="mx-auto w-full max-w-4xl">
           <div className="flex items-end gap-2 rounded-3xl border border-white/30 bg-white/75 p-2 shadow-[0_12px_40px_rgba(70,71,211,0.12)] backdrop-blur-2xl dark:border-slate-700/40 dark:bg-slate-900/80">
             <textarea
@@ -323,9 +330,11 @@ function AIChatView() {
 function RecordingStrip({
   durationSec,
   onStop,
+  className,
 }: {
   durationSec: number;
   onStop: () => void;
+  className?: string;
 }) {
   const reduced = usePrefersReducedMotion();
   const m = Math.floor(durationSec / 60);
@@ -334,7 +343,10 @@ function RecordingStrip({
   const bars = 7;
   return (
     <motion.div
-      className="mb-2 overflow-hidden rounded-2xl border border-red-400/40 bg-gradient-to-r from-red-500/20 via-rose-500/15 to-red-600/25 dark:from-red-600/25 dark:via-rose-600/20 dark:to-red-700/30 shadow-[0_0_24px_-4px_rgba(239,68,68,0.35)] dark:shadow-[0_0_28px_-4px_rgba(239,68,68,0.4)]"
+      className={cn(
+        "chat-composer-recording-strip mb-2 overflow-hidden rounded-2xl border border-red-400/40 bg-gradient-to-r from-red-500/20 via-rose-500/15 to-red-600/25 dark:from-red-600/25 dark:via-rose-600/20 dark:to-red-700/30 shadow-[0_0_24px_-4px_rgba(239,68,68,0.35)] dark:shadow-[0_0_28px_-4px_rgba(239,68,68,0.4)]",
+        className,
+      )}
       initial={reduced ? false : { opacity: 0, y: 8, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
@@ -417,6 +429,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const { user } = useAuth();
   const { toast } = useToast();
   const spacing = useChatSpacingPreset();
+  const isMobile = useIsMobile();
   const reducedMotion = usePrefersReducedMotion();
   if (chatIdParam === AI_CHAT_ID) return <AIChatView />;
 
@@ -452,7 +465,6 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   });
 
   useMessageReadOnVisible(scrollContainerRef, chatId, messages, user?.id ?? null);
-  const vibe = useChatVibe(chat?.type === "dm" ? chatId : undefined);
 
   const send = useSendMessage({ chatId, folderId: currentFolderId, setMessages, user });
   sendDraftRef.current = send;
@@ -611,6 +623,10 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   const pendingCursorRef = useRef<number | null>(null);
   const [showAttachSource, setShowAttachSource] = useState(false);
   const [draftRestoredHint, setDraftRestoredHint] = useState(false);
+  const [composerSttUi, setComposerSttUi] = useState<{ phase: "idle" | "listening" | "transcribing"; liveLine: string }>({
+    phase: "idle",
+    liveLine: "",
+  });
   const [loadingSlow, setLoadingSlow] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [unseenIncomingCount, setUnseenIncomingCount] = useState(0);
@@ -633,10 +649,15 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     const root = document.documentElement;
     return root.classList.contains("dark") || root.classList.contains("theme-fitfin");
   });
+  const vibe = useChatVibe(chat?.type === "dm" ? chatId : undefined, {
+    surface: isDarkTheme ? "dark" : "light",
+  });
   const attachSourceRef = useRef<HTMLDivElement>(null);
   const chatThemeMenuRef = useRef<HTMLDivElement>(null);
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const composerBarRef = useRef<HTMLDivElement>(null);
+  const [composerBarHeightPx, setComposerBarHeightPx] = useState(0);
   const lastMessageIdRef = useRef<string>("");
   const { startCall } = useCallContext();
   const groupCallCtx = useGroupCallContext();
@@ -644,7 +665,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     roomId: string;
     mediaType: GroupCallMedia;
     participantCount: number;
+    hostUserId: string;
   } | null>(null);
+  const lastGroupCallNotifyRoomRef = useRef<string | null>(null);
 
   const startCallUnlessInGroup = useCallback(
     (
@@ -689,6 +712,23 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   }, []);
 
   useEffect(() => {
+    if (loading) return;
+    const bar = composerBarRef.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height ?? 0;
+      setComposerBarHeightPx(h > 0 ? Math.ceil(h) : 0);
+    });
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [loading, chatId]);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => syncComposerHeight());
+    return () => cancelAnimationFrame(id);
+  }, [send.message, syncComposerHeight]);
+
+  useEffect(() => {
     if (!loading) {
       setLoadingSlow(false);
       return;
@@ -724,20 +764,35 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     const tick = () => {
       void fetchActiveGroupCall(chatId).then((r) => {
         if (!alive) return;
-        if (r.active && r.participantCount > 0) {
-          setGroupCallLobby({ roomId: r.roomId, mediaType: r.mediaType, participantCount: r.participantCount });
+        if (r.active) {
+          setGroupCallLobby({
+            roomId: r.roomId,
+            mediaType: r.mediaType,
+            participantCount: r.participantCount,
+            hostUserId: typeof r.hostUserId === "string" ? r.hostUserId : "",
+          });
         } else {
           setGroupCallLobby(null);
         }
       });
     };
     tick();
-    const id = window.setInterval(tick, 14_000);
+    const id = window.setInterval(tick, 4_000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
   }, [chatId, chat?.type, groupCallCtx.active]);
+
+  useEffect(() => {
+    if (!groupCallLobby) {
+      lastGroupCallNotifyRoomRef.current = null;
+      return;
+    }
+    if (lastGroupCallNotifyRoomRef.current === groupCallLobby.roomId) return;
+    lastGroupCallNotifyRoomRef.current = groupCallLobby.roomId;
+    playIncomingChatMessageSound();
+  }, [groupCallLobby]);
 
   useEffect(() => {
     if (!showAttachSource) return;
@@ -908,13 +963,40 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
     return map;
   }, [messageListItems]);
   const selectedChatBgPreset = CHAT_BG_PRESETS.find((preset) => preset.id === chatBgPreset) ?? CHAT_BG_PRESETS[0];
-  const chatSurfaceClassName = isDarkTheme
-    ? selectedChatBgPreset.darkBgClassName
-    : "bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)]";
+  const isDmChat = chat?.type === "dm";
+  const chatSurfaceClassName =
+    isDmChat && isDarkTheme
+      ? "bg-[#080810]"
+      : isDmChat && !isDarkTheme
+        ? "bg-[#eef1fb]"
+        : isDarkTheme
+          ? selectedChatBgPreset.darkBgClassName
+          : "bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)]";
+  const dmStatusLine = chat?.type === "dm" ? formatLastSeen(chat.otherMember?.lastSeenAt ?? null) : null;
+  /** Личный чат на мобиле: хедер и композер как в pulse-template (MobileChatDark / DESIGN_RULES) */
+  const pulseDmMobileChrome = isDmChat && isMobile && isDarkTheme;
+  const pulseDmLightMobileChrome = isDmChat && isMobile && !isDarkTheme;
+  const dmPulseAccent = vibe.isActive ? PULSE_THEME_ACCENTS[vibe.theme] : "#818cf8";
+  const headerPulseMobileDm = pulseDmMobileChrome || pulseDmLightMobileChrome;
+  /** DOM как в pulse-template: скрепка | капсула (поле + !) | круг видео | микрофон */
+  const pulseDmComposerLikeTemplate = headerPulseMobileDm && isDmChat;
+  const messageListPaddingBottom = useMemo(() => {
+    if (composerBarHeightPx > 0) {
+      return `calc(${composerBarHeightPx + 8}px + env(safe-area-inset-bottom, 0px))`;
+    }
+    return spacing.chatListBottomPad;
+  }, [composerBarHeightPx, spacing.chatListBottomPad]);
+
+  const pulseDmMediaActive =
+    pulseDmComposerLikeTemplate &&
+    (send.voiceState === "recording" ||
+      Boolean(send.voicePreviewUrl) ||
+      send.videoNoteState === "recording" ||
+      send.videoNoteState === "preview");
 
   if (loading) {
     return (
-      <div className={cn("absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-nav-bottom)] uix-screen", chatSurfaceClassName)}>
+      <div className={cn("absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-chat-bottom-pad)] uix-screen", chatSurfaceClassName)}>
         <div className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center gap-2 rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76", spacing.headerYClass)}>
           <button
             type="button"
@@ -979,17 +1061,55 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
   }
 
   return (
-    <div className={cn("absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-nav-bottom)] uix-screen", chatSurfaceClassName)}>
+    <div
+      className={cn(
+        "absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-chat-bottom-pad)] uix-screen",
+        chatSurfaceClassName,
+        pulseDmMobileChrome && "chat-pulse-dm-mobile",
+        pulseDmLightMobileChrome && "chat-pulse-dm-light-mobile",
+      )}
+    >
       {/* Header */}
-      <div className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center gap-1 rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76 px-2 sm:px-3", spacing.headerYClass)}>
+      <div
+        className={cn(
+          "sticky top-0 z-20 flex items-center gap-1 backdrop-blur-xl",
+          headerPulseMobileDm
+            ? "uix-content-x relative mx-0 mt-0 w-full gap-2 border-0 px-3 py-2 shadow-none rounded-none pt-safe-offset-2"
+            : "uix-content-x mx-1 mt-1 rounded-[20px] border pt-safe-offset-2 px-2 sm:px-3",
+          !headerPulseMobileDm &&
+            (chat.type === "dm" && isDarkTheme
+              ? "border-white/[0.08] bg-[#12121c]/92 shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+              : "border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] dark:border-slate-700/45 dark:bg-slate-900/76"),
+          spacing.headerYClass,
+        )}
+      >
+        {pulseDmMobileChrome ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-0 bg-[rgba(8,8,16,0.94)] backdrop-blur-[20px] border-b border-white/[0.07]"
+            aria-hidden
+          />
+        ) : null}
+        {pulseDmLightMobileChrome ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-0 border-b border-indigo-500/10 bg-white/90 backdrop-blur-xl"
+            aria-hidden
+          />
+        ) : null}
         <button
           type="button"
           onClick={() => setLocation("/")}
-          className="-ml-1 p-2 rounded-full text-primary/90 hover:bg-primary/10 transition-colors flex items-center flex-shrink-0 min-h-[40px] min-w-[40px] sm:min-w-0"
+          className={cn(
+            "-ml-1 flex min-h-[40px] min-w-[40px] flex-shrink-0 items-center justify-center rounded-full p-2 transition-colors sm:min-w-0",
+            headerPulseMobileDm && "relative z-[1]",
+            pulseDmMobileChrome && "hover:bg-white/[0.07]",
+            pulseDmLightMobileChrome && "text-indigo-600 hover:bg-indigo-500/10",
+            !headerPulseMobileDm && "text-primary/90 hover:bg-primary/10",
+          )}
+          style={pulseDmMobileChrome ? { color: dmPulseAccent } : undefined}
           aria-label="Назад к чатам"
         >
-          <ChevronLeft className="w-6 h-6" />
-          <span className="text-[17px] hidden sm:inline">Назад</span>
+          <ChevronLeft className="h-6 w-6" />
+          <span className="hidden text-[17px] sm:inline">Назад</span>
         </button>
         <button
           type="button"
@@ -1006,7 +1126,13 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               setShowGroupParticipants(true);
             }
           }}
-          className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden text-left rounded-lg hover:bg-primary/5 active:bg-primary/10 transition-colors -mx-1 px-1 py-1"
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-1 py-1 text-left -mx-1 transition-colors",
+            headerPulseMobileDm && "relative z-[1]",
+            pulseDmMobileChrome && "hover:bg-white/[0.06] active:bg-white/[0.09]",
+            pulseDmLightMobileChrome && "hover:bg-indigo-500/[0.07] active:bg-indigo-500/10",
+            !headerPulseMobileDm && "hover:bg-primary/5 active:bg-primary/10",
+          )}
           title={chat.type === "dm" && chat.otherMember ? "Открыть профиль" : chat.type === "group" ? "Участники группы" : undefined}
           aria-label={chat.type === "dm" && chat.otherMember ? `Профиль: ${displayName}` : chat.type === "group" ? "Участники группы" : undefined}
         >
@@ -1032,29 +1158,67 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               </div>
             )
           ) : (
-            <UserAvatar
-              avatarUrl={chat.otherMember?.avatarUrl}
-              displayName={displayName}
-              seed={chat.otherMember?.id ?? chat.id}
-              size={40}
-              className="w-10 h-10 rounded-full flex-shrink-0"
-            />
+            <ChatHeaderStoryRing
+              accentColor={isDmChat && vibe.isActive ? PULSE_THEME_ACCENTS[vibe.theme] : "#6366f1"}
+              className="h-10 w-10"
+              ringGapClassName={pulseDmMobileChrome ? "!bg-[#080810]" : undefined}
+            >
+              <UserAvatar
+                avatarUrl={chat.otherMember?.avatarUrl}
+                displayName={displayName}
+                seed={chat.otherMember?.id ?? chat.id}
+                size={40}
+                className="h-10 w-10 rounded-full flex-shrink-0"
+              />
+            </ChatHeaderStoryRing>
           )}
           <div className="min-w-0 flex-1">
-            <p className="font-semibold text-[15px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{displayNameShort ?? displayName}</p>
-            <p className="text-muted-foreground/90 text-[11px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">
-              {chat.type === "dm"
-                ? (formatLastSeen(chat.otherMember?.lastSeenAt ?? null) ?? "не в сети")
-                : `${chat.members?.length ?? 0} участников`}
+            <p
+              className={cn(
+                "overflow-hidden text-ellipsis whitespace-nowrap text-[15px] font-semibold leading-tight",
+                pulseDmMobileChrome && "text-white",
+                pulseDmLightMobileChrome && "text-slate-900",
+              )}
+            >
+              {displayNameShort ?? displayName}
             </p>
+            {chat.type === "dm" ? (
+              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                {dmStatusLine === "в сети" ? (
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(52,211,153,0.65)]"
+                    aria-hidden
+                  />
+                ) : null}
+                <span
+                  className={cn(
+                    "truncate text-[11px] leading-tight",
+                    pulseDmMobileChrome && "text-white/50",
+                    pulseDmLightMobileChrome && "text-slate-500",
+                    !headerPulseMobileDm && "text-muted-foreground/90",
+                  )}
+                >
+                  {dmStatusLine ?? "не в сети"}
+                </span>
+              </div>
+            ) : (
+              <p className="text-muted-foreground/90 text-[11px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">
+                {`${chat.members?.length ?? 0} участников`}
+              </p>
+            )}
           </div>
         </button>
-        <div className="flex items-center gap-0.5 flex-shrink-0">
+        <div className={cn("flex flex-shrink-0 items-center gap-0.5", headerPulseMobileDm && "relative z-[1]")}>
           {chat.type === "dm" && chat.otherMember && (
             <>
               <button
                 type="button"
-                className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                className={cn(
+                  "flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full p-2 transition-colors",
+                  pulseDmMobileChrome && "text-white/45 hover:bg-white/[0.07]",
+                  pulseDmLightMobileChrome && "text-slate-500 hover:bg-indigo-500/10",
+                  !headerPulseMobileDm && "text-primary/85 hover:bg-primary/10",
+                )}
                 onClick={() =>
                   startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, false, chat.otherMember?.avatarUrl)
                 }
@@ -1064,7 +1228,12 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               </button>
               <button
                 type="button"
-                className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                className={cn(
+                  "flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full p-2 transition-colors",
+                  pulseDmMobileChrome && "text-white/45 hover:bg-white/[0.07]",
+                  pulseDmLightMobileChrome && "text-slate-500 hover:bg-indigo-500/10",
+                  !headerPulseMobileDm && "text-primary/85 hover:bg-primary/10",
+                )}
                 onClick={() =>
                   startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, true, chat.otherMember?.avatarUrl)
                 }
@@ -1074,9 +1243,46 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               </button>
             </>
           )}
+          {chat.type === "group" && isGroupCallModuleEnabled() && chatId ? (
+            <>
+              <button
+                type="button"
+                className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                onClick={() => {
+                  if (groupCallCtx.active) {
+                    toast({ title: "Созвон уже открыт", description: "Завершите текущий групповой звонок или вернитесь к его окну.", variant: "destructive" });
+                    return;
+                  }
+                  void groupCallCtx.startGroupCall(chatId, displayName, false);
+                }}
+                aria-label="Групповой аудиозвонок"
+              >
+                <Phone className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                className="p-2 rounded-full text-primary/85 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                onClick={() => {
+                  if (groupCallCtx.active) {
+                    toast({ title: "Созвон уже открыт", description: "Завершите текущий групповой звонок или вернитесь к его окну.", variant: "destructive" });
+                    return;
+                  }
+                  void groupCallCtx.startGroupCall(chatId, displayName, true);
+                }}
+                aria-label="Групповое видео"
+              >
+                <Video className="w-5 h-5" />
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
-            className="p-2 rounded-full text-primary/75 hover:bg-primary/10 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className={cn(
+              "flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full p-2 transition-colors",
+              pulseDmMobileChrome && "text-white/45 hover:bg-white/[0.07]",
+              pulseDmLightMobileChrome && "text-slate-500 hover:bg-indigo-500/10",
+              !headerPulseMobileDm && "text-primary/75 hover:bg-primary/10",
+            )}
             onClick={() => (chat.type === "group" ? setShowGroupMenu((p) => !p) : setShowChatThemeMenu((p) => !p))}
             aria-label="Ещё"
           >
@@ -1473,8 +1679,15 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
         <div className="shrink-0 uix-content-x py-2">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/8 px-3 py-2.5">
             <p className="text-sm font-medium text-foreground min-w-0 flex-1">
-              Идёт групповой {groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок · {groupCallLobby.participantCount}{" "}
-              {groupCallLobby.participantCount === 1 ? "участник" : groupCallLobby.participantCount < 5 ? "участника" : "участников"}
+              {groupCallLobby.participantCount === 0
+                ? `Открыт групповой ${groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок — можно подключаться`
+                : `Идёт групповой ${groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок · ${groupCallLobby.participantCount} ${
+                    groupCallLobby.participantCount === 1
+                      ? "участник"
+                      : groupCallLobby.participantCount < 5
+                        ? "участника"
+                        : "участников"
+                  }`}
             </p>
             <TapScaleButton
               type="button"
@@ -1485,6 +1698,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
                   chatId,
                   mediaType: groupCallLobby.mediaType,
                   chatTitle: displayName,
+                  hostUserId: groupCallLobby.hostUserId,
                 });
               }}
             >
@@ -1551,7 +1765,12 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
       {/* Messages: min-h-0 чтобы flex дал высоту; -webkit-overflow-scrolling: touch для инерции на iOS; overscroll для предсказуемого скролла */}
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
         {vibe.isActive && (
-          <ChatVibeBackground theme={vibe.theme} tokens={vibe.tokens} isActive={vibe.isActive} />
+          <ChatVibeBackground
+            theme={vibe.theme}
+            tokens={vibe.tokens}
+            isActive={vibe.isActive}
+            isDarkSurface={isDarkTheme}
+          />
         )}
         {vibe.isActive && (
           <ChatVibeOverlay theme={vibe.theme} tokens={vibe.tokens} isActive={vibe.isActive} />
@@ -1562,7 +1781,7 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
         style={{
           overflowAnchor: "auto",
           WebkitOverflowScrolling: "touch",
-          paddingBottom: spacing.chatListBottomPad,
+          paddingBottom: messageListPaddingBottom,
         }}
         onScroll={() => {
           const el = scrollContainerRef.current;
@@ -1593,7 +1812,9 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
             </div>
           </div>
         )}
-        {messageListItems.map((item, idx) => {
+        {(() => {
+          const pulseDmMobileKind = isDm && isMobile ? (isDarkTheme ? ("dark" as const) : ("light" as const)) : null;
+          return messageListItems.map((item, idx) => {
           if (item.type === "date") {
             return (
               <p key={`date-${item.label}-${idx}`} className="sticky top-2 z-[1] mx-auto rounded-full bg-muted/70 px-3 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground backdrop-blur-sm">
@@ -1671,10 +1892,22 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
               currentUserAvatarUrl={user?.avatarUrl ?? null}
               currentUserDisplayName={user?.displayName ?? "Вы"}
               messageBubbleColor={chatMsgColorPreset}
+              chatVibeActive={vibe.isActive}
+              pulseMobileDm={pulseDmMobileKind}
+              pulseDmAccent={dmPulseAccent}
               isSelected={actions.selectedIds.has(msg.id)}
               isHighlighted={actions.highlightedMessageId === msg.id}
               isShattering={actions.shatteringMessageId === msg.id}
-              showFooter={send?.editingId !== msg.id}
+              showFooter={
+                send?.editingId !== msg.id &&
+                !(
+                  pulseDmMobileKind &&
+                  isMe &&
+                  msg.type === "video_note" &&
+                  msg.sendStatus !== "failed" &&
+                  msg.sendStatus !== "sending"
+                )
+              }
               onPointerDown={actions.handleMessagePointerDown}
               onPointerUp={actions.handleMessagePointerUp}
               onPointerLeave={actions.handleMessagePointerLeave}
@@ -1712,13 +1945,14 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
             />
             </div>
           );
-        })}
+        });
+        })()}
         <div ref={messagesEndRef} />
       </div>
       </div>{/* /vibe wrapper */}
 
       {!isNearBottom && (
-        <div className="pointer-events-none absolute inset-x-0 z-[108]" style={{ bottom: "calc(var(--uix-nav-bottom) + 4.25rem)" }}>
+        <div className="pointer-events-none absolute inset-x-0 z-[108]" style={{ bottom: "calc(var(--uix-chat-bottom-pad) + 4.25rem)" }}>
           <div className="uix-content-x mx-auto flex w-full max-w-4xl justify-end">
             <TapScaleButton
               type="button"
@@ -1993,23 +2227,26 @@ onClick={() => actions.setForwardingMessage(null)}
       )}
 
       {/* Input — Telegram-style тулбар: круги по краям, капсула по центру; цвета от темы (--chat-composer-*) */}
-      <div className={cn("uix-content-x relative z-[105] chat-composer-bar pb-safe-offset-4", spacing.bottomBarYClass)}>
+      <div
+        ref={composerBarRef}
+        className={cn("uix-content-x relative z-[105] shrink-0 chat-composer-bar pb-safe-offset-4", spacing.bottomBarYClass)}
+      >
         {send?.editingId && (
-          <div className="flex items-center justify-between gap-2 mb-1.5 px-1">
+          <div className="chat-composer-strip flex items-center justify-between gap-2 mb-1.5 rounded-t-xl border-b px-3 py-2">
             <span className="text-xs text-muted-foreground">Редактирование сообщения</span>
-            <button type="button" onClick={send.handleCancelEdit} className="text-xs text-primary hover:underline">
+            <button type="button" onClick={send.handleCancelEdit} className="text-xs text-primary hover:underline rounded-lg px-1 py-0.5 min-h-[var(--uix-touch-min)]">
               Отмена
             </button>
           </div>
         )}
         {(typingDisplay || voiceRecordingDisplay) && !send?.editingId && (
-          <div className="text-xs text-muted-foreground mb-1 space-y-0.5">
+          <div className="chat-composer-meta text-xs mb-1 space-y-0.5">
             {typingDisplay && <p className="animate-pulse">{typingDisplay} печатает...</p>}
             {voiceRecordingDisplay && <p className="animate-pulse">{voiceRecordingDisplay} записывает голосовое...</p>}
           </div>
         )}
         {/* Полоса записи: волшебный вид с волной, градиентом и мягким свечением */}
-        {send?.voiceState === "recording" && (
+        {send?.voiceState === "recording" && !pulseDmComposerLikeTemplate && (
           <RecordingStrip
             durationSec={send.durationSec ?? 0}
             onStop={send.handleMicClick}
@@ -2032,9 +2269,10 @@ onClick={() => actions.setForwardingMessage(null)}
           aria-label="Записать или выбрать видеокружок"
           onChange={send.handleVideoNoteFile}
         />
-        <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-0 overflow-hidden">
+        {/* overflow-visible: иначе обрезается ChatComposerSttPhaseOverlay над строкой ввода */}
+        <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-0 overflow-visible">
           {send.replyingTo && (
-            <div className="flex items-center gap-2 pl-3 pr-1 py-2 bg-muted/70 border-b border-border text-[var(--uix-text-caption)] rounded-t-xl">
+            <div className="chat-composer-strip flex items-center gap-2 pl-3 pr-1 py-2 border-b text-[var(--uix-text-caption)] rounded-t-xl">
               <Reply className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden />
               <span className="flex-1 min-w-0 truncate text-muted-foreground">
                 {send.replyingTo.type === "text" ? send.replyingTo.content.slice(0, 60) + (send.replyingTo.content.length > 60 ? "…" : "") : "Сообщение"}
@@ -2050,7 +2288,7 @@ onClick={() => actions.setForwardingMessage(null)}
             </div>
           )}
           {draftRestoredHint && (
-            <div className="flex items-center gap-2 pl-3 pr-2 py-1.5 bg-primary/10 border-b border-primary/20 text-[var(--uix-text-caption)] rounded-t-xl">
+            <div className="chat-composer-strip chat-composer-strip--draft flex items-center gap-2 pl-3 pr-2 py-1.5 border-b text-[var(--uix-text-caption)] rounded-t-xl">
               <span className="flex-1 text-muted-foreground">Черновик восстановлен</span>
               <button
                 type="button"
@@ -2062,7 +2300,35 @@ onClick={() => actions.setForwardingMessage(null)}
               </button>
             </div>
           )}
-        <div className="relative flex min-w-0 items-end gap-2 overflow-visible pt-0.5">
+        {pulseDmMediaActive ? (
+          <PulseDmComposerMedia
+            accentColor={dmPulseAccent}
+            reducedMotion={reducedMotion}
+            allowSound={!reducedMotion}
+            voiceState={send.voiceState}
+            durationSec={send.durationSec ?? 0}
+            voicePreviewUrl={send.voicePreviewUrl}
+            voicePreviewDurationSec={send.voicePreviewDurationSec}
+            voiceSupported={send.voiceSupported}
+            sendingVoice={send.sendingVoice}
+            discardVoiceRecording={() => void send.discardVoiceRecording()}
+            finishVoiceRecordingClick={() => void send.handleMicClick()}
+            cancelVoicePreview={send.cancelVoicePreview}
+            sendRecordedVoice={() => void send.sendRecordedVoice()}
+            rerecordVoiceFromPreview={() => void send.rerecordVoiceFromPreview()}
+            videoNoteState={send.videoNoteState}
+            videoNoteDurationSec={send.videoNoteDurationSec}
+            videoNotePreviewUrl={send.videoNotePreviewUrl}
+            videoNoteLocked={send.videoNoteLocked}
+            sendingMedia={send.sendingMedia}
+            setVideoNoteLiveElement={send.setVideoNoteLiveElement}
+            cancelVideoNote={send.cancelVideoNote}
+            stopVideoNoteRecording={() => void send.stopVideoNoteRecording()}
+            sendRecordedVideoNote={() => void send.sendRecordedVideoNote()}
+          />
+        ) : (
+        <div className="relative flex min-w-0 w-full items-end gap-2 overflow-visible pt-0.5">
+          <ChatComposerSttPhaseOverlay phase={composerSttUi.phase} liveLine={composerSttUi.liveLine} />
           {showAttachSource && isNative() && (
             <div
               ref={attachSourceRef}
@@ -2103,12 +2369,12 @@ onClick={() => actions.setForwardingMessage(null)}
               if (isNative()) setShowAttachSource((v) => !v);
               else send.fileInputRef.current?.click();
             }}
-            className="chat-composer-round flex-shrink-0"
+            className={cn("chat-composer-round chat-composer-attach flex-shrink-0")}
             aria-label="Прикрепить фото или видео"
           >
             <Paperclip className="h-[22px] w-[22px] pointer-events-none stroke-[1.85]" aria-hidden />
           </TapScaleButton>
-          <div className="chat-composer-pill relative flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 items-end overflow-hidden">
+          <div className="chat-composer-pill relative flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 items-end overflow-x-hidden overflow-y-clip">
             {showCanvasCommandOption && (
               <div className="absolute bottom-full left-0 right-0 mb-1 z-[121]">
                 <button
@@ -2228,12 +2494,44 @@ onClick={() => actions.setForwardingMessage(null)}
                 send?.editingId ? "Измените текст и нажмите отправить" : "Сообщение..."
               }
               className={cn(
-                "max-h-28 min-h-[36px] w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 pr-1 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
+                "max-h-28 min-h-[36px] min-w-0 w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
+                isDmChat ? "pr-2" : "pr-1",
                 !send.message.trim() && "overflow-hidden whitespace-nowrap placeholder:whitespace-nowrap text-ellipsis"
               )}
               rows={1}
             />
-            {!send.message.trim() && !send?.editingId && (
+            {isDmChat && (
+              <ChatComposerSttButton
+                embedded
+                disabled={
+                  Boolean(send.editingId) ||
+                  send.sending ||
+                  send.sendingMedia ||
+                  send.voiceState === "recording" ||
+                  Boolean(send.voicePreviewUrl)
+                }
+                allowSound={!reducedMotion}
+                onUiChange={setComposerSttUi}
+                onEmptyResult={() => {
+                  toast({
+                    title: "Не удалось распознать речь",
+                    description: "Повторите попытку или проверьте доступ к микрофону.",
+                  });
+                }}
+                onTranscript={(text) => {
+                  send.setMessage((prev) => {
+                    const t = prev.trim();
+                    return t ? `${t} ${text}` : text;
+                  });
+                  setDraftRestoredHint(false);
+                  requestAnimationFrame(() => {
+                    messageInputRef.current?.focus({ preventScroll: true });
+                    syncComposerHeight();
+                  });
+                }}
+              />
+            )}
+            {!pulseDmComposerLikeTemplate && !send.message.trim() && !send?.editingId && (
               <TapScaleButton
                 type="button"
                 onClick={send.handleVideoNoteButtonClick}
@@ -2251,20 +2549,70 @@ onClick={() => actions.setForwardingMessage(null)}
                 {send.sendingMedia ? <span className="text-[10px]">…</span> : <Video className="h-[20px] w-[20px]" strokeWidth={1.75} />}
               </TapScaleButton>
             )}
+            {!pulseDmComposerLikeTemplate && (
+              <TapScaleButton
+                type="button"
+                haptic
+                data-active={showEmojiPicker ? "true" : undefined}
+                className={cn(
+                  "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
+                  showEmojiPicker && "bg-primary/12 text-primary"
+                )}
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                aria-label="Эмодзи"
+              >
+                <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
+              </TapScaleButton>
+            )}
+          </div>
+          {pulseDmComposerLikeTemplate && !send.message.trim() && !send?.editingId && (
             <TapScaleButton
               type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!send.videoNoteSupported || send.sendingMedia) return;
+                void send.startVideoNoteRecording();
+              }}
+              disabled={send.sendingMedia || !send.videoNoteSupported}
               haptic
-              data-active={showEmojiPicker ? "true" : undefined}
-              className={cn(
-                "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
-                showEmojiPicker && "bg-primary/12 text-primary"
-              )}
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              aria-label="Эмодзи"
+              className="chat-composer-round chat-composer-video-round flex-shrink-0"
+              title="Записать видеокружок"
+              aria-label="Записать видеокружок"
             >
-              <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
+              {send.sendingMedia ? <span className="text-[10px]">…</span> : <Camera className="h-[18px] w-[18px]" strokeWidth={1.75} />}
             </TapScaleButton>
-          </div>
+          )}
+          {!isDmChat && (
+            <ChatComposerSttButton
+              disabled={
+                Boolean(send.editingId) ||
+                send.sending ||
+                send.sendingMedia ||
+                send.voiceState === "recording" ||
+                Boolean(send.voicePreviewUrl)
+              }
+              allowSound={!reducedMotion}
+              onUiChange={setComposerSttUi}
+              onEmptyResult={() => {
+                toast({
+                  title: "Не удалось распознать речь",
+                  description: "Повторите попытку или проверьте доступ к микрофону.",
+                });
+              }}
+              onTranscript={(text) => {
+                send.setMessage((prev) => {
+                  const t = prev.trim();
+                  return t ? `${t} ${text}` : text;
+                });
+                setDraftRestoredHint(false);
+                requestAnimationFrame(() => {
+                  messageInputRef.current?.focus({ preventScroll: true });
+                  syncComposerHeight();
+                });
+              }}
+            />
+          )}
           {send.message.trim() ? (
             (() => {
             const handleCanvasSend = () => {
@@ -2364,6 +2712,11 @@ onClick={() => actions.setForwardingMessage(null)}
               </div>
             );
             })()
+          ) : Boolean(send.voicePreviewUrl) ? (
+            <span
+              className="inline-flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] shrink-0"
+              aria-hidden
+            />
           ) : send.voiceState === "recording" ? (
             <TapScaleButton
               type="button"
@@ -2384,7 +2737,15 @@ onClick={() => actions.setForwardingMessage(null)}
               onPointerCancel={send.handleMicPointerLeave}
               disabled={send.sendingVoice || !send.voiceSupported}
               haptic
-              className="chat-composer-round shrink-0"
+              className={cn(
+                "shrink-0",
+                isDmChat
+                  ? cn(
+                      "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border-2 border-red-400/60 bg-red-500 text-white shadow-[0_4px_20px_rgba(239,68,68,0.45)] transition-transform active:scale-95",
+                      pulseDmComposerLikeTemplate && "chat-composer-mic-pulse",
+                    )
+                  : "chat-composer-round",
+              )}
               title={!send.voiceSupported ? "Запись голоса недоступна в этом браузере" : "Удерживайте для записи голосового"}
               aria-label={!send.voiceSupported ? "Запись голоса недоступна" : "Удерживайте для записи голосового"}
             >
@@ -2392,8 +2753,9 @@ onClick={() => actions.setForwardingMessage(null)}
             </TapScaleButton>
           )}
         </div>
+        )}
         {spellUndo ? (
-          <div className="flex items-center justify-center gap-1.5 py-1 px-2 border-t border-border/20">
+          <div className="chat-composer-spell-row flex items-center justify-center gap-1.5 py-1 px-2 border-t border-border/20">
             <span className="text-[10px] text-muted-foreground/60">Исправлено</span>
             <TapScaleButton
               type="button"
@@ -2405,8 +2767,12 @@ onClick={() => actions.setForwardingMessage(null)}
               Отменить
             </TapScaleButton>
           </div>
-        ) : !effectiveSpellCheck ? (
-          <SpellSuggestions errors={spellErrors} onReplace={handleSpellReplace} />
+        ) : effectiveSpellCheck ? (
+          <SpellSuggestions
+            errors={spellErrors}
+            onReplace={handleSpellReplace}
+            className={cn(headerPulseMobileDm && "chat-composer-spell-suggestions")}
+          />
         ) : null}
         </div>
         {(send.voiceError || send.voiceRecorderError) && (
@@ -2417,7 +2783,57 @@ onClick={() => actions.setForwardingMessage(null)}
         )}
       </div>
 
-      {(send.videoNoteState === "recording" || send.videoNoteState === "preview") && (
+      {send.voicePreviewUrl && !pulseDmMediaActive && (
+        <div
+          className="fixed inset-0 z-[141] flex flex-col items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Предпросмотр голосового сообщения"
+        >
+          <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-background/90 p-4 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Голосовое сообщение</p>
+              <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                {formatVideoNoteTime(send.voicePreviewDurationSec)}
+              </span>
+            </div>
+            <audio
+              src={send.voicePreviewUrl}
+              controls
+              className="mb-4 w-full"
+              preload="metadata"
+            />
+            <div className="flex flex-wrap gap-2">
+              <TapScaleButton
+                type="button"
+                onClick={send.cancelVoicePreview}
+                className="min-h-[var(--uix-touch-min)] min-w-0 flex-1 rounded-xl border border-input bg-background"
+              >
+                Удалить
+              </TapScaleButton>
+              <TapScaleButton
+                type="button"
+                onClick={() => void send.rerecordVoiceFromPreview()}
+                disabled={send.sendingVoice}
+                className="min-h-[var(--uix-touch-min)] min-w-0 flex-1 rounded-xl bg-secondary text-foreground disabled:opacity-50"
+              >
+                Перезаписать
+              </TapScaleButton>
+              <TapScaleButton
+                type="button"
+                onClick={() => void send.sendRecordedVoice()}
+                disabled={send.sendingVoice}
+                haptic
+                className="min-h-[var(--uix-touch-min)] min-w-0 flex-[1.15] rounded-xl bg-primary text-primary-foreground disabled:opacity-50"
+              >
+                {send.sendingVoice ? "…" : "Отправить"}
+              </TapScaleButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(send.videoNoteState === "recording" || send.videoNoteState === "preview") && !pulseDmMediaActive && (
         <div className="fixed inset-0 z-[140] bg-black/75 backdrop-blur-sm px-4 py-6 flex flex-col items-center justify-center">
           <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-background/90 p-4 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
@@ -2473,10 +2889,9 @@ onClick={() => actions.setForwardingMessage(null)}
                     <video
                       src={send.videoNotePreviewUrl}
                       className="h-full w-full object-cover"
-                      autoPlay
-                      loop
+                      controls
                       playsInline
-                      muted
+                      preload="metadata"
                     />
                   ) : null}
                 </div>

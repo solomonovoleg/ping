@@ -52,8 +52,11 @@
   --uix-text-caption: 0.75rem;     /* 12px — time, hints */
   --uix-text-input: 1.0625rem;    /* 17px — iOS-style input */
   --uix-touch-min: 44px;          /* minimum touch target (a11y) */
-  --uix-nav-height: 3.5rem;       /* высота нижней навигации */
+  /* Чуть выше: центральная кнопка PULSE слегка «выпирает» над полосой */
+  --uix-nav-height: 4.25rem;
   --uix-nav-bottom: calc(var(--uix-nav-height) + env(safe-area-inset-bottom, 0px));
+  /* Экран чата: глобальное нижнее меню скрыто — только safe area */
+  --uix-chat-bottom-pad: env(safe-area-inset-bottom, 0px);
 
   /* Motion — единые длительность и easing (Design System) */
   --uix-duration-instant: 0ms;
@@ -331,11 +334,11 @@
     -webkit-backdrop-filter: saturate(180%) blur(var(--chat-composer-bar-blur));
   }
 
-  /* Капсула поля ввода */
+  /* Капсула поля ввода (не 9999px — при многострочном поле «таблетка» ломала скругление и клип) */
   .chat-composer-pill {
     background-color: var(--chat-composer-fill);
     border: 1px solid var(--chat-composer-stroke);
-    border-radius: 9999px;
+    border-radius: 22px;
     box-shadow: none;
   }
 
@@ -378,6 +381,275 @@
   .chat-composer-pill-action[data-active="true"] {
     color: hsl(var(--primary));
     background-color: hsl(var(--primary) / 0.12);
+  }
+
+  /*
+   * PULSE mobile DM — композер как pulse-template / DESIGN_RULES.md
+   * Вешается на корень ChatDetail: .chat-pulse-dm-mobile | .chat-pulse-dm-light-mobile
+   */
+  .chat-pulse-dm-mobile .chat-composer-bar {
+    border-top-color: rgba(255, 255, 255, 0.07);
+    background-color: rgba(8, 8, 16, 0.94);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-round {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-round:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill .chat-composer-pill-action {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill .chat-composer-pill-action:hover {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill .chat-composer-pill-action[data-active="true"] {
+    color: #a5b4fc;
+    background-color: rgba(99, 102, 241, 0.18);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill textarea {
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill textarea::placeholder {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  /*
+   * «!» в капсуле — голос в текст. Было 22px при min-height поля ~38px + items-end →
+   * круг визуально «падал» относительно текста и камеры (2.5rem). Держим размер как у h-9 в ряду.
+   */
+  .chat-pulse-dm-mobile .chat-composer-pill button[aria-label="Голос в текст"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-width: 2.25rem !important;
+    min-height: 2.25rem !important;
+    margin-right: 6px;
+    padding: 0;
+    border-radius: 9999px;
+    font-size: 15px;
+    font-weight: 900;
+    font-style: normal;
+    line-height: 1;
+    color: #818cf8;
+    background-color: rgba(129, 140, 248, 0.2);
+    border: 1.5px solid rgba(129, 140, 248, 0.33);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-pill button[aria-label="Голос в текст"]:hover {
+    color: #a5b4fc;
+    background-color: rgba(129, 140, 248, 0.28);
+    border-color: rgba(129, 140, 248, 0.45);
+  }
+
+  /* Скрепка как в шаблоне: тонкая, ~35% белого */
+  .chat-pulse-dm-mobile .chat-composer-attach.chat-composer-round {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-attach.chat-composer-round:hover:not(:disabled) {
+    color: rgba(255, 255, 255, 0.52);
+  }
+
+  /* Микрофон справа: сплошной красный без «ободка», как в макете */
+  .chat-pulse-dm-mobile .chat-composer-mic-pulse {
+    border-width: 0 !important;
+    box-shadow: 0 4px 18px rgba(239, 68, 68, 0.35) !important;
+    background-color: rgba(239, 68, 68, 0.88) !important;
+  }
+
+  /* Отдельная круглая «камера» между капсулой и микрофоном */
+  .chat-pulse-dm-mobile .chat-composer-video-round.chat-composer-round {
+    width: 2.5rem;
+    height: 2.5rem;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    color: rgba(165, 180, 252, 0.85);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-bar {
+    border-top-color: rgba(99, 102, 241, 0.12);
+    background-color: rgba(255, 255, 255, 0.9);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-pill {
+    background-color: rgba(255, 255, 255, 0.72);
+    border-color: rgba(99, 102, 241, 0.14);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-round {
+    background-color: rgba(255, 255, 255, 0.85);
+    border-color: rgba(99, 102, 241, 0.12);
+    color: rgba(51, 65, 85, 0.85);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-round:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.98);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-pill textarea {
+    color: rgba(15, 23, 42, 0.92);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-pill textarea::placeholder {
+    color: rgba(100, 116, 139, 0.75);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-pill button[aria-label="Голос в текст"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-width: 2.25rem !important;
+    min-height: 2.25rem !important;
+    margin-right: 6px;
+    padding: 0;
+    border-radius: 9999px;
+    font-size: 15px;
+    font-weight: 900;
+    font-style: normal;
+    line-height: 1;
+    color: #6366f1;
+    background-color: rgba(99, 102, 241, 0.14);
+    border: 1.5px solid rgba(99, 102, 241, 0.35);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-pill button[aria-label="Голос в текст"]:hover {
+    background-color: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.45);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-mic-pulse {
+    border-width: 0 !important;
+    box-shadow: 0 4px 18px rgba(239, 68, 68, 0.3) !important;
+    background-color: rgba(239, 68, 68, 0.88) !important;
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-video-round.chat-composer-round {
+    width: 2.5rem;
+    height: 2.5rem;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    color: rgba(79, 70, 229, 0.9);
+  }
+
+  /* Полосы над капсулой: статус печати, ответ, черновик, правка, запись, орфография */
+  .chat-pulse-dm-mobile .chat-composer-meta {
+    color: rgba(255, 255, 255, 0.38);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-meta .animate-pulse {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-strip {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-strip .text-muted-foreground {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-strip .text-primary {
+    color: #a5b4fc;
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-strip button:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-strip--draft {
+    background-color: rgba(99, 102, 241, 0.12);
+    border-bottom-color: rgba(99, 102, 241, 0.22);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-recording-strip {
+    border-color: rgba(248, 113, 113, 0.35);
+    background: linear-gradient(
+      90deg,
+      rgba(239, 68, 68, 0.14),
+      rgba(244, 63, 94, 0.1),
+      rgba(220, 38, 38, 0.14)
+    );
+    box-shadow: 0 0 20px -6px rgba(239, 68, 68, 0.35);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-recording-strip .tabular-nums.text-red-700 {
+    color: rgba(254, 202, 202, 0.95);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-spell-row {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-spell-row .text-muted-foreground,
+  .chat-pulse-dm-mobile .chat-composer-spell-row .text-muted-foreground\/60,
+  .chat-pulse-dm-mobile .chat-composer-spell-row .text-muted-foreground\/55 {
+    color: rgba(255, 255, 255, 0.38);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-spell-suggestions button {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-spell-suggestions button:hover {
+    color: rgba(255, 255, 255, 0.88);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .chat-pulse-dm-mobile .chat-composer-bar .text-destructive {
+    color: rgb(252, 165, 165);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-meta {
+    color: rgb(100, 116, 139);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-strip {
+    background-color: rgba(255, 255, 255, 0.92);
+    border-bottom-color: rgba(99, 102, 241, 0.12);
+    color: rgb(51, 65, 85);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-strip .text-muted-foreground {
+    color: rgb(100, 116, 139);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-strip--draft {
+    background-color: rgba(99, 102, 241, 0.08);
+    border-bottom-color: rgba(99, 102, 241, 0.2);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-recording-strip {
+    border-color: rgba(248, 113, 113, 0.35);
+    box-shadow: 0 0 18px -6px rgba(239, 68, 68, 0.28);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-spell-row {
+    border-top-color: rgba(99, 102, 241, 0.12);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-spell-suggestions button:hover {
+    background-color: rgba(99, 102, 241, 0.08);
   }
 }
 
@@ -456,6 +728,29 @@
   }
 }
 
+/* Групповой звонок: мягкое «дыхание» янтарного контура плитки (без вращающейся радуги) */
+@keyframes group-call-hand-contour-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(251, 191, 36, 0.42),
+      0 0 18px rgba(251, 191, 36, 0.26);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(251, 191, 36, 0.78),
+      0 0 32px rgba(251, 191, 36, 0.44);
+  }
+}
+.animate-group-call-hand-contour {
+  animation: group-call-hand-contour-glow 2.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-group-call-hand-contour {
+    animation: none;
+  }
+}
+
 /* Центральный логотип в нижнем навбаре: мягкое "дыхание" без лишнего визуального круга */
 @keyframes ping-logo-breathe {
   0%, 100% {
@@ -476,31 +771,78 @@
   }
 }
 
-/* PULSE GroupCall — полоски уровня речи у имени (video-call/GroupCall.tsx) */
-@keyframes pm-group-call-sound-bar {
+/* PULSE DM: голос / видеокружок (voice-message-snippet) */
+@keyframes pulse-dm-recPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.94);
+  }
+}
+@keyframes pulse-dm-sndBar {
   from {
-    transform: scaleY(0.4);
+    transform: scaleY(0.5);
   }
   to {
-    transform: scaleY(1.4);
+    transform: scaleY(1);
   }
 }
-.pm-group-call-sound-bar {
-  transform-origin: bottom center;
-  animation: pm-group-call-sound-bar 0.8s ease-in-out infinite alternate;
+@keyframes pulse-dm-slideHint {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateX(0);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateX(-4px);
+  }
 }
-@media (prefers-reduced-motion: reduce) {
-  .pm-group-call-sound-bar {
-    animation: none;
+@keyframes pulse-dm-previewIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes pulse-dm-ringPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.12);
+  }
+}
+/* Видеокружок в чате (video-circle-snippet) — мягче, без сильного scale */
+@keyframes pulse-dm-ringPulseVideo {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+@keyframes pulse-dm-expandCircle {
+  from {
+    transform: scale(0.55);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
   }
 }
 
-/* group-call-spec / GroupCall.tsx — @keyframes soundBar (UIX-GUIDELINES §6) */
-@keyframes soundBar {
-  from {
-    transform: scaleY(0.4);
-  }
-  to {
-    transform: scaleY(1.4);
-  }
-}

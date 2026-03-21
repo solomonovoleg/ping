@@ -4,7 +4,7 @@ import { storage } from "../storage";
 import { getAuthorWall } from "../posts/author-wall";
 import { getStoriesByAuthorId } from "../stories/service";
 import { notifyFollow } from "../notifications/create";
-import { NAME_MAX_LENGTH, postComments, postReactions, posts } from "@shared/schema";
+import { NAME_MAX_LENGTH, NICKNAME_MAX_LENGTH, postComments, postReactions, posts } from "@shared/schema";
 
 export class UsersServiceError extends Error {
   status: number;
@@ -22,6 +22,19 @@ export function normalizeProfileIdParam(raw: unknown): string {
   } catch {
     return value.trim().replace(/^@+/, "");
   }
+}
+
+/** undefined — не менять; null — сбросить */
+function parseNicknameUpdate(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw !== "string") throw new UsersServiceError(400, "Никнейм указан неверно");
+  const s = raw.trim().replace(/^@+/u, "").slice(0, NICKNAME_MAX_LENGTH);
+  if (!s) return null;
+  if (!/^[\p{L}\p{N}._-]+$/u.test(s)) {
+    throw new UsersServiceError(400, "Никнейм: только буквы, цифры, точка, подчёркивание и дефис");
+  }
+  return s;
 }
 
 function normalizeGenderValue(value: unknown): "male" | "female" | "other" | null {
@@ -123,6 +136,7 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     publicId: target.publicId,
     displayName: target.displayName ?? null,
     surname: target.surname ?? null,
+    nickname: target.nickname ?? null,
     gender: target.gender ?? null,
     avatarUrl: target.avatarUrl ?? null,
     coverUrl: target.coverUrl ?? null,
@@ -168,6 +182,7 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
   const {
     displayName,
     surname,
+    nickname,
     gender,
     birthDate,
     avatarUrl,
@@ -200,6 +215,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ? (typeof birthDate === "string" ? (birthDate.trim() || null) : null)
     : undefined;
 
+  const nicknameVal = parseNicknameUpdate(nickname);
+
   const user = await storage.updateUserProfile(userId, {
     displayName: name || null,
     surname: fam || null,
@@ -219,6 +236,7 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ...(typeof pushEnabled === "boolean" && { pushEnabled }),
     ...(typeof vibeEnabled === "boolean" && { vibeEnabled }),
     ...(typeof vibeShareWithPartner === "boolean" && { vibeShareWithPartner }),
+    ...(nicknameVal !== undefined && { nickname: nicknameVal }),
   });
   if (!user) throw new UsersServiceError(404, "User not found");
 
@@ -228,6 +246,7 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     phone: user.phone,
     displayName: user.displayName ?? null,
     surname: user.surname ?? null,
+    nickname: user.nickname ?? null,
     gender: normalizeGenderValue(user.gender) ?? null,
     birthDate: user.birthDate ?? null,
     avatarUrl: user.avatarUrl ?? null,

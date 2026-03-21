@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AvatarCropModal } from "@/components/AvatarCropModal";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import type { Gender } from "@shared/schema";
-import { NAME_MAX_LENGTH } from "@shared/schema";
+import { NAME_MAX_LENGTH, NICKNAME_MAX_LENGTH } from "@shared/schema";
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "Мужской" },
@@ -38,6 +38,7 @@ export default function EditProfile() {
 
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSurname, setEditSurname] = useState("");
+  const [editNickname, setEditNickname] = useState("");
   const [editGender, setEditGender] = useState<Gender | "">("");
   const [editBirthDate, setEditBirthDate] = useState("");
   const [editAvatarUrl, setEditAvatarUrl] = useState("");
@@ -63,6 +64,7 @@ export default function EditProfile() {
     if (!user) return;
     setEditDisplayName((user.displayName ?? "").slice(0, NAME_MAX_LENGTH));
     setEditSurname((user.surname ?? "").slice(0, NAME_MAX_LENGTH));
+    setEditNickname(((user as { nickname?: string | null }).nickname ?? "").trim().replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH));
     setEditGender(normalizeGender(user.gender));
     setEditBirthDate(user.birthDate ?? "");
     setEditAvatarUrl(user.avatarUrl ?? "");
@@ -110,9 +112,11 @@ export default function EditProfile() {
       }
       setSaving(true);
       try {
+        const nick = editNickname.trim().replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH);
         const updated = await updateProfile({
           displayName: editDisplayName.trim().slice(0, NAME_MAX_LENGTH),
           surname: editSurname.trim().slice(0, NAME_MAX_LENGTH),
+          nickname: nick.length > 0 ? nick : null,
           gender: editGender || undefined,
           birthDate: editBirthDate.trim() ? editBirthDate.trim() : null,
           avatarUrl: editAvatarUrl.trim() || undefined,
@@ -134,7 +138,7 @@ export default function EditProfile() {
         setSaving(false);
       }
     },
-    [editDisplayName, editSurname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation]
+    [editDisplayName, editSurname, editNickname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation]
   );
 
   const handleCoverFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -354,6 +358,21 @@ export default function EditProfile() {
               placeholder="Фамилия"
               maxLength={NAME_MAX_LENGTH}
               required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="editNickname">Никнейм</Label>
+            <p className="text-sm text-muted-foreground">
+              Показывается в плашке в шапке профиля (рядом с @). Только буквы, цифры, «.», «_», «-». Если пусто — отображается ваш числовой ID.
+            </p>
+            <Input
+              id="editNickname"
+              value={editNickname}
+              onChange={(e) => setEditNickname(e.target.value.replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH))}
+              placeholder="например, maria_pulse"
+              maxLength={NICKNAME_MAX_LENGTH}
+              autoComplete="username"
             />
           </div>
 

@@ -40,6 +40,17 @@ export function registerAuthRoutes(app: Express): void {
 
     const stats = await storage.getAdminStats();
     const isBootstrap = stats.total === 0;
+    if (!isBootstrap) {
+      try {
+        const { platformGetPublic } = await import("../admin/ops/platform.repo");
+        if ((await platformGetPublic()).maintenanceMode) {
+          res.status(503).json({ message: "Регистрация временно приостановлена. Попробуйте позже." });
+          return;
+        }
+      } catch {
+        /* без БД — пропускаем */
+      }
+    }
     let invitedById: string | undefined;
     let referralCodeId: string | undefined;
 
@@ -119,6 +130,7 @@ export function registerAuthRoutes(app: Express): void {
         phone: user.phone,
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
+        nickname: user.nickname ?? null,
         gender: user.gender ?? null,
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,
@@ -197,6 +209,7 @@ export function registerAuthRoutes(app: Express): void {
           phone: user.phone,
           displayName: user.displayName ?? null,
           surname: user.surname ?? null,
+          nickname: user.nickname ?? null,
           gender: user.gender ?? null,
           birthDate: user.birthDate ?? null,
           avatarUrl: user.avatarUrl ?? null,
@@ -270,6 +283,7 @@ export function registerAuthRoutes(app: Express): void {
         phone: user.phone,
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
+        nickname: user.nickname ?? null,
         gender: user.gender ?? null,
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,

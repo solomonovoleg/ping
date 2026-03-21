@@ -1,44 +1,54 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
-import { MessageCircle, LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
+import { MessageCircle, LayoutDashboard, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { onChatListUpdate } from "@/features/chat/realtime-events";
+import { onChatListUpdate, onIncomingChatMessageHint } from "@/features/chat/realtime-events";
+import { useAuth } from "@/contexts/AuthContext";
+import { playIncomingChatMessageSound } from "@/lib/send-sound";
 import { cn } from "@/lib/utils";
-import { DURATION_FAST_MS, DURATION_NORMAL_MS, EASING_OUT } from "@/lib/motion";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
+import { PlatformAnnouncementBar } from "@/features/admin-ops/PlatformAnnouncementBar";
+import { usePreferPhoneChrome } from "@/hooks/use-prefer-phone-chrome";
 
 import feedIcon from "@/assets/images/feed-icon.png";
-const centerLogo = "/F-PING.png?v=5";
+
+/** Логотип в центре полосы — файл `client/public/F-PING.png` (замените PNG при необходимости) */
+const PULSE_NAV_LOGO_SRC = "/F-PING.png?v=6";
 
 /** Порядок вкладок для свайпа: Чаты → Лента → Борд */
 const SWIPEABLE_PATHS = ["/", "/posts", "/board"] as const;
 const SWIPE_THRESHOLD_PX = 56;
 const SWIPE_ANIMATION_MS = 320;
 
-/** Кнопка-логотип: профиль (стена), крупная иконка по центру с лёгкой анимацией */
-function NavLogoButton({ onClick }: { onClick: () => void }) {
+/** Центр навбара: только логотип, крупно + мягкая анимация (`animate-ping-logo` в index.css). */
+function NavPulseCenterButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
   return (
     <TapScaleButton
       type="button"
       onClick={onClick}
       haptic
       subtle
-      className={cn(
-        "flex items-center justify-center flex-1 min-h-[var(--uix-touch-min)] relative min-w-0 max-w-[80px]",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 rounded-full",
-        "transition-transform ease-out"
-      )}
-      style={{ transitionDuration: `${DURATION_FAST_MS}ms`, transitionTimingFunction: EASING_OUT }}
-      aria-label="Моя страница (профиль)"
+      data-testid="mobile-nav-pulse"
+      aria-label="Моя страница"
       title="Моя страница"
+      className={cn(
+        "relative flex min-h-[var(--uix-touch-min)] min-w-0 max-w-[100px] flex-1 items-end justify-center pb-1 pt-1",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-2xl"
+      )}
     >
-      <div className="relative flex items-center justify-center w-14 h-14">
+      <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center">
+        <div
+          className={cn(
+            "absolute inset-0 scale-0 rounded-full bg-primary/12 transition-transform duration-150",
+            isActive && "scale-100"
+          )}
+        />
         <img
-          src={centerLogo}
+          src={PULSE_NAV_LOGO_SRC}
           alt=""
-          className="w-12 h-12 object-contain select-none pointer-events-none relative z-10 animate-ping-logo"
+          className="relative z-10 h-[38px] w-[38px] object-contain select-none pointer-events-none animate-ping-logo"
         />
       </div>
     </TapScaleButton>
@@ -49,19 +59,33 @@ interface AppLayoutProps {
   children: React.ReactNode;
 }
 
-const navItemsLeft = [
+type AppNavItem = {
+  id: string;
+  path: string;
+  label: string;
+  icon?: LucideIcon;
+  customIcon?: string;
+};
+
+const navItemsLeft: AppNavItem[] = [
   { id: "chats", path: "/", icon: MessageCircle, label: "Чаты" },
   { id: "posts", path: "/posts", customIcon: feedIcon, label: "Лента" },
 ];
-const navItemsRight = [
+const navItemsRight: AppNavItem[] = [
   { id: "board", path: "/board", icon: LayoutDashboard, label: "Борд" },
-  { id: "settings", path: "/settings", icon: SettingsIcon, label: "Настройки" },
+  /** Как в макете: подпись «Профиль», иконка шестерёнки → настройки аккаунта */
+  { id: "profile", path: "/settings", icon: SettingsIcon, label: "Профиль" },
 ];
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const [location, setLocation] = useLocation();
+  const { user } = useAuth();
+  /** Свежий id для глобальных событий (без опоры на замыкание `user` внутри long-lived listener). */
+  const selfUserIdRef = useRef<string | undefined>(undefined);
+  selfUserIdRef.current = user?.id ?? undefined;
   const queryClient = useQueryClient();
   const reducedMotion = usePrefersReducedMotion();
+  const preferPhoneChrome = usePreferPhoneChrome();
 
   // Мягкие свайпы между экранами: направление анимации (null = по тапу в навбаре)
   const [transitionDirection, setTransitionDirection] = useState<"left" | "right" | null>(null);
@@ -69,7 +93,8 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const basePath = location.split("?")[0];
   const contentKey = basePath;
-  const isProfilePage = /^\/(profile|id)(\/|$)/.test(basePath);
+  /** В экране чата нижняя полоса скрыта (полноэкранный чат) */
+  const isChatPage = /^\/chat\//.test(basePath);
 
   const swipeableIndex = SWIPEABLE_PATHS.indexOf(basePath as (typeof SWIPEABLE_PATHS)[number]);
   const isSwipeable = swipeableIndex >= 0;
@@ -129,11 +154,33 @@ export default function AppLayout({ children }: AppLayoutProps) {
     return onChatListUpdate(handler);
   }, [queryClient]);
 
-  const renderNavButton = (item: (typeof navItemsLeft)[number]) => {
+  // Звук входящего по событию с сервера (в т.ч. новая группа до подписки на chat-message)
+  useEffect(() => {
+    return onIncomingChatMessageHint(({ chatId, senderId }) => {
+      const myId = selfUserIdRef.current;
+      if (!myId || senderId === myId) return;
+      const path = location.split("?")[0];
+      const openMatch = path.match(/^\/chat\/([^/]+)/);
+      const openChatId = openMatch?.[1] ? decodeURIComponent(openMatch[1]) : null;
+      const viewingThisChat =
+        openChatId === chatId && typeof document !== "undefined" && document.visibilityState === "visible";
+      if (!viewingThisChat) {
+        playIncomingChatMessageSound();
+      }
+    });
+  }, [location]);
+
+  const renderNavButton = (item: AppNavItem) => {
     const isActive =
-      location === item.path ||
-      (item.path === "/" && location.startsWith("/chat/")) ||
-      (item.path === "/posts" && location.startsWith("/posts"));
+      item.path === "/"
+        ? basePath === "/"
+        : item.path === "/posts"
+          ? basePath.startsWith("/posts")
+          : item.path === "/board"
+            ? basePath.startsWith("/board")
+            : item.path === "/settings"
+              ? basePath.startsWith("/settings")
+              : location === item.path;
     const Icon = item.icon;
     return (
       <TapScaleButton
@@ -168,7 +215,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           )}
         </div>
         <span className={cn(
-          "text-[10px] font-medium transition-colors duration-150",
+          "text-[9px] font-medium transition-colors duration-150",
           isActive ? "text-primary" : "text-muted-foreground"
         )}>
           {item.label}
@@ -178,10 +225,16 @@ export default function AppLayout({ children }: AppLayoutProps) {
   };
 
   return (
-    <div className="flex h-full min-h-[100dvh] w-full min-w-0 bg-background overflow-x-visible overflow-y-hidden items-center justify-center">
+    <div
+      className={cn(
+        "flex h-full min-h-[100dvh] w-full min-w-0 bg-background overflow-x-visible overflow-y-hidden",
+        preferPhoneChrome ? "items-center justify-center" : "items-stretch justify-stretch",
+      )}
+    >
       <div
         className={cn(
-          "relative w-full h-full max-w-[480px] mx-auto flex flex-col bg-background shadow-2xl overflow-x-visible overflow-y-hidden min-h-0 min-w-0 shrink-0"
+          "relative flex h-full min-h-0 min-w-0 w-full shrink-0 flex-col overflow-x-visible overflow-y-hidden bg-background",
+          preferPhoneChrome ? "mx-auto max-w-[480px] shadow-2xl" : "max-w-none shadow-none",
         )}
         style={{
           paddingLeft: "env(safe-area-inset-left, 0px)",
@@ -190,7 +243,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
       >
         {/* Контент: единственная скроллируемая область; при смене маршрута — плавное появление; свайп влево/вправо между Чаты↔Лента↔Борд */}
         <main
-          className="flex-1 min-h-0 min-w-0 relative flex flex-col overflow-y-auto overflow-x-visible w-full max-w-full bg-background pt-[env(safe-area-inset-top,0px)] pb-[var(--uix-nav-bottom)]"
+          className={cn(
+            "flex-1 min-h-0 min-w-0 relative flex flex-col overflow-y-auto overflow-x-visible w-full max-w-full bg-background pt-[env(safe-area-inset-top,0px)]",
+            isChatPage ? "pb-0" : "pb-[var(--uix-nav-bottom)]"
+          )}
           style={{ WebkitOverflowScrolling: "touch" }}
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
@@ -210,22 +266,30 @@ export default function AppLayout({ children }: AppLayoutProps) {
                 : undefined
             }
           >
+            <PlatformAnnouncementBar />
             {children}
           </div>
         </main>
 
-        {/* Нижнее меню: всегда на экране, логотип по центру (пока неактивная кнопка) */}
-        <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border/50 bg-background/95 backdrop-blur-md pb-[env(safe-area-inset-bottom,0px)] [padding-left:env(safe-area-inset-left,0px)] [padding-right:env(safe-area-inset-right,0px)]">
-          <div className="max-w-[480px] mx-auto flex justify-around items-center min-h-[var(--uix-nav-height)] h-14 px-2 min-w-0 sm:px-4 sm:h-16 w-full">
-            <div className="flex flex-1 justify-around items-stretch">
-              {navItemsLeft.map(renderNavButton)}
-            </div>
-            <div className="flex flex-1 justify-center items-stretch min-w-0">
-              <NavLogoButton onClick={() => setLocation("/profile/me")} />
-            </div>
-            <div className="flex flex-1 justify-around items-stretch">
-              {navItemsRight.map(renderNavButton)}
-            </div>
+        {/* Нижнее меню PULSE: 5 пунктов, в чате скрыто */}
+        <nav
+          className={cn(
+            "fixed bottom-0 left-0 right-0 z-50 overflow-visible border-t border-border/50 bg-background/95 backdrop-blur-md pb-[env(safe-area-inset-bottom,0px)] [padding-left:env(safe-area-inset-left,0px)] [padding-right:env(safe-area-inset-right,0px)]",
+            isChatPage && "hidden"
+          )}
+        >
+          <div
+            className={cn(
+              "mx-auto flex min-h-[var(--uix-nav-height)] w-full min-w-0 items-end justify-between gap-0.5 px-1.5 pt-1 sm:px-3",
+              preferPhoneChrome ? "max-w-[480px]" : "max-w-none",
+            )}
+          >
+            {navItemsLeft.map(renderNavButton)}
+            <NavPulseCenterButton
+              isActive={basePath.replace(/\/$/, "") === "/profile/me"}
+              onClick={() => setLocation("/profile/me")}
+            />
+            {navItemsRight.map(renderNavButton)}
           </div>
         </nav>
       </div>
