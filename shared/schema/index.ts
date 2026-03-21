@@ -28,3 +28,4 @@ export * from "./message-translations";
 export * from "./call-transcripts";
 export * from "./platform-settings";
 export * from "./content-reports";
+export * from "./profile-pins";

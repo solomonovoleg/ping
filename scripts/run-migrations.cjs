@@ -83,6 +83,7 @@ const scripts = [
   "scripts/migrate-chat-vibe.cjs",
   "scripts/migrate-admin-ops.cjs",
   "scripts/migrate-ai-search.cjs",
+  "scripts/migrate-profile-pins.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };
