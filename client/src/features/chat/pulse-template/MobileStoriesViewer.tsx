@@ -18,8 +18,7 @@ import {
    DATA
    ══════════════════════════════════════════════════════════════════ */
 
-const ACCENT  = "#818cf8";
-const ACCENT2 = "#a78bfa";
+const ACCENT = "#818cf8";
 const IG_GRAD = "linear-gradient(135deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)";
 
 const OWN_STORIES = [
@@ -195,7 +194,7 @@ interface StoriesViewerProps {
 }
 
 export function MobileStoriesViewer({ initialMode = "own", onClose }: StoriesViewerProps = {}) {
-  const [mode, setMode]             = useState<"own" | "other">(initialMode);
+  const mode = initialMode ?? "own";
   const [storyIdx, setStoryIdx]     = useState(0);
   const [progress, setProgress]     = useState(0);         // 0–1 within current story
   const [paused, setPaused]         = useState(false);
@@ -234,14 +233,6 @@ export function MobileStoriesViewer({ initialMode = "own", onClose }: StoriesVie
 
   /* Reset progress on story change */
   useEffect(() => { setProgress(0); }, [storyIdx]);
-
-  /* Reset state on mode change */
-  useEffect(() => {
-    setStoryIdx(0);
-    setProgress(0);
-    setViewerPanel(false);
-    setLiked(false);
-  }, [mode]);
 
   /* Rotate AI insights */
   useEffect(() => {
@@ -783,32 +774,6 @@ export function MobileStoriesViewer({ initialMode = "own", onClose }: StoriesVie
               <div style={{ height: 32 }} />
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ══════════════════════════════════════════════
-          MODE TOGGLE (floating, bottom-right)
-          ══════════════════════════════════════════════ */}
-      {!viewerPanel && (
-        <div className="absolute z-50" style={{ bottom: mode === "own" ? 110 : 120, right: 16 }}>
-          <button
-            onClick={() => setMode(m => m === "own" ? "other" : "own")}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all"
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              backdropFilter: "blur(16px)",
-              border: "1px solid rgba(255,255,255,0.15)",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
-            }}>
-            <div className="relative flex items-center rounded-full"
-              style={{ width: 30, height: 16, background: mode === "own" ? `${ACCENT}55` : "rgba(255,255,255,0.15)" }}>
-              <div className="absolute flex items-center justify-center w-3 h-3 rounded-full transition-all duration-300"
-                style={{ left: mode === "own" ? 1.5 : 15, background: mode === "own" ? ACCENT : "rgba(255,255,255,0.6)" }} />
-            </div>
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
-              {mode === "own" ? "Мой сторис" : "Чужой"}
-            </span>
-          </button>
         </div>
       )}
     </div>

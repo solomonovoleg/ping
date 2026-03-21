@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import { normalizePhone } from "../auth/phone";
 import { getDb } from "../db";
 import { storage } from "../storage";
 import { getAuthorWall } from "../posts/author-wall";
@@ -37,7 +38,8 @@ function parseNicknameUpdate(raw: unknown): string | null | undefined {
   return s;
 }
 
-function normalizeGenderValue(value: unknown): "male" | "female" | "other" | null {
+/** Нормализация пола для API и БД (en + ru). Экспорт для ответов /auth/me и единообразия с PATCH профиля. */
+export function normalizeGenderValue(value: unknown): "male" | "female" | "other" | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
   if (normalized === "male" || normalized === "мужской") return "male";
@@ -126,18 +128,34 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     if (target.hideFromSearch) canMessage = isInMyContacts;
     if (isBlockedByMe || isBlockedMe) canMessage = false;
   }
-  const [followersCount, followingCount, counters] = await Promise.all([
+  const loadMutual =
+    !isMe && !isBlockedByMe && !isBlockedMe
+      ? Promise.all([
+          storage.countMutualFollowingWhoFollowTarget(viewerId, target.id),
+          storage.listMutualFollowingWhoFollowTarget(viewerId, target.id, 3),
+        ])
+      : Promise.resolve([0, []] as const);
+
+  const [followersCount, followingCount, counters, mutualPair] = await Promise.all([
     storage.getFollowersCount(target.id),
     storage.getFollowingCount(target.id),
     getProfileCounters(target.id),
+    loadMutual,
   ]);
+
+  const [mutualCount, mutualPreview] = mutualPair;
+  const mutualFollowers =
+    !isMe && !isBlockedByMe && !isBlockedMe && mutualCount > 0
+      ? { count: mutualCount, preview: mutualPreview }
+      : undefined;
+
   return {
     id: target.id,
     publicId: target.publicId,
     displayName: target.displayName ?? null,
     surname: target.surname ?? null,
     nickname: target.nickname ?? null,
-    gender: target.gender ?? null,
+    gender: normalizeGenderValue(target.gender) ?? null,
     avatarUrl: target.avatarUrl ?? null,
     coverUrl: target.coverUrl ?? null,
     showCover: (target as { showCover?: boolean }).showCover !== false,
@@ -154,6 +172,7 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     postsCount: counters.postsCount,
     reactionsCount: counters.reactionsCount,
     commentsCount: counters.commentsCount,
+    mutualFollowers,
   };
 }
 
@@ -355,4 +374,58 @@ export async function listContacts(userId: string, includeProfiles: boolean) {
       }));
   }
   return ids;
+}
+
+const MAX_PHONES_IN_MATCH_REQUEST = 500;
+
+export type ContactPhoneMatchRow = {
+  id: string;
+  publicId: number;
+  displayName: string | null;
+  surname: string | null;
+  avatarUrl: string | null;
+  isInMyContacts: boolean;
+};
+
+/** Сопоставление номеров из телефонной книги с аккаунтами Ping (только видимые в поиске, без взаимных блокировок). */
+export async function matchContactsFromPhoneBook(
+  viewerId: string,
+  rawPhones: unknown
+): Promise<{ matches: ContactPhoneMatchRow[] }> {
+  if (!Array.isArray(rawPhones)) {
+    throw new UsersServiceError(400, "Ожидается массив номеров в поле phones");
+  }
+  const normalized = new Set<string>();
+  for (const item of rawPhones) {
+    if (typeof item !== "string") continue;
+    const n = normalizePhone(item);
+    if (n) normalized.add(n);
+    if (normalized.size >= MAX_PHONES_IN_MATCH_REQUEST) break;
+  }
+  const phones = [...normalized];
+  if (phones.length === 0) {
+    return { matches: [] };
+  }
+  const found = await storage.findUsersDiscoverableByPhones(phones, viewerId);
+  const blocked = new Set(await storage.getBlockedRelationIds(viewerId));
+  const contactIds = new Set(await storage.listContactUserIds(viewerId));
+
+  function displaySortKey(u: { displayName: string | null; surname: string | null; publicId: number }) {
+    const s = [u.displayName, u.surname].filter(Boolean).join(" ").trim();
+    return s || String(u.publicId);
+  }
+
+  const matches = found
+    .filter((u) => !blocked.has(u.id))
+    .map((u) => ({
+      id: u.id,
+      publicId: u.publicId,
+      displayName: u.displayName ?? null,
+      surname: u.surname ?? null,
+      avatarUrl: u.avatarUrl ?? null,
+      isInMyContacts: contactIds.has(u.id),
+    }))
+    .sort((a, b) => displaySortKey(a).localeCompare(displaySortKey(b), "ru"));
+
+  return { matches };
 }

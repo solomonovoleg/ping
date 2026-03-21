@@ -1,5 +1,5 @@
 import type { MutableRefObject } from "react";
-import { getCallToken, getCallWsUrl, CallTokenUnauthorizedError } from "@/lib/calls";
+import { getCallToken, openCallRealtimeWebSocket, CallTokenUnauthorizedError } from "@/lib/calls";
 import {
   emitChatListUpdate,
   emitChatRead,
@@ -328,7 +328,7 @@ export class RealtimeSocketTransport {
 
     const openWsWithNewToken = async (): Promise<WebSocket> => {
       const token = await getCallToken();
-      const socket = new WebSocket(getCallWsUrl(token));
+      const socket = openCallRealtimeWebSocket(token);
       this.wsRef.current = socket;
       this.attachWsHandlers(socket);
       await new Promise<void>((resolve, reject) => {
@@ -401,7 +401,7 @@ export class RealtimeSocketTransport {
         .then((token) => {
           if (!mounted) return;
           if (this.wsRef.current?.readyState === 1) return;
-          const ws = new WebSocket(getCallWsUrl(token));
+          const ws = openCallRealtimeWebSocket(token);
           this.wsRef.current = ws;
           this.attachWsHandlers(ws);
         })

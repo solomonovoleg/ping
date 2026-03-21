@@ -27,7 +27,8 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.CALL_PHONE",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.READ_CONTACTS"
       ]
     },
     "plugins": [
@@ -35,6 +36,12 @@
       [
         "expo-camera",
         { "cameraPermission": "Разрешите доступ к камере для фото и видео." }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Покажем, кто из вашей телефонной книги уже зарегистрирован в Ping."
+        }
       ],
       [
         "expo-notifications",

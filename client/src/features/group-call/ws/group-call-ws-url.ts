@@ -1,5 +1,6 @@
 import { getCallToken } from "@/lib/calls";
 import { API_BASE } from "@/lib/api-base";
+import { CALL_WS_SUBPROTOCOL } from "@shared/ws-call-handshake";
 
 /** Ждём открытия сокета: иначе пользователь «висит» в connecting при ошибке nginx/токена. */
 const GROUP_CALL_WS_OPEN_MS = 25_000;
@@ -12,20 +13,21 @@ const WS_BASE = (() => {
   return null;
 })();
 
-export function buildGroupCallWsUrl(token: string): string {
+/** Base `wss://…/group-calls` without token (auth via Sec-WebSocket-Protocol). */
+export function buildGroupCallWsUrl(): string {
   if (WS_BASE) {
     const wsOrigin = WS_BASE.replace(/^https:\/\//i, "wss://");
-    return `${wsOrigin}/group-calls?token=${encodeURIComponent(token)}`;
+    return `${wsOrigin}/group-calls`;
   }
   const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = typeof window !== "undefined" ? window.location.host : "localhost:3080";
-  return `${protocol}//${host}/group-calls?token=${encodeURIComponent(token)}`;
+  return `${protocol}//${host}/group-calls`;
 }
 
 export async function connectGroupCallWebSocket(): Promise<WebSocket> {
   const token = await getCallToken();
-  const url = buildGroupCallWsUrl(token);
-  const ws = new WebSocket(url);
+  const url = buildGroupCallWsUrl();
+  const ws = new WebSocket(url, [CALL_WS_SUBPROTOCOL, token]);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;

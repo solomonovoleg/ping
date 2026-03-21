@@ -2,9 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import * as SecureStore from "expo-secure-store";
 import * as api from "../lib/api";
 import type { AuthUser } from "../lib/api";
-import { registerPushToken } from "../lib/api";
-
-const TOKEN_KEY = "ping_auth_token";
+import { PING_SECURE_TOKEN_KEY, registerPushToken } from "../lib/api";
 
 type AuthState = {
   user: api.AuthUser | null;
@@ -22,7 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const refetch = useCallback(async () => {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY);
+    const token = await SecureStore.getItemAsync(PING_SECURE_TOKEN_KEY);
     if (token) api.setAuthToken(token);
     try {
       const u = await api.fetchMe();
@@ -36,9 +34,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Expo Go не поддерживает push (SDK 53+), или отклонено — игнорируем
         }
       }
-    } catch {
-      setUser(null);
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(
     async (phone: string, password: string) => {
       const { user: u, token } = await api.login(phone, password);
-      if (token) await SecureStore.setItemAsync(TOKEN_KEY, token);
+      if (token) await SecureStore.setItemAsync(PING_SECURE_TOKEN_KEY, token);
       setUser(u);
     },
     []
@@ -60,7 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (phone: string, password: string, referralCode: string) => {
       const { user: u, token } = await api.register(phone, password, referralCode);
-      if (token) await SecureStore.setItemAsync(TOKEN_KEY, token);
+      if (token) await SecureStore.setItemAsync(PING_SECURE_TOKEN_KEY, token);
       setUser(u);
     },
     []
@@ -68,7 +63,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await api.logout();
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
     setUser(null);
   }, []);
 

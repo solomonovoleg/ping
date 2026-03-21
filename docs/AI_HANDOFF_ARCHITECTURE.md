@@ -91,12 +91,12 @@ For each substantial refactor:
    - `npm run check`
    - `npm run build`
 6. update:
-   - `docs/ARCHITECTURE_CURRENT.md`
+   - `docs/PROJECT_MAP.md` (especially if modules/paths changed)
    - `docs/DEV_HANDOFF_CURSOR.md` (if handoff context changed)
 
 ## Files to read first
 
-1. `docs/ARCHITECTURE_CURRENT.md`
+1. `docs/PROJECT_MAP.md`
 2. `docs/DEV_HANDOFF_CURSOR.md`
 3. `server/routes.ts`
 4. `server/ai-chat/routes.ts`

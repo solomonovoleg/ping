@@ -116,3 +116,40 @@ export async function fetchOpsTrafficShield(): Promise<TrafficShieldDto> {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+export type ModulesTelemetryRow = {
+  id: string;
+  label: string;
+  requests: number;
+  avgMs: number;
+  errors5xx: number;
+  errors4xx: number;
+  limited429: number;
+  uniqueUsersThisHour: number;
+};
+
+export type ModulesTelemetryRecentError = {
+  at: string;
+  module: string;
+  moduleLabel: string;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+  userId: string | null;
+  detail: string | null;
+  hints: string[];
+};
+
+export type ModulesTelemetryDto = {
+  generatedAt: string;
+  uptimeSec: number;
+  modules: ModulesTelemetryRow[];
+  recentErrors: ModulesTelemetryRecentError[];
+};
+
+export async function fetchModulesTelemetry(): Promise<ModulesTelemetryDto> {
+  const res = await adminOpsFetch("/admin/modules-telemetry");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

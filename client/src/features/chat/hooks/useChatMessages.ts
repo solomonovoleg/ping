@@ -6,6 +6,11 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { getMessages, listChatFolders } from "@/lib/chat";
+import {
+  CHAT_OUTBOX_FLUSHED,
+  mergeOutboxIntoServerList,
+  type ChatOutboxFlushedDetail,
+} from "@/lib/chat-outbox";
 import { getDraft } from "@/lib/chat-drafts";
 import { API, apiFetch } from "@/lib/api-base";
 import { isUuid } from "../utils/format";
@@ -138,8 +143,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           setResolvedChatId(cId);
           setChat(chatData);
           const list: ApiMessage[] = "messages" in data && Array.isArray(data.messages) ? data.messages : [];
-          setMessages(list);
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
+          if (user?.id) {
+            void mergeOutboxIntoServerList(cId, user.id, list, null).then((merged) => {
+              if (currentChatIdRef.current === cId) setMessages(merged);
+            });
+          } else {
+            setMessages(list);
+          }
           const draft = getDraft(cId) ?? "";
           onDraftRestoreRef.current?.(cId, draft);
         })
@@ -202,8 +213,15 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         const messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
         const list: ApiMessage[] = messagesRes.ok ? await messagesRes.json() : [];
         if (currentChatIdRef.current === id) {
-          setMessages(Array.isArray(list) ? list : []);
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
+          const arr = Array.isArray(list) ? list : [];
+          if (user?.id) {
+            void mergeOutboxIntoServerList(id, user.id, arr, folderId).then((merged) => {
+              if (currentChatIdRef.current === id) setMessages(merged);
+            });
+          } else {
+            setMessages(arr);
+          }
         }
         if (currentChatIdRef.current !== id) return;
         const draft = getDraft(id) ?? "";
@@ -215,11 +233,19 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       .finally(() => {
         if (currentChatIdRef.current === id) setLoading(false);
       });
-  }, [chatIdParam]);
+  }, [chatIdParam, user?.id]);
 
   const loadOlderMessages = useCallback(async () => {
     const oldest = messages[0];
-    if (!oldest || oldest.id.startsWith("temp-") || loadingMoreMessages || !hasMoreMessages || !chatId) return;
+    if (
+      !oldest ||
+      oldest.id.startsWith("temp-") ||
+      oldest.id.startsWith("obq-") ||
+      loadingMoreMessages ||
+      !hasMoreMessages ||
+      !chatId
+    )
+      return;
     setLoadingMoreMessages(true);
     const container = scrollContainerRef.current;
     const oldHeight = container?.scrollHeight ?? 0;
@@ -265,8 +291,15 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         });
         const list: ApiMessage[] = res.ok ? await res.json() : [];
         if (currentChatIdRef.current === chatId) {
-          setMessages(Array.isArray(list) ? list : []);
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
+          const arr = Array.isArray(list) ? list : [];
+          if (user?.id) {
+            void mergeOutboxIntoServerList(chatId, user.id, arr, folderId).then((merged) => {
+              if (currentChatIdRef.current === chatId) setMessages(merged);
+            });
+          } else {
+            setMessages(arr);
+          }
         }
       } catch {
         if (currentChatIdRef.current === chatId) setError("Не удалось загрузить сообщения");
@@ -274,8 +307,31 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current === chatId) setLoading(false);
       }
     },
-    [chatId, chat]
+    [chatId, chat, user?.id]
   );
+
+  useEffect(() => {
+    const onFlushed = (ev: Event) => {
+      const d = (ev as CustomEvent<ChatOutboxFlushedDetail>).detail;
+      if (!d || d.chatId !== chatId) return;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === d.localId
+            ? {
+                ...m,
+                id: d.message.id,
+                type: d.message.type,
+                content: d.message.content,
+                createdAt: d.message.createdAt,
+                sendStatus: undefined as ApiMessage["sendStatus"],
+              }
+            : m
+        )
+      );
+    };
+    window.addEventListener(CHAT_OUTBOX_FLUSHED, onFlushed);
+    return () => window.removeEventListener(CHAT_OUTBOX_FLUSHED, onFlushed);
+  }, [chatId, setMessages]);
 
   useEffect(() => {
     loadChatAndMessages();

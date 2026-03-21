@@ -527,7 +527,24 @@ export default function Posts() {
   const getViewerStoriesForIndex = useCallback((idx: number) => {
     const item = storyCircles[idx];
     if (!item || !("stories" in item) || !Array.isArray(item.stories) || item.stories.length === 0) {
-      return [{ id: item?.id ?? idx, image: (item as { image?: string })?.image ?? "", userName: (item as { name?: string })?.name ?? "", userAvatar: (item as { avatar?: string })?.avatar ?? "", time: (item as { time?: string })?.time ?? "" }];
+      const rawId = item && "id" in item ? (item as { id: unknown }).id : idx;
+      const storyId = String(rawId ?? idx);
+      const authorIdFromCircle =
+        item &&
+        typeof (item as { id?: unknown }).id === "string" &&
+        (item as { id: string }).id !== "me"
+          ? (item as { id: string }).id
+          : (item as { author?: { id?: string } })?.author?.id ?? "";
+      return [
+        {
+          id: storyId,
+          authorId: authorIdFromCircle,
+          image: (item as { image?: string })?.image ?? "",
+          userName: (item as { name?: string })?.name ?? "",
+          userAvatar: (item as { avatar?: string })?.avatar ?? "",
+          time: (item as { time?: string })?.time ?? "",
+        },
+      ];
     }
     const author = (item as { author?: { id?: string; displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
     const name = author?.displayName || (item as { name?: string }).name || `ID ${author?.publicId ?? ""}`;
@@ -612,24 +629,30 @@ export default function Posts() {
   }) => {
     if (!user?.id) {
       toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
-      return;
+      throw new Error("Не авторизован");
     }
     if (!payload.authorId || payload.authorId === user.id) {
       toast({ title: "Нельзя отправить ответ на свой сториз", variant: "destructive" });
-      return;
+      throw new Error("Нельзя ответить на свой сториз");
     }
-    const chat = await startDm(payload.authorId);
-    const storyPayload = {
-      storyId: payload.story.id,
-      mediaUrl: payload.story.image,
-      authorId: payload.authorId,
-      authorName: payload.story.userName,
-      authorAvatar: payload.story.userAvatar,
-      storyTimeLabel: payload.story.time,
-      replyText: payload.text.trim(),
-    };
-    await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
-    toast({ title: "Ответ на сториз отправлен" });
+    try {
+      const chat = await startDm(payload.authorId);
+      const storyPayload = {
+        storyId: payload.story.id,
+        mediaUrl: payload.story.image,
+        authorId: payload.authorId,
+        authorName: payload.story.userName,
+        authorAvatar: payload.story.userAvatar,
+        storyTimeLabel: payload.story.time,
+        replyText: payload.text.trim(),
+      };
+      await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
+      toast({ title: "Ответ на сториз отправлен" });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Не удалось отправить ответ";
+      toast({ title: msg, variant: "destructive" });
+      throw e instanceof Error ? e : new Error(msg);
+    }
   };
 
   const handleStoryLikeToggle = async (storyId: string, liked: boolean) => {
@@ -1302,40 +1325,46 @@ export default function Posts() {
 
         {activeViewersStoryId && (
           <div
-            className="fixed inset-0 z-[380] flex items-end bg-black/45 px-3 pt-3 pb-[max(var(--uix-space-3),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))]"
+            className="fixed inset-0 z-[380] flex items-end bg-black/50 px-0 pt-3 pb-[max(var(--uix-space-3),calc(env(safe-area-inset-bottom,0px)+var(--uix-space-2)))] backdrop-blur-sm"
             onClick={() => setActiveViewersStoryId(null)}
           >
             <div
-              className="mx-auto w-full max-w-[480px] rounded-2xl border border-border bg-background shadow-2xl"
+              className="mx-auto w-full max-w-[480px] overflow-hidden rounded-t-[28px] border border-white/10 bg-[rgba(10,8,24,0.97)] text-white shadow-2xl backdrop-blur-xl"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <Eye className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-sm font-semibold">Кто посмотрел сториз</p>
+              <div className="flex justify-center pt-3 pb-1" aria-hidden>
+                <div className="h-1 w-10 rounded-full bg-white/20" />
+              </div>
+              <div className="flex items-center justify-between px-5 pb-3 pt-1">
+                <div className="flex flex-col gap-0.5">
+                  <p className="text-base font-extrabold tracking-tight text-white">Кто смотрел</p>
+                  <p className="text-xs text-white/45">Список просмотров этой сториз</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setActiveViewersStoryId(null)}
-                  className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
+                  className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full bg-white/[0.08] text-white/70 hover:bg-white/[0.12]"
                   aria-label="Закрыть список просмотров"
                 >
                   <MoreHorizontal className="h-4 w-4 rotate-90" />
                 </button>
               </div>
-              <div className="max-h-[52vh] overflow-y-auto p-2">
+              <div className="max-h-[52vh] overflow-y-auto px-3 pb-4">
                 {activeStoryViewersLoading ? (
-                  <div className="px-3 py-4 text-sm text-muted-foreground">Загрузка...</div>
+                  <div className="px-3 py-4 text-sm text-white/55">Загрузка…</div>
                 ) : activeStoryViewers.length === 0 ? (
                   <ListEmptyState
                     icon={Eye}
                     title="Пока нет просмотров"
                     description="Когда пользователи посмотрят сториз, они появятся здесь."
-                    className="border-none"
+                    className="border-none text-white [&_svg]:text-white/70 [&_p]:text-white/55"
                   />
                 ) : (
                   (activeStoryViewers as StoryViewerUser[]).map((viewer) => (
-                    <div key={viewer.id} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-secondary/60">
+                    <div
+                      key={viewer.id}
+                      className="flex w-full items-center gap-3 rounded-xl border-b border-white/[0.06] px-2 py-2.5 text-left last:border-b-0 hover:bg-white/[0.06]"
+                    >
                       <UserAvatar
                         avatarUrl={viewer.avatarUrl ?? undefined}
                         displayName={[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
@@ -1344,10 +1373,10 @@ export default function Posts() {
                         className="h-9 w-9"
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
+                        <p className="truncate text-sm font-medium text-white">
                           {[viewer.displayName, viewer.surname].filter(Boolean).join(" ") || `ID ${viewer.publicId}`}
                         </p>
-                        <p className="text-xs text-muted-foreground">{formatPostTime(viewer.viewedAt)}</p>
+                        <p className="text-xs text-white/45">{formatPostTime(viewer.viewedAt)}</p>
                       </div>
                     </div>
                   ))

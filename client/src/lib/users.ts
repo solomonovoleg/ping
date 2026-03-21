@@ -23,6 +23,17 @@ export type PublicProfile = {
   postsCount: number;
   reactionsCount: number;
   commentsCount: number;
+  /** Подписки, пересекающиеся с просматриваемым профилем (только чужой профиль). */
+  mutualFollowers?: {
+    count: number;
+    preview: Array<{
+      id: string;
+      publicId: number;
+      displayName: string | null;
+      surname: string | null;
+      avatarUrl: string | null;
+    }>;
+  };
 };
 
 function normalizeProfileRouteId(id: string): string {
@@ -107,12 +118,34 @@ export type ContactUser = {
   avatarUrl: string | null;
 };
 
+/** Совпадение телефонной книги с аккаунтом Ping (ответ /api/contacts/match-phones). */
+export type ContactPhoneMatchUser = ContactUser & { isInMyContacts: boolean };
+
 /** Список контактов с краткими профилями для экрана «Контакты» */
 export async function listContactsWithProfiles(): Promise<ContactUser[]> {
   const res = await apiFetch(`${API}/contacts?list=1`, { credentials: "include" });
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : [];
+}
+
+/** Какие из переданных номеров (любой строковый формат) зарегистрированы в Ping. */
+export async function matchContactsFromPhones(phones: string[]): Promise<ContactPhoneMatchUser[]> {
+  const res = await apiFetch(`${API}/contacts/match-phones`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ phones }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось проверить контакты");
+  }
+  const data: unknown = await res.json();
+  if (!data || typeof data !== "object" || !("matches" in data)) return [];
+  const m = (data as { matches: unknown }).matches;
+  if (!Array.isArray(m)) return [];
+  return m as ContactPhoneMatchUser[];
 }
 
 /** Подписаться на пользователя */

@@ -36,7 +36,9 @@ import { MobileStoriesViewer } from "@/features/chat/pulse-template";
 <MobileStoriesViewer initialMode="other" onClose={() => setOpen(false)} />
 ```
 
-В dev откройте **`/dev/pulse-template/stories`** для предпросмотра в рамке 390px.
+В dev: **`/dev/pulse-template/stories`** (мои) и **`/dev/pulse-template/stories-other`** (чужие) — без переключателя в UI, только отдельные URL или проп `initialMode`.
+
+Продакшен-просмотр **`@/components/StoryViewer`** визуально выровнен под этот макет: чёрный фон, прогресс-бары, IG-рамка аватара, кольцо времени жизни сториз, нижняя зона «свои / чужие», градиенты поверх медиа. Мок-аналитика (Story DNA, сегменты AI) в шаблоне остаётся только в `MobileStoriesViewer`.
 
 ---
 
@@ -46,7 +48,7 @@ import { MobileStoriesViewer } from "@/features/chat/pulse-template";
 
 ```
 ┌─────────────────────────────────────┐
-│  ✕      ОС  •  Олег   ···   [Own]  │  ← хедер + toggle
+│  ✕      ОС  •  Олег   ···            │  ← хедер
 │  ████████████████░░░░░░   9:41     │  ← прогресс сторис
 │                                     │
 │       [Story background]            │  ← градиентный фон сторис

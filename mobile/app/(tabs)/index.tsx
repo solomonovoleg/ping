@@ -71,7 +71,11 @@ export default function ChatsScreen() {
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
-          <TouchableOpacity style={styles.contactsBtn} accessibilityLabel="Контакты">
+          <TouchableOpacity
+            style={styles.contactsBtn}
+            accessibilityLabel="Контакты"
+            onPress={() => router.push("/contacts")}
+          >
             <Ionicons name="person-add-outline" size={22} color={colors.primary} />
           </TouchableOpacity>
         </View>

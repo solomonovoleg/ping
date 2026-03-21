@@ -7,6 +7,13 @@ import { useRealtimeContext } from "@/contexts/RealtimeContext";
 import { useToast } from "@/hooks/use-toast";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { uploadVoice, uploadChatMedia, sendMessage } from "@/lib/chat";
+import {
+  enqueueOutboxText,
+  enqueueOutboxVoice,
+  flushChatOutbox,
+  isLikelyOnline,
+  newOutboxLocalId,
+} from "@/lib/chat-outbox";
 import { clearDraft } from "@/lib/chat-drafts";
 import { compressImage } from "@/lib/compress-image";
 import { API, apiFetch } from "@/lib/api-base";
@@ -238,10 +245,10 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     if (isScheduled) setScheduledAt(null);
     setMessage("");
     clearDraft(chatId);
-    const tempId = `temp-${Date.now()}`;
+    const localId = newOutboxLocalId();
     if (!isScheduled) {
       const optimistic: ApiMessage = {
-        id: tempId, chatId, senderId: user.id, type: "text", content: text,
+        id: localId, chatId, senderId: user.id, type: "text", content: text,
         replyToId: replyToMsg?.id ?? undefined,
         replyTo: replyToMsg ? { id: replyToMsg.id, senderId: replyToMsg.senderId, type: replyToMsg.type, content: replyToMsg.type === "text" ? replyToMsg.content.slice(0, 200) : replyToMsg.type } : undefined,
         createdAt: new Date().toISOString(), sendStatus: "sending",
@@ -249,6 +256,30 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       flushSync(() => setMessages((prev) => [...prev, optimistic]));
     }
     playSendSound();
+
+    if (!isScheduled && !isLikelyOnline()) {
+      const ok = await enqueueOutboxText({
+        localId,
+        chatId,
+        userId: user.id,
+        folderId,
+        replyToId: replyToMsg?.id ?? null,
+        text,
+      });
+      if (!ok) {
+        setMessages((prev) => prev.filter((m) => m.id !== localId));
+        setMessage(text);
+        setReplyingTo(replyToMsg);
+        toast({ title: "Очередь переполнена", description: "Удалите старые или дождитесь сети.", variant: "destructive" });
+      } else {
+        toast({ title: "Нет сети", description: "Сообщение в очереди — отправим при появлении связи." });
+        void flushChatOutbox();
+      }
+      setSending(false);
+      sendingLockRef.current = false;
+      return;
+    }
+
     try {
       const body: { content: string; folderId?: string; replyToId?: string; scheduledAt?: string } = { content: text };
       if (folderId) body.folderId = folderId;
@@ -266,20 +297,57 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         } else if (data.id) {
           setMessages((prev) => {
             const alreadyHasReal = prev.some((m) => m.id === data.id);
-            if (alreadyHasReal) return prev.filter((m) => m.id !== tempId);
-            return prev.map((m) => m.id === tempId ? { ...m, id: data.id, replyToId: data.replyToId ?? m.replyToId, createdAt: data.createdAt ?? m.createdAt, sendStatus: undefined as ApiMessage["sendStatus"] } : m);
+            if (alreadyHasReal) return prev.filter((m) => m.id !== localId);
+            return prev.map((m) => m.id === localId ? { ...m, id: data.id, replyToId: data.replyToId ?? m.replyToId, createdAt: data.createdAt ?? m.createdAt, sendStatus: undefined as ApiMessage["sendStatus"] } : m);
           });
         }
       } else {
-        if (!isScheduled) setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, sendStatus: "failed" as const } : m)));
-        setMessage(text);
-        const msg = (data && typeof data.message === "string" ? data.message : null) || "Не удалось отправить";
-        toast({ title: msg, variant: "destructive" });
+        if (!isScheduled && !isLikelyOnline()) {
+          const ok = await enqueueOutboxText({
+            localId,
+            chatId,
+            userId: user.id,
+            folderId,
+            replyToId: replyToMsg?.id ?? null,
+            text,
+          });
+          if (ok) {
+            toast({ title: "Нет сети", description: "Сообщение в очереди — отправим при появлении связи." });
+            void flushChatOutbox();
+          } else {
+            setMessages((prev) => prev.map((m) => (m.id === localId ? { ...m, sendStatus: "failed" as const } : m)));
+            setMessage(text);
+            toast({ title: "Не удалось сохранить в очередь", variant: "destructive" });
+          }
+        } else {
+          if (!isScheduled) setMessages((prev) => prev.map((m) => (m.id === localId ? { ...m, sendStatus: "failed" as const } : m)));
+          setMessage(text);
+          const msg = (data && typeof data.message === "string" ? data.message : null) || "Не удалось отправить";
+          toast({ title: msg, variant: "destructive" });
+        }
       }
     } catch {
-      if (!isScheduled) setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, sendStatus: "failed" as const } : m)));
-      setMessage(text);
-      toast({ title: "Нет сети", variant: "destructive" });
+      if (!isScheduled) {
+        const ok = await enqueueOutboxText({
+          localId,
+          chatId,
+          userId: user.id,
+          folderId,
+          replyToId: replyToMsg?.id ?? null,
+          text,
+        });
+        if (ok) {
+          toast({ title: "Нет сети", description: "Сообщение в очереди — отправим при появлении связи." });
+          void flushChatOutbox();
+        } else {
+          setMessages((prev) => prev.map((m) => (m.id === localId ? { ...m, sendStatus: "failed" as const } : m)));
+          setMessage(text);
+          toast({ title: "Не удалось сохранить в очередь", variant: "destructive" });
+        }
+      } else {
+        setMessage(text);
+        toast({ title: "Нет сети", variant: "destructive" });
+      }
     } finally {
       setSending(false);
       sendingLockRef.current = false;
@@ -303,12 +371,51 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
           setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, id: data.id, createdAt: data.createdAt ?? m.createdAt, sendStatus: undefined as ApiMessage["sendStatus"] } : m));
           playSendSound();
         } else {
-          setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, sendStatus: "failed" as const } : m)));
-          toast({ title: "Не отправлено", variant: "destructive" });
+          if (!isLikelyOnline()) {
+            const newId = newOutboxLocalId();
+            const ok = await enqueueOutboxText({
+              localId: newId,
+              chatId,
+              userId: user.id,
+              folderId,
+              replyToId: msg.replyToId ?? null,
+              text,
+            });
+            if (ok) {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === msg.id ? { ...m, id: newId, sendStatus: "sending" as const } : m))
+              );
+              toast({ title: "В очереди", description: "Отправим при появлении связи." });
+              void flushChatOutbox();
+            } else {
+              setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, sendStatus: "failed" as const } : m)));
+              toast({ title: "Не удалось сохранить в очередь", variant: "destructive" });
+            }
+          } else {
+            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, sendStatus: "failed" as const } : m)));
+            toast({ title: "Не отправлено", variant: "destructive" });
+          }
         }
       } catch {
-        setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, sendStatus: "failed" as const } : m)));
-        toast({ title: "Нет сети", variant: "destructive" });
+        const newId = newOutboxLocalId();
+        const ok = await enqueueOutboxText({
+          localId: newId,
+          chatId,
+          userId: user.id,
+          folderId,
+          replyToId: msg.replyToId ?? null,
+          text,
+        });
+        if (ok) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === msg.id ? { ...m, id: newId, sendStatus: "sending" as const } : m))
+          );
+          toast({ title: "В очереди", description: "Отправим при появлении связи." });
+          void flushChatOutbox();
+        } else {
+          setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, sendStatus: "failed" as const } : m)));
+          toast({ title: "Не удалось сохранить в очередь", variant: "destructive" });
+        }
       }
     },
     [chatId, folderId, user, setMessages, toast]
@@ -769,6 +876,51 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     sendingVoiceLockRef.current = true;
     setSendingVoice(true);
     setVoiceError(null);
+
+    const pushQueuedVoice = async (): Promise<boolean> => {
+      const localId = newOutboxLocalId();
+      const displayUrl = URL.createObjectURL(blob);
+      const ok = await enqueueOutboxVoice({
+        localId,
+        chatId,
+        userId: user.id,
+        folderId,
+        blob,
+      });
+      if (!ok) {
+        URL.revokeObjectURL(displayUrl);
+        return false;
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: localId,
+          chatId,
+          senderId: user.id,
+          type: "voice",
+          content: displayUrl,
+          createdAt: new Date().toISOString(),
+          sendStatus: "sending",
+        },
+      ]);
+      playSendSound();
+      revokeVoicePreview();
+      toast({ title: "Нет сети", description: "Голосовое в очереди — отправим при появлении связи." });
+      void flushChatOutbox();
+      return true;
+    };
+
+    if (!isLikelyOnline()) {
+      const ok = await pushQueuedVoice();
+      if (!ok) {
+        setVoiceError("Файл слишком большой или очередь переполнена");
+        toast({ title: "Не удалось сохранить голосовое", variant: "destructive" });
+      }
+      setSendingVoice(false);
+      sendingVoiceLockRef.current = false;
+      return;
+    }
+
     try {
       const url = await uploadVoice(blob);
       const sent = await sendMessage(chatId, { type: "voice", content: url, folderId: folderId ?? undefined });
@@ -779,12 +931,15 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
       playSendSound();
       revokeVoicePreview();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Ошибка отправки";
       if (import.meta.env.DEV || typeof console !== "undefined") {
         console.error("[voice] upload/send failed:", err);
       }
-      setVoiceError(msg);
-      toast({ title: msg || "Голосовое не отправлено", variant: "destructive" });
+      const ok = await pushQueuedVoice();
+      if (!ok) {
+        const msg = err instanceof Error ? err.message : "Ошибка отправки";
+        setVoiceError(msg);
+        toast({ title: msg || "Голосовое не отправлено", variant: "destructive" });
+      }
     } finally {
       setSendingVoice(false);
       sendingVoiceLockRef.current = false;

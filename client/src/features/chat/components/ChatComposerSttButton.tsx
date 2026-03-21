@@ -190,7 +190,7 @@ export function ChatComposerSttButton({
   );
 
   const scheduleFinishFromEnd = useCallback(() => {
-    const t = window.setTimeout(() => finishListening(transcriptRef.current), END_FLUSH_MS);
+    const t = setTimeout(() => finishListening(transcriptRef.current), END_FLUSH_MS);
     timersRef.current.push(t);
   }, [finishListening]);
 

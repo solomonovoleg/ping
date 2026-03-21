@@ -17,12 +17,31 @@ interface PullToRefreshProps {
   showScrollToTop?: boolean;
   /** Внешний ref на скролл-контейнер, если нужно управлять scrollTop извне (например, сохранять позицию ленты). */
   scrollRef?: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Фиксированный оверлей под скроллом (z-20): при pull-to-refresh не «уезжает» вместе с контентом.
+   * Скролл задаётся с `scrollPaddingTopPx`, чтобы контент заходил на обложку; фон скролла прозрачный в зоне padding.
+   */
+  overlayTop?: React.ReactNode;
+  /** Высота оверлея в px (по умолчанию 133 — профиль PULSE). */
+  overlayTopHeightPx?: number;
+  /** Верхний padding скролла (например под нахлёст карточки на обложку). */
+  scrollPaddingTopPx?: number;
 }
 
 /**
  * Оборачивает скролл-область: при тяге вниз с вершины списка вызывается onRefresh (аудит п.7, п.24).
  */
-export function PullToRefresh({ onRefresh, children, className, disabled, showScrollToTop, scrollRef }: PullToRefreshProps) {
+export function PullToRefresh({
+  onRefresh,
+  children,
+  className,
+  disabled,
+  showScrollToTop,
+  scrollRef,
+  overlayTop,
+  overlayTopHeightPx = 133,
+  scrollPaddingTopPx = 0,
+}: PullToRefreshProps) {
   const [pullY, setPullY] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [showToTop, setShowToTop] = useState(false);
@@ -94,9 +113,17 @@ export function PullToRefresh({ onRefresh, children, className, disabled, showSc
   }, [onRefresh, pullY, refreshing]);
 
   return (
-    <div className={cn("flex flex-col flex-1 min-h-0 min-w-0", className)}>
+    <div className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", className)}>
+      {overlayTop ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 isolate"
+          style={{ height: overlayTopHeightPx }}
+        >
+          <div className="pointer-events-auto h-full">{overlayTop}</div>
+        </div>
+      ) : null}
       <div
-        className="flex items-center justify-center overflow-hidden transition-[height] duration-150"
+        className="relative z-[22] flex shrink-0 items-center justify-center overflow-hidden transition-[height] duration-150"
         style={{
           height: refreshing ? 48 : Math.min(pullY, PULL_THRESHOLD),
           minHeight: 0,
@@ -114,7 +141,11 @@ export function PullToRefresh({ onRefresh, children, className, disabled, showSc
       </div>
       <div
         ref={effectiveScrollRef}
-        className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden"
+        className="relative z-30 min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent"
+        style={{
+          paddingTop: scrollPaddingTopPx,
+          WebkitOverflowScrolling: "touch",
+        }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}

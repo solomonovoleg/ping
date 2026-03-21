@@ -1,0 +1,261 @@
+# PING MOOT — полная карта проекта
+
+**Единый документ:** структура репозитория, где искать код, куда класть новое, связанные гайды.
+
+---
+
+## Обязательное правило ведения
+
+**Любой новый модуль** (новая папка в `client/src/features/`, новый домен в `server/`, новый значимый пакет в `shared/`, новый подпроект вроде `server/admin/ops/`) **дописывается в этот файл в том же PR**, в подходящую таблицу или раздел «Журнал модулей».
+
+- Одна строка: **путь**, **назначение**, при необходимости **ссылка на README** внутри модуля.
+- Если модуль переименован или удалён — поправить карту в том же PR, что и код.
+- Детальные алгоритмы и чеклисты по-прежнему живут в узких документах (`CHAT_DETAIL_RULES.md`, `AI_SEARCH_ALGORITHM.md` и т.д.); здесь только **навигация и границы**.
+
+*При противоречии между этим файлом и кодом приоритет у кода — затем обновить карту.*
+
+---
+
+## Оглавление
+
+1. [Верхний уровень](#верхний-уровень)
+2. [Клиент (`client/`)](#клиент-client)
+3. [Сервер (`server/`)](#сервер-server)
+4. [Общий слой (`shared/`)](#общий-слой-shared)
+5. [Прочее в репозитории](#прочее-в-репозитории)
+6. [Слои и потоки данных](#слои-и-потоки-данных)
+7. [Куда добавлять новый код](#куда-добавлять-новый-код)
+8. [Правила модулей и размер файлов](#правила-модулей-и-размер-файлов)
+9. [Журнал модулей (дополнять при появлении нового)](#журнал-модулей-дополнять-при-появлении-нового)
+10. [Связанная документация](#связанная-документация)
+
+---
+
+## Верхний уровень
+
+```text
+client/     React UI, страницы, features, hooks, API adapters (Vite)
+server/     Express API, WebSocket (calls, group-calls, realtime), upload, storage
+shared/     Схемы Drizzle, общие типы и константы (без runtime-логики приложения)
+docs/       Продуктовые и архитектурные документы, гайды
+scripts/    Деплой, миграции, сиды
+ios/        Capacitor / Xcode
+android/    Capacitor / Gradle
+```
+
+Знакомство с кодом по порядку: `client` → `server` → `shared` → `docs`.
+
+---
+
+## Клиент (`client/`)
+
+### Корень `client/src/`
+
+| Путь | Назначение |
+|------|------------|
+| `pages/` | Маршруты (wouter), тонкая сборка: хуки фич + layout |
+| `features/` | Доменная логика экранов: hooks, components, utils по сценарию |
+| `components/` | Переиспользуемый UI, `ui/` — дизайн-система |
+| `contexts/` | Глобальный runtime (напр. `AuthContext`, `CallContext`) |
+| `hooks/` | Кросс-фичевые хуки |
+| `lib/` | Запросы к API, сокеты, звук, утилиты без тяжёлого UI-state |
+| `admin/` | Оболочка админки клиента |
+
+### Features — карта доменов
+
+| Домен | Папка | Назначение |
+|--------|--------|------------|
+| Чат | `features/chat/` | Сообщения, композер, vibe, pulse-шаблоны (`pulse-template/`), хуки (`hooks/`), вынесенные куски экрана без контракта send/actions — `chat/chat-detail/` |
+| Звонки 1:1 | `features/call/` | WebRTC, контроллер, стор, типы, утилиты записи/экрана |
+| Групповые звонки | `features/group-call/` | Комната, mesh, UI (`ui/pulse-ai/`), транскрипты, WS URL, флаги |
+| Профиль (оболочка PULSE) | `features/profile/pulse-profile/` | `PulseProfileLayout`, тема, layout-блоки |
+| Профиль (экран пользователя) | `features/profile/user-profile/` | `useUserProfilePage`, `hooks/`, `model/`, `components/`, `i18n.ru.ts` |
+| Лента | `features/feed/` | Компоненты ленты (напр. `FeedHeader`) |
+| Посты (обрезка видео и др.) | `features/posts/` | Например `video-trim/` |
+| Доска / треки | `features/board/tracks/` | Треки, модалки |
+| История звонков в борде | `features/board/call-history/` | Список/деталь, связка с треками |
+| Уведомления | `features/notifications/` | Колокол, хуки непрочитанного |
+| Админ ops (клиент) | `features/admin-ops/` | Секции платформы, трафик, отчёты, публичные бары — см. `api.ts`, `i18n.ru.ts` |
+
+### Прочее на клиенте
+
+| Путь | Назначение |
+|------|------------|
+| `components/story-viewer/` + `StoryViewer.tsx` | Просмотр сториз, портал |
+| `pages/admin/` | Страницы админки |
+
+Подробнее про профиль: `client/src/features/profile/user-profile/README.md`.
+
+---
+
+## Сервер (`server/`)
+
+### Регистрация
+
+- Точка входа HTTP/WS: `server/routes.ts` (подключение доменов, static `/uploads`, сессия, shield).
+- Bootstrap: `server/index.ts`.
+
+### HTTP-домены (рядом обычно `routes.ts`; часто `service.ts`, при необходимости `repository.ts`, `serializers.ts`)
+
+| Домен | Папка | Назначение |
+|--------|--------|------------|
+| Авторизация | `auth/` | Сессии, вход |
+| Пользователи | `users/` | Профили, подписки, блоки, контакты |
+| Чаты | `chats/` | Чаты, участники, чтение |
+| Сообщения | `messages/` | Лента сообщений, отправка, редактирование |
+| Сохранённые сообщения | `saved-messages/` | Избранное в мессенджере |
+| AI-чат | `ai-chat/` | Диалог с AI |
+| AI Search | `ai-search/` | Поиск, индексация — см. `docs/AI_SEARCH_ALGORITHM.md` |
+| Посты | `posts/` | Лента, CRUD, просмотры |
+| Комментарии | `comments/` | Комментарии к постам |
+| Реакции | `reactions/` | Реакции на посты |
+| Сториз | `stories/` | Сториз, просмотры |
+| Уведомления | `notifications/` | Пуш/лента уведомлений |
+| Рефералы | `referrals/` | Реферальная логика |
+| Звонки 1:1 (HTTP) | `calls/` | Токены и HTTP-часть; WS — `calls/ws.ts` |
+| Групповые звонки | `group-calls/` | HTTP + отдельный WS transport (подключается из `routes.ts`) |
+| Транскрипты звонков | `call-transcripts/` | Сохранение/выдача транскриптов |
+| Треки (борд) | `tracks/` | Треки и сообщения из чатов |
+| Орфография | `spellcheck/` | Проверка орфографии |
+| Превью ссылок | `link-preview/` | Разбор URL |
+| Перевод | `translate/` | Перевод сообщений |
+| Vibe чата | `vibe/` | Темы/вайб чата |
+| Админка | `admin/` | Дашборд, пользователи, аудит, feed, ingest; подпапки `admin/dashboard`, `admin/users`, … |
+| Ops (платформа) | `admin/ops/` | Публичные/админские HTTP для платформы, отчёты, traffic shield — см. `server/admin/ops/README.md` |
+
+### Загрузки файлов
+
+| Путь | Назначение |
+|------|------------|
+| `upload/voice.ts`, `post-media.ts`, `story-media.ts`, `chat-media.ts`, `avatar.ts`, `cover.ts` | Эндпоинты загрузки в `uploads/` |
+
+### Инфраструктура сервера
+
+| Путь | Назначение |
+|------|------------|
+| `db/` | Подключение Drizzle, ensure-колонок/схем |
+| `storage/` | `IStorage`, `DbStorage`, `MemStorage`, общий доступ к данным |
+| `realtime/chat.ts` | Подписки на чаты, fanout событий |
+| `middleware/` | Напр. `api-shield.ts` |
+| `admin/telemetry.ts` | Телеметрия модулей API |
+
+---
+
+## Общий слой (`shared/`)
+
+| Путь | Назначение |
+|------|------------|
+| `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
+| `schema/index.ts` | Реэкспорт схем |
+| `constants.ts` | Общие константы |
+| `call-signaling.ts`, `ws-call-handshake.ts` | Контракты звонков |
+| `chat-vibe-types.ts`, `post-media-layout.ts`, `post-video.ts` | Общие типы/утилиты для UI и API |
+
+Правило: в `shared` — только контракты и схемы, не бизнес-оркестрация.
+
+---
+
+## Прочее в репозитории
+
+| Путь | Назначение |
+|------|------------|
+| `docs/` | Все `.md` гайды; **карта проекта — этот файл** |
+| `scripts/` | `deploy.sh`, `run-migrations.cjs`, сиды, миграции данных |
+| `ios/`, `android/` | Нативные оболочки Capacitor |
+| `uploads/` | Локальные файлы (не коммитить медиа) |
+
+База данных (смысл таблиц, слой storage): `docs/DB.md`.
+
+---
+
+## Слои и потоки данных
+
+### HTTP
+
+1. UI вызывает функции из `client/src/lib/*`.
+2. Запрос на `server/<domain>/routes.ts`.
+3. Route вызывает `service` / `repository` / `storage`.
+4. Ответ как DTO → клиент обновляет кэш / состояние.
+
+### Чат realtime
+
+1. `useCall` держит WebSocket `/calls`.
+2. Подписка на чат: `subscribeChat(chatId, cb)`.
+3. Сервер: `server/realtime/chat.ts`.
+4. События: сообщения, typing, список чатов и т.д. — локальный fanout и invalidate.
+
+### Звонки 1:1
+
+1. Токен: `/api/calls/token`.
+2. WS `wss://…/calls` с протоколом `ping.call.v1` + токен.
+3. Signaling → WebRTC (`simple-peer` на клиенте).
+
+*(Детали и планы улучшений: `docs/CALL_REALTIME_IMPROVEMENT_PLAN.md`, `docs/CALLS_GROUP.md`.)*
+
+---
+
+## Куда добавлять новый код
+
+| Что | Куда |
+|-----|------|
+| Новый экран | `client/src/pages/` |
+| Сценарий экрана | `client/src/features/<домен>/` |
+| Общий UI | `client/src/components/` или `components/ui/` |
+| API-клиент, хелперы | `client/src/lib/` |
+| Новый HTTP-домен | `server/<домен>/routes.ts` + `service.ts` и при необходимости `repository.ts`, `serializers.ts` |
+| Общая схема/тип | `shared/schema/` или корень `shared/` |
+| Новая таблица БД | `shared/schema/` + миграция / `db:push` по принятому процессу |
+
+---
+
+## Правила модулей и размер файлов
+
+1. **Страница = проводка:** в `pages/*` не держать тяжёлую бизнес-логику — только хуки фич и JSX.
+2. **Импорты:** фича может тянуть `lib/*` и общие компоненты; избегать циклов `features/A` ↔ `features/B`.
+3. **Чистые функции** (парсинг API, derived поля) — в `model/` или `utils/` рядом с фичей.
+4. **Локализация по фиче:** для новых зон — `i18n.ru.ts` внутри папки фичи (пока нет глобального i18n).
+5. **Порог ~500 строк** в одном файле — сигнал вынести подмодули (хуки, компоненты, секции).
+
+Пересчёт крупнейших файлов клиента:
+
+```bash
+cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -r | head -40
+```
+
+---
+
+## Журнал модулей (дополнять при появлении нового)
+
+*Добавляйте строки с датой или PR по желанию. Старые строки не удалять без удаления кода.*
+
+| Дата / PR | Модуль (путь) | Назначение |
+|-----------|---------------|------------|
+| (начало карты) | `docs/PROJECT_MAP.md` | Единая карта проекта; правило — обновлять при новых модулях |
+| | `client/src/features/chat/chat-detail/` | UI без логики хуков; композер и превью медиа: полосы, вложения, орфография, **`ChatDetailVoicePreviewModal`**, **`ChatDetailVideoNoteModal`** (+ список, меню, AI) |
+| | `client/src/features/admin-ops/` | Клиентские секции ops-платформы |
+| | `server/admin/ops/` | HTTP ops: платформа, отчёты, traffic shield |
+| | `server/ai-search/` | AI Search бэкенд |
+| | `shared/schema/platform-settings.ts`, `content-reports.ts` | Платформа и репорты контента |
+
+---
+
+## Связанная документация
+
+| Документ | Зачем |
+|----------|--------|
+| `docs/ARCHITECTURE.md` | Короткий индекс ссылок |
+| `docs/DEV_HANDOFF_CURSOR.md` | Handoff для разработчиков |
+| `docs/AI_HANDOFF_ARCHITECTURE.md` | Handoff для ИИ-агента |
+| `docs/QUALITY_CHECKLIST.md`, `docs/UIX_SPECIALIST_GUIDE.md` | Качество UI |
+| `docs/CHAT_DETAIL_RULES.md` | Контракт хуков чата |
+| `docs/DEPLOY_RULES.md` | Деплой |
+| `docs/DB.md` | БД и storage |
+| `AGENTS.md` | Контекст репозитория для агентов |
+
+---
+
+## Чек перед merge крупных структурных изменений
+
+1. `npm run check` / при необходимости `npm run build`.
+2. Обновлён **`docs/PROJECT_MAP.md`** (таблицы + журнал модулей).
+3. Нет «тихого» расхождения: новые папки перечислены, удалённые — убраны из карты.

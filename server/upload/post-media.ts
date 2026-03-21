@@ -5,11 +5,27 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
 import { s3Configured, uploadToS3 } from "./s3";
+import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 import {
   transcodeStoryVideoBuffer,
   transcodeStoryVideoFileToPath,
   validateStoryVideoUpload,
+  type VideoTranscodeTrim,
 } from "./story-video-transcode";
+
+function parsePostVideoTrim(body: Record<string, unknown> | undefined): VideoTranscodeTrim | undefined {
+  if (!body) return undefined;
+  const s = body.trimStartSec;
+  const d = body.trimDurationSec;
+  const hasS = s !== undefined && s !== null && String(s).trim() !== "";
+  const hasD = d !== undefined && d !== null && String(d).trim() !== "";
+  if (!hasS || !hasD) return undefined;
+  const startSec = Math.max(0, Number.parseFloat(String(s)) || 0);
+  let durationSec = Number.parseFloat(String(d));
+  if (!Number.isFinite(durationSec)) durationSec = POST_VIDEO_MAX_SECONDS;
+  durationSec = Math.min(POST_VIDEO_MAX_SECONDS, Math.max(0.1, durationSec));
+  return { startSec, durationSec };
+}
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "posts");
 const MAX_SIZE = 500 * 1024 * 1024; // 500 MB (видео MOV/MP4 до 500 МБ)
@@ -95,6 +111,8 @@ export function registerPostMediaUploadRoutes(app: Express): void {
           return;
         }
         const mediaKind = detectPostMediaKind(req.file);
+        const videoTrim =
+          mediaKind === "video" ? parsePostVideoTrim(req.body as Record<string, unknown>) : undefined;
         if (mediaKind === "video") {
           const videoErr = validateStoryVideoUpload(req.file);
           if (videoErr) {
@@ -108,7 +126,7 @@ export function registerPostMediaUploadRoutes(app: Express): void {
           let ext = path.extname(req.file.originalname) || ".jpg";
           let contentType = req.file.mimetype;
           if (mediaKind === "video") {
-            const transcoded = await transcodeStoryVideoBuffer(buffer, ext);
+            const transcoded = await transcodeStoryVideoBuffer(buffer, ext, videoTrim);
             buffer = transcoded.buffer;
             ext = transcoded.ext;
             contentType = transcoded.contentType;
@@ -122,7 +140,7 @@ export function registerPostMediaUploadRoutes(app: Express): void {
         let filename = file.filename ?? "";
         if (mediaKind === "video" && file.path) {
           const sourcePath = file.path;
-          const transcodedPath = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR);
+          const transcodedPath = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR, videoTrim);
           fs.unlink(sourcePath, () => {});
           filename = path.basename(transcodedPath);
         }

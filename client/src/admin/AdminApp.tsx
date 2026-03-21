@@ -9,6 +9,7 @@ import AdminAdmins from "@/pages/admin/Admins";
 import AdminSettings from "@/pages/admin/Settings";
 import AdminAudit from "@/pages/admin/Audit";
 import AdminOps from "@/pages/admin/Ops";
+import AdminMonitors from "@/pages/admin/Monitors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -126,6 +127,8 @@ export function AdminApp() {
       <AdminAudit />
     ) : location === "/admin/ops" ? (
       <AdminOps />
+    ) : location === "/admin/monitors" ? (
+      <AdminMonitors />
     ) : (
       <AdminDashboard />
     );

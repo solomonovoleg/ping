@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Sparkles, Lock, ArrowUp, Check, Users, ImagePlus, List, FolderPlus, RotateCcw, Type, Clock, Link2, Languages, Code } from "lucide-react";
+import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Languages, Code } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
@@ -30,13 +30,11 @@ import { useMessageReadOnVisible } from "@/features/chat/hooks/useMessageReadOnV
 import { useSendMessage } from "@/features/chat/hooks/useSendMessage";
 import { useMessageActions } from "@/features/chat/hooks/useMessageActions";
 import { useSpellCheck } from "@/features/chat/hooks/useSpellCheck";
-import { SpellSuggestions } from "@/features/chat/components/SpellSuggestions";
 import type { SpellError } from "@/lib/spellcheck";
 import { getSpellCheckEnabled, getChatSpellCheckEnabled, setChatSpellCheckEnabled } from "@/lib/spellcheck-prefs";
-import { getTranslateEnabled, setTranslateEnabled, getTranslateLang, setTranslateLang, syncPrefsOnChatOpen, TRANSLATE_LANGUAGES, type TranslateLangCode } from "@/lib/translate-prefs";
+import { getTranslateEnabled, setTranslateEnabled, getTranslateLang, setTranslateLang, syncPrefsOnChatOpen, type TranslateLangCode } from "@/lib/translate-prefs";
 import { useMessageTranslation } from "@/features/chat/hooks/useMessageTranslation";
 import { AI_CHAT_ID } from "@/features/chat/constants";
-import { useAiChat } from "@/features/chat/hooks/useAiChat";
 import { formatMessageTime, parseMessageDate } from "@/features/chat/utils/format";
 import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -48,7 +46,6 @@ import { MentionPicker } from "@/features/chat/components/MentionPicker";
 import { MediaViewer } from "@/components/MediaViewer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AddToTrackModal } from "@/features/board/tracks";
-import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useChatVibe } from "@/features/chat/hooks/useChatVibe";
 import { ChatVibeBackground } from "@/features/chat/components/ChatVibeBackground";
@@ -60,355 +57,31 @@ import {
 } from "@/features/chat/components/ChatComposerSttButton";
 import { PULSE_THEME_ACCENTS } from "@/lib/chat-vibe-themes";
 import { PulseDmComposerMedia } from "@/features/chat/components/pulse/PulseDmComposerMedia";
-
-type ChatPlatformKind = "ios" | "android" | "web";
-type ChatBackgroundPreset = "matte_black" | "velvet_gradient" | "obsidian_black";
-type ChatMessageBubblePreset = "primary" | "slate" | "violet" | "sky";
-
-const CHAT_BG_STORAGE_PREFIX = "ping-chat-bg:";
-const CHAT_MSG_COLOR_STORAGE_PREFIX = "ping-chat-msg-color:";
-
-const CHAT_BG_PRESETS: Array<{
-  id: ChatBackgroundPreset;
-  title: string;
-  description: string;
-  swatchClassName: string;
-  darkBgClassName: string;
-}> = [
-  {
-    id: "matte_black",
-    title: "Матовый черный",
-    description: "Строгий черный, слегка матовый",
-    swatchClassName: "bg-[linear-gradient(180deg,#050505_0%,#0c0c0c_50%,#111_100%)]",
-    darkBgClassName: "bg-[linear-gradient(180deg,#050505_0%,#0c0c0c_50%,#111_100%)]",
-  },
-  {
-    id: "velvet_gradient",
-    title: "Премиум градиент",
-    description: "Тёплый градиент с фиолетовым оттенком",
-    swatchClassName: "bg-[radial-gradient(140%_120%_at_30%_-10%,#2a1f3d_0%,#1a1425_35%,#0d0a12_70%,#050408_100%)]",
-    darkBgClassName: "bg-[radial-gradient(140%_120%_at_30%_-10%,#2a1f3d_0%,#1a1425_35%,#0d0a12_70%,#050408_100%)]",
-  },
-  {
-    id: "obsidian_black",
-    title: "Obsidian Black",
-    description: "Холодный черный с синим отблеском",
-    swatchClassName: "bg-[radial-gradient(150%_110%_at_85%_-5%,#0d1820_0%,#081118_40%,#040a0f_75%,#020508_100%)]",
-    darkBgClassName: "bg-[radial-gradient(150%_110%_at_85%_-5%,#0d1820_0%,#081118_40%,#040a0f_75%,#020508_100%)]",
-  },
-];
-
-function isChatBackgroundPreset(value: string): value is ChatBackgroundPreset {
-  return CHAT_BG_PRESETS.some((preset) => preset.id === value);
-}
-
-function getChatBackgroundStorageKey(chatId: string): string {
-  return `${CHAT_BG_STORAGE_PREFIX}${chatId}`;
-}
-
-const MSG_BUBBLE_PRESETS: Array<{
-  id: ChatMessageBubblePreset;
-  title: string;
-  swatchClassName: string;
-}> = [
-  { id: "primary", title: "Основной", swatchClassName: "bg-primary" },
-  { id: "slate", title: "Серый", swatchClassName: "bg-slate-500" },
-  { id: "violet", title: "Фиолетовый", swatchClassName: "bg-violet-500" },
-  { id: "sky", title: "Голубой", swatchClassName: "bg-sky-500" },
-];
-
-function isChatMessageBubblePreset(value: string): value is ChatMessageBubblePreset {
-  return MSG_BUBBLE_PRESETS.some((preset) => preset.id === value);
-}
-
-function getChatMsgColorStorageKey(chatId: string): string {
-  return `${CHAT_MSG_COLOR_STORAGE_PREFIX}${chatId}`;
-}
-
-function detectChatPlatform(): ChatPlatformKind {
-  if (!isNative()) return "web";
-  try {
-    const maybeCap = window as unknown as { Capacitor?: { getPlatform?: () => string } };
-    const platform = maybeCap.Capacitor?.getPlatform?.();
-    if (platform === "ios" || platform === "android") return platform;
-  } catch {
-    // fallback to web-like spacing
-  }
-  return "web";
-}
-
-function useChatSpacingPreset() {
-  const isMobile = useIsMobile();
-  const [platform, setPlatform] = useState<ChatPlatformKind>("web");
-
-  useEffect(() => {
-    setPlatform(detectChatPlatform());
-  }, []);
-
-  const isDesktopWeb = platform === "web" && !isMobile;
-  const isIos = platform === "ios";
-  const isAndroid = platform === "android";
-
-  return {
-    headerYClass: isDesktopWeb ? "py-3.5" : isAndroid ? "py-2.5" : isIos ? "py-3.5" : "py-3",
-    bottomBarYClass: isDesktopWeb ? "py-3" : isAndroid ? "py-2" : isIos ? "py-2.5" : "py-2.5",
-    messageTopPaddingClass: isDesktopWeb ? "pt-6" : isAndroid ? "pt-3.5" : "pt-4",
-    aiListBottomPad: isDesktopWeb
-      ? "calc(12rem + env(safe-area-inset-bottom,0px))"
-      : isAndroid
-        ? "calc(10.5rem + env(safe-area-inset-bottom,0px))"
-        : "calc(11rem + env(safe-area-inset-bottom,0px))",
-    chatListBottomPad: isDesktopWeb
-      ? "calc(104px + env(safe-area-inset-bottom,0px))"
-      : isAndroid
-        ? "calc(92px + env(safe-area-inset-bottom,0px))"
-        : "calc(98px + env(safe-area-inset-bottom,0px))",
-  };
-}
-
-/** Экран чата с ИИ (AI OVER): список сообщений, ввод текста, подгрузка контекста */
-function AIChatView() {
-  const [, setLocation] = useLocation();
-  const ai = useAiChat();
-  const [input, setInput] = useState("");
-  const { toast } = useToast();
-  const spacing = useChatSpacingPreset();
-
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || ai.sending) return;
-    setInput("");
-    const ok = await ai.send(text);
-    if (!ok) toast({ title: "Не удалось отправить", variant: "destructive" });
-  };
-
-  return (
-    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)] pb-[var(--uix-chat-bottom-pad)] uix-screen">
-      <header className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center justify-between rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76", spacing.headerYClass)}>
-        <div className="flex min-w-0 items-center gap-2">
-          <TapScaleButton
-            type="button"
-            onClick={() => setLocation("/")}
-            className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] rounded-full p-2 text-indigo-600/90 transition-colors hover:bg-slate-100/50 dark:text-indigo-300/90 dark:hover:bg-slate-800/50"
-            aria-label="Назад к чатам"
-          >
-            <ChevronLeft className="h-6 w-6" />
-          </TapScaleButton>
-          <img
-            src="/ai-over-avatar.png"
-            alt="AI OVER"
-            className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-indigo-500/35"
-          />
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-semibold tracking-tight text-indigo-700/95 dark:text-indigo-200">Atmospheric AI</p>
-            <div className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/90" aria-hidden />
-              <span className="truncate text-[11px] font-medium text-muted-foreground/90">в сети</span>
-            </div>
-          </div>
-        </div>
-        <TapScaleButton
-          type="button"
-          className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] rounded-full p-2 text-slate-500/85 transition-colors hover:bg-slate-100/50 dark:text-slate-400/90 dark:hover:bg-slate-800/50"
-          aria-label="Меню AI чата"
-        >
-          <MoreVertical className="h-5 w-5" />
-        </TapScaleButton>
-      </header>
-
-      <main
-        ref={ai.scrollContainerRef}
-        className={cn("uix-content-x flex-1 min-h-0 overflow-y-auto overflow-x-hidden", spacing.messageTopPaddingClass)}
-        style={{ WebkitOverflowScrolling: "touch", paddingBottom: spacing.aiListBottomPad }}
-      >
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-          <div className="flex justify-center">
-            <span className="rounded-full bg-muted/80 px-4 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Сегодня</span>
-          </div>
-          {ai.loading ? (
-            <div className="flex min-h-[260px] items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" aria-label="Загрузка истории AI чата" />
-            </div>
-          ) : ai.error ? (
-            <ErrorWithRetry
-              title="Не удалось загрузить AI чат"
-              description={ai.error}
-              onRetry={() => ai.refetch()}
-              className="min-h-[220px] border-none bg-transparent"
-            />
-          ) : ai.messages.length === 0 ? (
-            <ListEmptyState
-              icon={Sparkles}
-              title="Диалог пока пуст"
-              description="Задайте первый вопрос, и AI сразу начнёт отвечать."
-              actionLabel="Начать диалог"
-              onAction={() => ai.refetch()}
-              className="min-h-[240px] border-none bg-transparent"
-            />
-          ) : (
-            <>
-              {ai.hasMore && (
-                <div className="flex justify-center">
-                  <TapScaleButton
-                    type="button"
-                    onClick={ai.loadMore}
-                    disabled={ai.loadMoreLoading}
-                    className="rounded-full bg-indigo-500/10 px-3 py-1.5 text-sm text-indigo-600 transition-colors hover:bg-indigo-500/15 dark:text-indigo-300"
-                  >
-                    {ai.loadMoreLoading ? "Загрузка..." : "Подгрузить ещё"}
-                  </TapScaleButton>
-                </div>
-              )}
-              {ai.messages.map((msg) => (
-                <div key={msg.id} className={cn("flex flex-col max-w-[85%] gap-1.5", msg.role === "user" ? "ml-auto items-end" : "items-start")}>
-                  <div
-                    className={cn(
-                      "relative rounded-2xl px-5 py-4 text-[15px] leading-relaxed shadow-[0_4px_20px_rgba(70,71,211,0.06)]",
-                      msg.role === "user"
-                        ? "rounded-tr-none bg-indigo-600 text-white shadow-[0_8px_30px_rgba(70,71,211,0.18)]"
-                        : "rounded-tl-none border border-indigo-500/10 bg-white/80 text-foreground backdrop-blur-sm dark:bg-slate-900/70"
-                    )}
-                  >
-                    <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-                  </div>
-                  <div className="px-1">
-                    <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{formatMessageTime(msg.createdAt)}</span>
-                  </div>
-                </div>
-              ))}
-              {ai.sending && (
-                <div className="flex items-center gap-3 px-1">
-                  <div className="flex gap-1.5 rounded-full bg-muted/70 p-3">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400" />
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400 [animation-delay:200ms]" />
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400 [animation-delay:400ms]" />
-                  </div>
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">AI думает</span>
-                </div>
-              )}
-              <div ref={ai.messagesEndRef} />
-            </>
-          )}
-        </div>
-      </main>
-
-      <section className={cn("uix-content-x absolute inset-x-0 bottom-0 z-20 pb-4 pb-safe", spacing.bottomBarYClass)}>
-        <div className="mx-auto w-full max-w-4xl">
-          <div className="flex items-end gap-2 rounded-3xl border border-white/30 bg-white/75 p-2 shadow-[0_12px_40px_rgba(70,71,211,0.12)] backdrop-blur-2xl dark:border-slate-700/40 dark:bg-slate-900/80">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Введите сообщение..."
-              className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-3 py-2 text-base md:text-[15px] text-foreground outline-none placeholder:text-slate-400"
-              rows={1}
-              disabled={ai.sending}
-            />
-            <TapScaleButton
-              type="button"
-              onClick={handleSend}
-              disabled={!input.trim() || ai.sending}
-              haptic
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-indigo-400 text-white shadow-lg shadow-indigo-500/20 transition-all hover:brightness-110 disabled:opacity-50"
-              aria-label="Отправить в AI чат"
-            >
-              <Send className="h-5 w-5 translate-x-[-1px]" />
-            </TapScaleButton>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/** Полоса записи голоса: волна уровня, градиент, мягкое свечение, анимация появления */
-function RecordingStrip({
-  durationSec,
-  onStop,
-  className,
-}: {
-  durationSec: number;
-  onStop: () => void;
-  className?: string;
-}) {
-  const reduced = usePrefersReducedMotion();
-  const m = Math.floor(durationSec / 60);
-  const s = Math.floor(durationSec % 60);
-  const timeStr = `${m}:${String(s).padStart(2, "0")}`;
-  const bars = 7;
-  return (
-    <motion.div
-      className={cn(
-        "chat-composer-recording-strip mb-2 overflow-hidden rounded-2xl border border-red-400/40 bg-gradient-to-r from-red-500/20 via-rose-500/15 to-red-600/25 dark:from-red-600/25 dark:via-rose-600/20 dark:to-red-700/30 shadow-[0_0_24px_-4px_rgba(239,68,68,0.35)] dark:shadow-[0_0_28px_-4px_rgba(239,68,68,0.4)]",
-        className,
-      )}
-      initial={reduced ? false : { opacity: 0, y: 8, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
-    >
-      <div className="flex items-center gap-3 py-3 px-4">
-        {/* Анимированная волна уровня */}
-        <div className="flex items-end gap-0.5 h-5" aria-hidden>
-          {Array.from({ length: bars }).map((_, i) => (
-            <motion.span
-              key={i}
-              className="w-0.5 rounded-full bg-red-500 dark:bg-red-400 origin-bottom"
-              animate={
-                reduced
-                  ? { scaleY: 0.6 }
-                  : {
-                      scaleY: [0.4, 0.9, 0.5, 0.85, 0.4],
-                      transition: {
-                        duration: 0.9,
-                        repeat: Infinity,
-                        delay: i * 0.08,
-                        ease: "easeInOut",
-                      },
-                    }
-              }
-              style={{ height: "100%" }}
-            />
-          ))}
-        </div>
-        {/* Пульсирующая точка */}
-        <span className="relative flex h-3 w-3 flex-shrink-0" aria-hidden>
-          {!reduced && (
-            <motion.span
-              className="absolute inset-0 rounded-full bg-red-500 dark:bg-red-400"
-              animate={{ scale: [1, 1.4, 1], opacity: [0.5, 0, 0.5] }}
-              transition={{ duration: 1.2, repeat: Infinity }}
-            />
-          )}
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 dark:bg-red-400 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-        </span>
-        <span className="text-sm font-semibold tabular-nums text-red-700 dark:text-red-300 min-w-[2.5rem]">
-          {timeStr}
-        </span>
-        <TapScaleButton
-          type="button"
-          onClick={onStop}
-          haptic
-          className="ml-auto px-4 py-2 rounded-xl bg-red-500 dark:bg-red-600 text-white text-sm font-semibold shadow-[0_2px_10px_rgba(239,68,68,0.4)] hover:bg-red-600 dark:hover:bg-red-700 active:shadow-inner transition-colors"
-          aria-label="Остановить запись"
-        >
-          Стоп
-        </TapScaleButton>
-      </div>
-    </motion.div>
-  );
-}
-
-function formatVideoNoteTime(seconds: number): string {
-  const safe = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
-  const m = Math.floor(safe / 60);
-  const s = safe % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
+import {
+  AiChatView,
+  ChatDetailAppearancePanel,
+  ChatDetailComposerReplyDraftStrips,
+  ChatDetailComposerSpellFooter,
+  ChatDetailComposerTopChrome,
+  ChatDetailNativeAttachMenu,
+  ChatDetailVideoNoteModal,
+  ChatDetailVoicePreviewModal,
+  ChatDetailGroupCallLobbyBanner,
+  ChatDetailGroupFolderStrip,
+  ChatDetailGroupMenuBody,
+  ChatDetailMessageSelectionBar,
+  ChatDetailMessageDatePill,
+  ChatDetailMessagesEmptyState,
+  ChatDetailOlderMessagesLoadingRow,
+  ChatDetailOverflowMenuShell,
+  useChatSpacingPreset,
+  CHAT_BG_PRESETS,
+  isChatBackgroundPreset,
+  getChatBackgroundStorageKey,
+  isChatMessageBubblePreset,
+  getChatMsgColorStorageKey,
+} from "@/features/chat/chat-detail";
+import type { ChatBackgroundPreset, ChatMessageBubblePreset } from "@/features/chat/chat-detail";
 
 /**
  * Страница чата. Контракт (чтобы не сломать):
@@ -416,22 +89,23 @@ function formatVideoNoteTime(seconds: number): string {
  * - Всё про ввод/отправку — только send.* (send.editingId, send.message, send.setMessage и т.д.).
  * - Всё про меню сообщения и действия — только actions.* (actions.messageMenu, actions.setMessageMenu и т.д.).
  * - Не использовать голые editingId, message, setMessage и т.п. Подробнее: docs/CHAT_DETAIL_RULES.md
+ *
+ * AI-чат (`AI_CHAT_ID`): ренерится из оболочки ниже — нельзя делать ранний return в том же компоненте,
+ * где вызываются useChatMessages / useSendMessage (Rules of Hooks при смене URL).
  */
-export default function ChatDetail({ params: paramsProp }: { params?: { id: string } }) {
+function ChatDetailView({
+  params: paramsProp,
+  chatIdParam,
+}: {
+  params?: { id?: string };
+  chatIdParam: string;
+}) {
   const [, setLocation] = useLocation();
-  const paramsFromRoute = useParams<{ id?: string }>();
-  // Подстраховка: id из URL, если useParams ещё не отдал (lazy/гидрация)
-  const fromPath =
-    typeof window !== "undefined"
-      ? (window.location.pathname.match(/^\/chat\/([^/?#]+)/)?.[1] ?? "")
-      : "";
-  const chatIdParam = (paramsProp?.id ?? paramsFromRoute?.id ?? fromPath) ?? "";
   const { user } = useAuth();
   const { toast } = useToast();
   const spacing = useChatSpacingPreset();
   const isMobile = useIsMobile();
   const reducedMotion = usePrefersReducedMotion();
-  if (chatIdParam === AI_CHAT_ID) return <AIChatView />;
 
   const sendDraftRef = useRef<{ setMessage: (v: string | ((p: string) => string)) => void } | null>(null);
   const {
@@ -1290,422 +964,140 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
           </button>
         </div>
         {showGroupMenu && chat.type === "group" && (
-          <div
-            ref={groupMenuRef}
-            className="absolute right-2 top-[calc(100%+8px)] z-[125] flex w-[280px] max-h-[min(70vh,420px)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/95 shadow-2xl backdrop-blur-xl"
-          >
-            <div className="shrink-0 border-b border-border/60 px-4 py-3">
-              <p className="text-sm font-semibold">Настройки группы</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">{displayName}</p>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
-              <button
-                type="button"
-                onClick={() => {
+          <ChatDetailOverflowMenuShell ref={groupMenuRef} title="Настройки группы" subtitle={displayName}>
+            <ChatDetailGroupMenuBody
+              memberCount={chat.members?.length ?? 0}
+              myRole={chat.myRole}
+              uploadingGroupAvatar={uploadingGroupAvatar}
+              onOpenMediaLinks={() => {
+                setShowGroupMenu(false);
+                setShowMediaLinksSheet(true);
+              }}
+              onOpenParticipants={() => {
+                setShowGroupMenu(false);
+                setShowGroupParticipants(true);
+              }}
+              onStartGroupCall={(video) => {
+                setShowGroupMenu(false);
+                if (groupCallCtx.active) {
+                  toast({
+                    title: "Созвон уже открыт",
+                    description: "Завершите текущий групповой звонок или вернитесь к его окну.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                void groupCallCtx.startGroupCall(chatId, displayName, video);
+              }}
+              onCreateFolderClick={() => {
+                void (async () => {
                   setShowGroupMenu(false);
-                  setShowMediaLinksSheet(true);
-                }}
-                className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
-              >
-                <Image className="h-5 w-5 shrink-0 text-primary" />
-                <span className="flex-1 text-sm font-medium">Медиафайлы и ссылки</span>
-                <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowGroupMenu(false);
-                  setShowGroupParticipants(true);
-                }}
-                className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70 last:mb-0"
-              >
-                <Users className="h-5 w-5 shrink-0 text-primary" />
-                <span className="flex-1 text-sm font-medium">Участники ({chat.members?.length ?? 0})</span>
-              </button>
-              {isGroupCallModuleEnabled() && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowGroupMenu(false);
-                      void groupCallCtx.startGroupCall(chatId, displayName, false);
-                    }}
-                    className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
-                  >
-                    <Phone className="h-5 w-5 shrink-0 text-primary" />
-                    <span className="flex-1 text-sm font-medium">Групповой звонок</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowGroupMenu(false);
-                      void groupCallCtx.startGroupCall(chatId, displayName, true);
-                    }}
-                    className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
-                  >
-                    <Video className="h-5 w-5 shrink-0 text-primary" />
-                    <span className="flex-1 text-sm font-medium">Групповое видео</span>
-                  </button>
-                </>
-              )}
-              {chat.myRole === "admin" && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setShowGroupMenu(false);
-                    const name = window.prompt("Название папки");
-                    if (!name?.trim()) return;
-                    try {
-                      await createChatFolder(chatId, name.trim());
-                      await refreshFolders();
-                      toast({ title: "Папка создана" });
-                    } catch (err) {
-                      toast({ title: err instanceof Error ? err.message : "Не удалось создать папку", variant: "destructive" });
-                    }
-                  }}
-                  className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70 last:mb-0"
-                >
-                  <FolderPlus className="h-5 w-5 shrink-0 text-primary" />
-                  <span className="flex-1 text-sm font-medium">Создать папку</span>
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={uploadingGroupAvatar}
-                onClick={() => {
-                  setShowGroupMenu(false);
-                  groupAvatarInputRef.current?.click();
-                }}
-                className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70 last:mb-0 disabled:opacity-60"
-              >
-                <ImagePlus className="h-5 w-5 shrink-0 text-primary" />
-                <span className="flex-1 text-sm font-medium">
-                  {uploadingGroupAvatar ? "Загрузка…" : "Загрузить аватар группы"}
-                </span>
-              </button>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <p className="px-2 py-1 text-[11px] text-muted-foreground">Фон чата</p>
-                {CHAT_BG_PRESETS.map((preset) => {
-                  const active = preset.id === chatBgPreset;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => {
-                        setChatBgPreset(preset.id);
-                        if (chatId) {
-                          try {
-                            localStorage.setItem(getChatBackgroundStorageKey(chatId), preset.id);
-                          } catch {}
-                        }
-                      }}
-                      className={cn(
-                        "mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors last:mb-0",
-                        active ? "bg-primary/12" : "hover:bg-secondary/70"
-                      )}
-                    >
-                      <span className={cn("h-8 w-12 shrink-0 rounded-lg border border-white/10", preset.swatchClassName)} />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{preset.title}</span>
-                      {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <p className="px-2 py-1 text-[11px] text-muted-foreground">Цвет моих сообщений</p>
-                {MSG_BUBBLE_PRESETS.map((preset) => {
-                  const active = preset.id === chatMsgColorPreset;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => {
-                        setChatMsgColorPreset(preset.id);
-                        if (chatId) {
-                          try {
-                            localStorage.setItem(getChatMsgColorStorageKey(chatId), preset.id);
-                          } catch {}
-                        }
-                      }}
-                      className={cn(
-                        "mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors last:mb-0",
-                        active ? "bg-primary/12" : "hover:bg-secondary/70"
-                      )}
-                    >
-                      <span className={cn("h-6 w-6 shrink-0 rounded-full border border-white/20", preset.swatchClassName)} />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{preset.title}</span>
-                      {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <div className="flex items-center justify-between gap-3 px-2 py-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Type className="h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-sm font-medium">Проверка орфографии</p>
-                      <p className="text-[11px] text-muted-foreground">Автоисправление в этом чате</p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={chatSpellCheck}
-                    onCheckedChange={(checked) => {
+                  const name = window.prompt("Название папки");
+                  if (!name?.trim()) return;
+                  try {
+                    await createChatFolder(chatId, name.trim());
+                    await refreshFolders();
+                    toast({ title: "Папка создана" });
+                  } catch (err) {
+                    toast({
+                      title: err instanceof Error ? err.message : "Не удалось создать папку",
+                      variant: "destructive",
+                    });
+                  }
+                })();
+              }}
+              onPickGroupAvatar={() => {
+                setShowGroupMenu(false);
+                groupAvatarInputRef.current?.click();
+              }}
+              appearanceSection={
+                <div className="border-t border-border/60 mt-2 pt-2">
+                  <ChatDetailAppearancePanel
+                    chatId={chatId}
+                    chatBgPreset={chatBgPreset}
+                    onChatBgPresetChange={setChatBgPreset}
+                    chatMsgColorPreset={chatMsgColorPreset}
+                    onChatMsgColorPresetChange={setChatMsgColorPreset}
+                    bgLayout="compact"
+                    chatSpellCheck={chatSpellCheck}
+                    onChatSpellCheckChange={(checked) => {
                       setChatSpellCheckEnabled(chatId, checked);
                       setChatSpellCheckState(checked);
                     }}
-                    aria-label="Проверка орфографии в этом чате"
-                  />
-                </div>
-              </div>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <div className="flex items-center justify-between gap-3 px-2 py-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Languages className="h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-sm font-medium">Переводить входящие</p>
-                      <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={chatTranslateEnabled}
-                    onCheckedChange={(checked) => {
+                    chatTranslateEnabled={chatTranslateEnabled}
+                    onChatTranslateEnabledChange={(checked) => {
                       setTranslateEnabled(chatId, checked);
                       setChatTranslateEnabledState(checked);
                     }}
-                    aria-label="Переводить входящие сообщения"
+                    translateLang={translateLang}
+                    onTranslateLangChange={(lang) => {
+                      setTranslateLang(lang);
+                      setTranslateLangState(lang);
+                      setTranslateEnabled(chatId, true);
+                    }}
                   />
                 </div>
-                {chatTranslateEnabled && (
-                  <div className="px-2 pb-1">
-                    <select
-                      value={translateLang}
-                      onChange={(e) => {
-                        const lang = e.target.value as TranslateLangCode;
-                        setTranslateLang(lang);
-                        setTranslateLangState(lang);
-                        setTranslateEnabled(chatId, true);
-                      }}
-                      className="w-full rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      aria-label="Язык перевода"
-                    >
-                      {TRANSLATE_LANGUAGES.map((l) => (
-                        <option key={l.code} value={l.code}>{l.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+              }
+            />
+          </ChatDetailOverflowMenuShell>
         )}
         {showChatThemeMenu && chat.type !== "group" && (
-          <div
-            ref={chatThemeMenuRef}
-            className="absolute right-2 top-[calc(100%+8px)] z-[125] flex w-[280px] max-h-[min(70vh,420px)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/95 shadow-2xl backdrop-blur-xl"
-          >
-            <div className="shrink-0 border-b border-border/60 px-4 py-3">
-              <p className="text-sm font-semibold">Настройки чата</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">Фон и цвет сообщений</p>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowChatThemeMenu(false);
-                  setShowMediaLinksSheet(true);
-                }}
-                className="mb-2 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
-              >
-                <Image className="h-5 w-5 shrink-0 text-primary" />
-                <span className="flex-1 text-sm font-medium">Медиафайлы и ссылки</span>
-                <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </button>
-              <p className="px-2 py-1 text-[11px] text-muted-foreground">Фон чата</p>
-              {CHAT_BG_PRESETS.map((preset) => {
-                const active = preset.id === chatBgPreset;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => {
-                      setChatBgPreset(preset.id);
-                      if (chatId) {
-                        try {
-                          localStorage.setItem(getChatBackgroundStorageKey(chatId), preset.id);
-                        } catch {}
-                      }
-                    }}
-                    className={cn(
-                      "mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors last:mb-0",
-                      active ? "bg-primary/12" : "hover:bg-secondary/70"
-                    )}
-                  >
-                    <span className={cn("h-10 w-14 shrink-0 rounded-lg border border-white/10", preset.swatchClassName)} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{preset.title}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">{preset.description}</span>
-                    </span>
-                    {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
-                  </button>
-                );
-              })}
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <p className="px-2 py-1 text-[11px] text-muted-foreground">Цвет моих сообщений</p>
-                {MSG_BUBBLE_PRESETS.map((preset) => {
-                  const active = preset.id === chatMsgColorPreset;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => {
-                        setChatMsgColorPreset(preset.id);
-                        if (chatId) {
-                          try {
-                            localStorage.setItem(getChatMsgColorStorageKey(chatId), preset.id);
-                          } catch {}
-                        }
-                      }}
-                      className={cn(
-                        "mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors last:mb-0",
-                        active ? "bg-primary/12" : "hover:bg-secondary/70"
-                      )}
-                    >
-                      <span className={cn("h-6 w-6 shrink-0 rounded-full border border-white/20", preset.swatchClassName)} />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{preset.title}</span>
-                      {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <div className="flex items-center justify-between gap-3 px-2 py-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Type className="h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-sm font-medium">Проверка орфографии</p>
-                      <p className="text-[11px] text-muted-foreground">Автоисправление в этом чате</p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={chatSpellCheck}
-                    onCheckedChange={(checked) => {
-                      setChatSpellCheckEnabled(chatId, checked);
-                      setChatSpellCheckState(checked);
-                    }}
-                    aria-label="Проверка орфографии в этом чате"
-                  />
-                </div>
-              </div>
-              <div className="border-t border-border/60 mt-2 pt-2">
-                <div className="flex items-center justify-between gap-3 px-2 py-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Languages className="h-5 w-5 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-sm font-medium">Переводить входящие</p>
-                      <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={chatTranslateEnabled}
-                    onCheckedChange={(checked) => {
-                      setTranslateEnabled(chatId, checked);
-                      setChatTranslateEnabledState(checked);
-                    }}
-                    aria-label="Переводить входящие сообщения"
-                  />
-                </div>
-                {chatTranslateEnabled && (
-                  <div className="px-2 pb-1">
-                    <select
-                      value={translateLang}
-                      onChange={(e) => {
-                        const lang = e.target.value as TranslateLangCode;
-                        setTranslateLang(lang);
-                        setTranslateLangState(lang);
-                        setTranslateEnabled(chatId, true);
-                      }}
-                      className="w-full rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      aria-label="Язык перевода"
-                    >
-                      {TRANSLATE_LANGUAGES.map((l) => (
-                        <option key={l.code} value={l.code}>{l.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <ChatDetailOverflowMenuShell ref={chatThemeMenuRef} title="Настройки чата" subtitle="Фон и цвет сообщений">
+            <ChatDetailAppearancePanel
+              chatId={chatId}
+              chatBgPreset={chatBgPreset}
+              onChatBgPresetChange={setChatBgPreset}
+              chatMsgColorPreset={chatMsgColorPreset}
+              onChatMsgColorPresetChange={setChatMsgColorPreset}
+              bgLayout="detailed"
+              showMediaLinksButton
+              onOpenMediaLinks={() => {
+                setShowChatThemeMenu(false);
+                setShowMediaLinksSheet(true);
+              }}
+              chatSpellCheck={chatSpellCheck}
+              onChatSpellCheckChange={(checked) => {
+                setChatSpellCheckEnabled(chatId, checked);
+                setChatSpellCheckState(checked);
+              }}
+              chatTranslateEnabled={chatTranslateEnabled}
+              onChatTranslateEnabledChange={(checked) => {
+                setTranslateEnabled(chatId, checked);
+                setChatTranslateEnabledState(checked);
+              }}
+              translateLang={translateLang}
+              onTranslateLangChange={(lang) => {
+                setTranslateLang(lang);
+                setTranslateLangState(lang);
+                setTranslateEnabled(chatId, true);
+              }}
+            />
+          </ChatDetailOverflowMenuShell>
         )}
       </div>
 
-      {/* Папки группового чата */}
-      {chat.type === "group" && folders.length > 0 && (
-        <div className="shrink-0 uix-content-x overflow-x-auto border-b border-border/60 bg-background/50">
-          <div className="flex gap-1 py-2 min-w-0">
-            {folders.map((f) => {
-              const active = f.id === currentFolderId;
-              const unread = Math.max(0, f.unreadCount ?? 0);
-              const badgeLabel = unread <= 0 ? "" : unread > 99 ? "99+" : String(unread);
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => loadMessagesForFolder(f.id)}
-                  className={cn(
-                    "shrink-0 relative px-3 py-1.5 rounded-lg text-sm font-medium transition-colors min-h-[var(--uix-touch-min)] inline-flex items-center gap-1.5",
-                    active
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  )}
-                  aria-label={f.isMain ? `Основной чат: ${f.name}` : unread > 0 ? `${f.name}, ${unread} непрочитанных` : f.name}
-                  aria-pressed={active}
-                >
-                  {f.name}
-                  {badgeLabel && (
-                    <span className="inline-flex min-h-[14px] min-w-[14px] items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold leading-none text-primary-foreground">
-                      {badgeLabel}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      {chat.type === "group" && (
+        <ChatDetailGroupFolderStrip
+          folders={folders}
+          currentFolderId={currentFolderId}
+          onFolderSelect={loadMessagesForFolder}
+        />
       )}
 
       {isGroupCallModuleEnabled() && chat.type === "group" && groupCallLobby && !groupCallCtx.active && (
-        <div className="shrink-0 uix-content-x py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/8 px-3 py-2.5">
-            <p className="text-sm font-medium text-foreground min-w-0 flex-1">
-              {groupCallLobby.participantCount === 0
-                ? `Открыт групповой ${groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок — можно подключаться`
-                : `Идёт групповой ${groupCallLobby.mediaType === "video" ? "видео" : "аудио"}звонок · ${groupCallLobby.participantCount} ${
-                    groupCallLobby.participantCount === 1
-                      ? "участник"
-                      : groupCallLobby.participantCount < 5
-                        ? "участника"
-                        : "участников"
-                  }`}
-            </p>
-            <TapScaleButton
-              type="button"
-              className="shrink-0 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground min-h-[var(--uix-touch-min)]"
-              onClick={() => {
-                groupCallCtx.joinGroupCall({
-                  roomId: groupCallLobby.roomId,
-                  chatId,
-                  mediaType: groupCallLobby.mediaType,
-                  chatTitle: displayName,
-                  hostUserId: groupCallLobby.hostUserId,
-                });
-              }}
-            >
-              Подключиться
-            </TapScaleButton>
-          </div>
-        </div>
+        <ChatDetailGroupCallLobbyBanner
+          participantCount={groupCallLobby.participantCount}
+          mediaType={groupCallLobby.mediaType}
+          onJoin={() =>
+            groupCallCtx.joinGroupCall({
+              roomId: groupCallLobby.roomId,
+              chatId,
+              mediaType: groupCallLobby.mediaType,
+              chatTitle: displayName,
+              hostUserId: groupCallLobby.hostUserId,
+            })
+          }
+        />
       )}
 
       <input
@@ -1742,25 +1134,11 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
         />
       )}
 
-      {/* Панель выбранных сообщений */}
-      {actions.selectedIds.size > 0 && (
-        <div className="shrink-0 flex items-center justify-between gap-2 px-4 py-2 bg-primary/10 border-b border-border">
-          <span className="text-sm font-medium">Выбрано: {actions.selectedIds.size}</span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={actions.handleForwardSelected}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium"
-            >
-              <Share2 className="w-4 h-4" />
-              Переслать
-            </button>
-            <button type="button" onClick={actions.handleClearSelection} className="px-3 py-1.5 rounded-lg bg-secondary text-sm">
-              Снять выбор
-            </button>
-          </div>
-        </div>
-      )}
+      <ChatDetailMessageSelectionBar
+        selectedCount={actions.selectedIds.size}
+        onForwardSelected={actions.handleForwardSelected}
+        onClearSelection={actions.handleClearSelection}
+      />
 
       {/* Messages: min-h-0 чтобы flex дал высоту; -webkit-overflow-scrolling: touch для инерции на iOS; overscroll для предсказуемого скролла */}
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
@@ -1796,31 +1174,13 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id: stri
           if (el.scrollTop < 80) loadOlderMessages();
         }}
       >
-        {loadingMoreMessages && (
-          <div className="flex justify-center py-2">
-            <span className="text-xs text-muted-foreground">Загрузка…</span>
-          </div>
-        )}
-        {messages.length === 0 && !loading && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-12 text-center">
-            <div className="w-14 h-14 rounded-full bg-muted/80 flex items-center justify-center">
-              <MessageCircle className="w-7 h-7 text-muted-foreground" aria-hidden />
-            </div>
-            <div>
-              <p className="font-medium text-foreground">Нет сообщений</p>
-              <p className="text-sm text-muted-foreground mt-1">Напишите первое сообщение или отправьте голосовое</p>
-            </div>
-          </div>
-        )}
+        <ChatDetailOlderMessagesLoadingRow loading={loadingMoreMessages} />
+        <ChatDetailMessagesEmptyState show={messages.length === 0 && !loading} />
         {(() => {
           const pulseDmMobileKind = isDm && isMobile ? (isDarkTheme ? ("dark" as const) : ("light" as const)) : null;
           return messageListItems.map((item, idx) => {
           if (item.type === "date") {
-            return (
-              <p key={`date-${item.label}-${idx}`} className="sticky top-2 z-[1] mx-auto rounded-full bg-muted/70 px-3 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground backdrop-blur-sm">
-                {item.label}
-              </p>
-            );
+            return <ChatDetailMessageDatePill key={`date-${item.label}-${idx}`} label={item.label} />;
           }
           const { msg, isFirstInGroup, isLastInGroup } = item;
           const isMe = msg.senderId === user?.id;
@@ -2231,27 +1591,15 @@ onClick={() => actions.setForwardingMessage(null)}
         ref={composerBarRef}
         className={cn("uix-content-x relative z-[105] shrink-0 chat-composer-bar pb-safe-offset-4", spacing.bottomBarYClass)}
       >
-        {send?.editingId && (
-          <div className="chat-composer-strip flex items-center justify-between gap-2 mb-1.5 rounded-t-xl border-b px-3 py-2">
-            <span className="text-xs text-muted-foreground">Редактирование сообщения</span>
-            <button type="button" onClick={send.handleCancelEdit} className="text-xs text-primary hover:underline rounded-lg px-1 py-0.5 min-h-[var(--uix-touch-min)]">
-              Отмена
-            </button>
-          </div>
-        )}
-        {(typingDisplay || voiceRecordingDisplay) && !send?.editingId && (
-          <div className="chat-composer-meta text-xs mb-1 space-y-0.5">
-            {typingDisplay && <p className="animate-pulse">{typingDisplay} печатает...</p>}
-            {voiceRecordingDisplay && <p className="animate-pulse">{voiceRecordingDisplay} записывает голосовое...</p>}
-          </div>
-        )}
-        {/* Полоса записи: волшебный вид с волной, градиентом и мягким свечением */}
-        {send?.voiceState === "recording" && !pulseDmComposerLikeTemplate && (
-          <RecordingStrip
-            durationSec={send.durationSec ?? 0}
-            onStop={send.handleMicClick}
-          />
-        )}
+        <ChatDetailComposerTopChrome
+          editingId={send.editingId}
+          onCancelEdit={send.handleCancelEdit}
+          typingDisplay={typingDisplay}
+          voiceRecordingDisplay={voiceRecordingDisplay}
+          showRecordingStrip={send.voiceState === "recording" && !pulseDmComposerLikeTemplate}
+          recordingDurationSec={send.durationSec ?? 0}
+          onStopRecording={send.handleMicClick}
+        />
         <input
           ref={send.fileInputRef}
           type="file"
@@ -2271,35 +1619,12 @@ onClick={() => actions.setForwardingMessage(null)}
         />
         {/* overflow-visible: иначе обрезается ChatComposerSttPhaseOverlay над строкой ввода */}
         <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-0 overflow-visible">
-          {send.replyingTo && (
-            <div className="chat-composer-strip flex items-center gap-2 pl-3 pr-1 py-2 border-b text-[var(--uix-text-caption)] rounded-t-xl">
-              <Reply className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden />
-              <span className="flex-1 min-w-0 truncate text-muted-foreground">
-                {send.replyingTo.type === "text" ? send.replyingTo.content.slice(0, 60) + (send.replyingTo.content.length > 60 ? "…" : "") : "Сообщение"}
-              </span>
-              <button
-                type="button"
-                onClick={() => send.setReplyingTo(null)}
-                className="flex-shrink-0 min-w-[var(--uix-touch-min,44px)] min-h-[var(--uix-touch-min,44px)] flex items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-                aria-label="Отменить ответ"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-          {draftRestoredHint && (
-            <div className="chat-composer-strip chat-composer-strip--draft flex items-center gap-2 pl-3 pr-2 py-1.5 border-b text-[var(--uix-text-caption)] rounded-t-xl">
-              <span className="flex-1 text-muted-foreground">Черновик восстановлен</span>
-              <button
-                type="button"
-                onClick={() => setDraftRestoredHint(false)}
-                className="flex-shrink-0 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-                aria-label="Скрыть"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          <ChatDetailComposerReplyDraftStrips
+            replyingTo={send.replyingTo}
+            onCancelReply={() => send.setReplyingTo(null)}
+            draftRestoredHint={draftRestoredHint}
+            onDismissDraftHint={() => setDraftRestoredHint(false)}
+          />
         {pulseDmMediaActive ? (
           <PulseDmComposerMedia
             accentColor={dmPulseAccent}
@@ -2330,35 +1655,15 @@ onClick={() => actions.setForwardingMessage(null)}
         <div className="relative flex min-w-0 w-full items-end gap-2 overflow-visible pt-0.5">
           <ChatComposerSttPhaseOverlay phase={composerSttUi.phase} liveLine={composerSttUi.liveLine} />
           {showAttachSource && isNative() && (
-            <div
+            <ChatDetailNativeAttachMenu
               ref={attachSourceRef}
-              className="absolute bottom-full left-0 mb-2 flex flex-col rounded-xl border border-border bg-popover text-popover-foreground shadow-lg py-1 z-[110]"
-            >
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
-                onClick={() => send.handleAttachFromNative("camera")}
-              >
-                <Camera className="w-4 h-4" />
-                Камера
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
-                onClick={() => send.handleAttachFromNative("gallery")}
-              >
-                <Image className="w-4 h-4" />
-                Галерея
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full border-t border-border"
-                onClick={() => { setShowAttachSource(false); send.fileInputRef.current?.click(); }}
-              >
-                <Paperclip className="w-4 h-4" />
-                Файл (фото/видео)
-              </button>
-            </div>
+              onPickCamera={() => send.handleAttachFromNative("camera")}
+              onPickGallery={() => send.handleAttachFromNative("gallery")}
+              onPickFile={() => {
+                setShowAttachSource(false);
+                send.fileInputRef.current?.click();
+              }}
+            />
           )}
           <TapScaleButton
             type="button"
@@ -2754,26 +2059,14 @@ onClick={() => actions.setForwardingMessage(null)}
           )}
         </div>
         )}
-        {spellUndo ? (
-          <div className="chat-composer-spell-row flex items-center justify-center gap-1.5 py-1 px-2 border-t border-border/20">
-            <span className="text-[10px] text-muted-foreground/60">Исправлено</span>
-            <TapScaleButton
-              type="button"
-              onClick={handleSpellUndo}
-              haptic
-              className="text-[10px] text-muted-foreground/55 hover:text-muted-foreground/90 underline underline-offset-1 decoration-muted-foreground/30 hover:decoration-muted-foreground/60 min-h-[22px] px-1 -mx-1 rounded transition-colors"
-              aria-label="Отменить исправление"
-            >
-              Отменить
-            </TapScaleButton>
-          </div>
-        ) : effectiveSpellCheck ? (
-          <SpellSuggestions
-            errors={spellErrors}
-            onReplace={handleSpellReplace}
-            className={cn(headerPulseMobileDm && "chat-composer-spell-suggestions")}
-          />
-        ) : null}
+        <ChatDetailComposerSpellFooter
+          spellUndo={spellUndo}
+          onSpellUndo={handleSpellUndo}
+          effectiveSpellCheck={effectiveSpellCheck}
+          spellErrors={spellErrors}
+          onSpellReplace={handleSpellReplace}
+          suggestionsClassName={cn(headerPulseMobileDm && "chat-composer-spell-suggestions")}
+        />
         </div>
         {(send.voiceError || send.voiceRecorderError) && (
           <p className="text-[10px] text-destructive mt-0.5">{send.voiceError ?? send.voiceRecorderError}</p>
@@ -2784,165 +2077,28 @@ onClick={() => actions.setForwardingMessage(null)}
       </div>
 
       {send.voicePreviewUrl && !pulseDmMediaActive && (
-        <div
-          className="fixed inset-0 z-[141] flex flex-col items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Предпросмотр голосового сообщения"
-        >
-          <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-background/90 p-4 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">Голосовое сообщение</p>
-              <span className="text-xs font-medium tabular-nums text-muted-foreground">
-                {formatVideoNoteTime(send.voicePreviewDurationSec)}
-              </span>
-            </div>
-            <audio
-              src={send.voicePreviewUrl}
-              controls
-              className="mb-4 w-full"
-              preload="metadata"
-            />
-            <div className="flex flex-wrap gap-2">
-              <TapScaleButton
-                type="button"
-                onClick={send.cancelVoicePreview}
-                className="min-h-[var(--uix-touch-min)] min-w-0 flex-1 rounded-xl border border-input bg-background"
-              >
-                Удалить
-              </TapScaleButton>
-              <TapScaleButton
-                type="button"
-                onClick={() => void send.rerecordVoiceFromPreview()}
-                disabled={send.sendingVoice}
-                className="min-h-[var(--uix-touch-min)] min-w-0 flex-1 rounded-xl bg-secondary text-foreground disabled:opacity-50"
-              >
-                Перезаписать
-              </TapScaleButton>
-              <TapScaleButton
-                type="button"
-                onClick={() => void send.sendRecordedVoice()}
-                disabled={send.sendingVoice}
-                haptic
-                className="min-h-[var(--uix-touch-min)] min-w-0 flex-[1.15] rounded-xl bg-primary text-primary-foreground disabled:opacity-50"
-              >
-                {send.sendingVoice ? "…" : "Отправить"}
-              </TapScaleButton>
-            </div>
-          </div>
-        </div>
+        <ChatDetailVoicePreviewModal
+          previewUrl={send.voicePreviewUrl}
+          durationSec={send.voicePreviewDurationSec}
+          sendingVoice={send.sendingVoice}
+          onDelete={send.cancelVoicePreview}
+          onRerecord={() => void send.rerecordVoiceFromPreview()}
+          onSend={() => void send.sendRecordedVoice()}
+        />
       )}
 
       {(send.videoNoteState === "recording" || send.videoNoteState === "preview") && !pulseDmMediaActive && (
-        <div className="fixed inset-0 z-[140] bg-black/75 backdrop-blur-sm px-4 py-6 flex flex-col items-center justify-center">
-          <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-background/90 p-4 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <p className="text-sm font-semibold">
-                {send.videoNoteState === "recording" ? "Запись видеокружка" : "Просмотр видеокружка"}
-              </p>
-              <span className="text-xs font-medium text-muted-foreground tabular-nums">
-                {formatVideoNoteTime(send.videoNoteDurationSec)}
-              </span>
-            </div>
-            {send.videoNoteState === "recording" && (
-              <div className="mb-3 flex items-center justify-between rounded-xl border border-border/60 bg-muted/50 px-3 py-2 text-xs">
-                {send.videoNoteLocked ? (
-                  <span className="inline-flex items-center gap-1 font-medium text-primary">
-                    <Lock className="h-3.5 w-3.5" />
-                    Запись закреплена
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-muted-foreground">
-                    <ArrowUp className="h-3.5 w-3.5" />
-                    Свайп вверх, чтобы закрепить
-                  </span>
-                )}
-                <span className="text-muted-foreground">Отпускание: {send.videoNoteLocked ? "не останавливает" : "остановит"}</span>
-              </div>
-            )}
-            <div className="mx-auto mb-4 flex items-center justify-center">
-              <div className="relative h-[240px] w-[240px]">
-                {send.videoNoteState === "recording" && (
-                  <div
-                    className="absolute inset-0 rounded-full animate-spin"
-                    style={{
-                      padding: "4px",
-                      background:
-                        "conic-gradient(from 0deg, hsl(var(--primary) / 0.95), hsl(var(--primary) / 0.25), hsl(var(--primary) / 0.95))",
-                    }}
-                    aria-hidden
-                  >
-                    <div className="h-full w-full rounded-full bg-transparent" />
-                  </div>
-                )}
-                <div className="absolute inset-[6px] overflow-hidden rounded-full bg-black">
-                  {send.videoNoteState === "recording" ? (
-                    <video
-                      ref={send.setVideoNoteLiveElement}
-                      className="h-full w-full object-cover"
-                      style={{ transform: "scaleX(-1)" }}
-                      autoPlay
-                      muted
-                      playsInline
-                    />
-                  ) : send.videoNotePreviewUrl ? (
-                    <video
-                      src={send.videoNotePreviewUrl}
-                      className="h-full w-full object-cover"
-                      controls
-                      playsInline
-                      preload="metadata"
-                    />
-                  ) : null}
-                </div>
-              </div>
-            </div>
-            {send.videoNoteState === "recording" ? (
-              <div className="flex gap-2">
-                <TapScaleButton
-                  type="button"
-                  onClick={send.cancelVideoNote}
-                  className="min-h-[var(--uix-touch-min)] flex-1 rounded-xl border border-input bg-background"
-                >
-                  Отмена
-                </TapScaleButton>
-                <TapScaleButton
-                  type="button"
-                  onClick={send.stopVideoNoteRecording}
-                  haptic
-                  className="min-h-[var(--uix-touch-min)] flex-1 rounded-xl bg-primary text-primary-foreground"
-                >
-                  Стоп
-                </TapScaleButton>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <TapScaleButton
-                  type="button"
-                  onClick={send.cancelVideoNote}
-                  className="min-h-[var(--uix-touch-min)] flex-1 rounded-xl border border-input bg-background"
-                >
-                  Удалить
-                </TapScaleButton>
-                <TapScaleButton
-                  type="button"
-                  onClick={send.startVideoNoteRecording}
-                  className="min-h-[var(--uix-touch-min)] flex-1 rounded-xl bg-secondary text-foreground"
-                >
-                  Перезаписать
-                </TapScaleButton>
-                <TapScaleButton
-                  type="button"
-                  onClick={send.sendRecordedVideoNote}
-                  haptic
-                  className="min-h-[var(--uix-touch-min)] flex-1 rounded-xl bg-primary text-primary-foreground"
-                >
-                  Отправить
-                </TapScaleButton>
-              </div>
-            )}
-          </div>
-        </div>
+        <ChatDetailVideoNoteModal
+          phase={send.videoNoteState === "recording" ? "recording" : "preview"}
+          durationSec={send.videoNoteDurationSec}
+          locked={send.videoNoteLocked}
+          previewUrl={send.videoNotePreviewUrl}
+          setLiveVideoRef={send.setVideoNoteLiveElement}
+          onCancel={send.cancelVideoNote}
+          onStopRecording={() => void send.stopVideoNoteRecording()}
+          onRerecord={send.startVideoNoteRecording}
+          onSend={send.sendRecordedVideoNote}
+        />
       )}
 
       <MediaViewer
@@ -2953,4 +2109,15 @@ onClick={() => actions.setForwardingMessage(null)}
       />
     </div>
   );
+}
+
+export default function ChatDetail({ params: paramsProp }: { params?: { id?: string } }) {
+  const paramsFromRoute = useParams<{ id?: string }>();
+  const fromPath =
+    typeof window !== "undefined"
+      ? (window.location.pathname.match(/^\/chat\/([^/?#]+)/)?.[1] ?? "")
+      : "";
+  const chatIdParam = (paramsProp?.id ?? paramsFromRoute?.id ?? fromPath) ?? "";
+  if (chatIdParam === AI_CHAT_ID) return <AiChatView />;
+  return <ChatDetailView params={paramsProp} chatIdParam={chatIdParam} />;
 }

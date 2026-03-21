@@ -33,9 +33,11 @@
 **Правила Cursor:**  
 - `.cursor/rules/quality-first.mdc` — всегда в контексте для клиента (принципы качества).  
 - `.cursor/rules/frontend-ui.mdc` — при работе с `client/src/**/*.tsx` (паттерны, компоненты, UIX).  
-- `.cursor/rules/deploy.mdc` — при изменении деплоя и .env.
+- `.cursor/rules/deploy.mdc` — при изменении деплоя и .env.  
+- `.cursor/rules/project-map.mdc` — при новых модулях обновлять `docs/PROJECT_MAP.md`.
 
 **Документация:**  
+- **`docs/PROJECT_MAP.md`** — полная карта проекта (client / server / shared); **при новом модуле дописать строку в этот файл в том же PR**.  
 - `docs/QUALITY_CHECKLIST.md` — чеклист на каждый экран и действие.  
 - `docs/UIX_SPECIALIST_GUIDE.md` — полировка, микро-взаимодействия, библиотеки.  
 - `docs/UNSTABLE_OR_POORLY_WORKING.md` — что было нестабильно и что исправлено.  

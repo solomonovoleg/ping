@@ -48,12 +48,12 @@
 - `server/messages/routes.ts`
 - `server/chats/routes.ts`
 - `server/calls/ws.ts`
-- `docs/ARCHITECTURE_CURRENT.md`
+- `docs/PROJECT_MAP.md`
 
 ## Как мерджить параллельную работу
 
 1. Сначала прочитать:
-   - `docs/ARCHITECTURE_CURRENT.md`
+   - `docs/PROJECT_MAP.md`
    - `docs/AI_HANDOFF_ARCHITECTURE.md`
 2. Сопоставить свою работу с текущей структурой модулей
 3. Не переносить старую структуру "как есть"

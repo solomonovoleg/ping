@@ -33,9 +33,15 @@ export type FeedPost = {
   }[];
 };
 
-export async function uploadPostMedia(file: File): Promise<string> {
+export type PostVideoTrimUpload = { trimStartSec: number; trimDurationSec: number };
+
+export async function uploadPostMedia(file: File, trim?: PostVideoTrimUpload): Promise<string> {
   const form = new FormData();
   form.append("file", file);
+  if (trim) {
+    form.append("trimStartSec", String(trim.trimStartSec));
+    form.append("trimDurationSec", String(trim.trimDurationSec));
+  }
   const res = await apiFetch(`${API}/upload/post-media`, {
     method: "POST",
     body: form,

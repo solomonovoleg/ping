@@ -145,6 +145,45 @@ export class MemStorage implements IStorage {
     );
   }
 
+  async countMutualFollowingWhoFollowTarget(viewerId: string, targetUserId: string): Promise<number> {
+    const following = await this.listFollowingIds(viewerId);
+    let n = 0;
+    for (const uid of following) {
+      if (await this.isFollowing(uid, targetUserId)) n++;
+    }
+    return n;
+  }
+
+  async listMutualFollowingWhoFollowTarget(
+    viewerId: string,
+    targetUserId: string,
+    limit: number
+  ): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]> {
+    const cap = Math.min(Math.max(limit, 1), 20);
+    const following = await this.listFollowingIds(viewerId);
+    const out: {
+      id: string;
+      publicId: number;
+      displayName: string | null;
+      surname: string | null;
+      avatarUrl: string | null;
+    }[] = [];
+    for (const uid of following) {
+      if (!(await this.isFollowing(uid, targetUserId))) continue;
+      const u = this.users.get(uid);
+      if (!u || u.deletedAt || u.isBlocked) continue;
+      out.push({
+        id: u.id,
+        publicId: u.publicId,
+        displayName: u.displayName ?? null,
+        surname: u.surname ?? null,
+        avatarUrl: u.avatarUrl ?? null,
+      });
+      if (out.length >= cap) break;
+    }
+    return out;
+  }
+
   async addBlock(blockerId: string, blockedId: string): Promise<void> {
     if (blockerId === blockedId) return;
     let set = blocksMap.get(blockerId);
@@ -178,6 +217,19 @@ export class MemStorage implements IStorage {
   async searchUsers(query: string, excludeUserId: string): Promise<import("@shared/schema").User[]> {
     const list = this.users.search(query);
     return Promise.resolve(list.filter((u) => u.id !== excludeUserId));
+  }
+
+  async findUsersDiscoverableByPhones(phones: string[], excludeUserId: string): Promise<import("@shared/schema").User[]> {
+    const seen = new Set<string>();
+    const out: import("@shared/schema").User[] = [];
+    for (const p of phones) {
+      const u = this.users.getByPhone(p);
+      if (!u || u.id === excludeUserId || seen.has(u.id)) continue;
+      if ((u as { deletedAt?: Date | null }).deletedAt || u.isBlocked || u.hideFromSearch) continue;
+      seen.add(u.id);
+      out.push(u);
+    }
+    return Promise.resolve(out);
   }
 
   async getNextPublicId() {

@@ -33,6 +33,80 @@ export type AuthUser = {
   vibeShareWithPartner?: boolean;
 };
 
+/** Как на сервере: en/ru → male|female|other; иначе null (форма профиля не теряет выбор). */
+function normalizeGenderFromApi(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (v === "male" || v === "мужской") return "male";
+  if (v === "female" || v === "женский") return "female";
+  if (v === "other" || v === "другое") return "other";
+  return null;
+}
+
+const AUTH_ME_CACHE_KEY = "ping_auth_me_cache";
+
+function readAuthMeCacheFromLs(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AUTH_ME_CACHE_KEY);
+    if (!raw) return null;
+    return userFromMePayload(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/** Подтянуть снимок профиля из Capacitor Preferences в localStorage (как с токеном). */
+export async function hydrateNativeAuthMeCache(): Promise<void> {
+  if (typeof window === "undefined" || !isNative()) return;
+  try {
+    const { Preferences } = await import("@capacitor/preferences");
+    const { value } = await Preferences.get({ key: AUTH_ME_CACHE_KEY });
+    if (!value?.trim()) return;
+    try {
+      if (!localStorage.getItem(AUTH_ME_CACHE_KEY)) {
+        localStorage.setItem(AUTH_ME_CACHE_KEY, value);
+      }
+    } catch {
+      /* ignore */
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function persistAuthMeCacheNative(json: string | null): Promise<void> {
+  if (typeof window === "undefined" || !isNative()) return;
+  try {
+    const { Preferences } = await import("@capacitor/preferences");
+    if (json) await Preferences.set({ key: AUTH_ME_CACHE_KEY, value: json });
+    else await Preferences.remove({ key: AUTH_ME_CACHE_KEY });
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function saveAuthMeCache(user: AuthUser): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    const json = JSON.stringify(user);
+    localStorage.setItem(AUTH_ME_CACHE_KEY, json);
+    await persistAuthMeCacheNative(json);
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function clearAuthMeCache(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(AUTH_ME_CACHE_KEY);
+    await persistAuthMeCacheNative(null);
+  } catch {
+    /* ignore */
+  }
+}
+
 function userFromMePayload(data: unknown): AuthUser | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
@@ -44,7 +118,7 @@ function userFromMePayload(data: unknown): AuthUser | null {
     displayName: (d.displayName as string | null | undefined) ?? null,
     surname: (d.surname as string | null | undefined) ?? null,
     nickname: (d.nickname as string | null | undefined) ?? null,
-    gender: (d.gender as string | null | undefined) ?? null,
+    gender: normalizeGenderFromApi(d.gender),
     birthDate: (d.birthDate as string | null | undefined) ?? null,
     avatarUrl: (d.avatarUrl as string | null | undefined) ?? null,
     coverUrl: (d.coverUrl as string | null | undefined) ?? null,
@@ -67,32 +141,69 @@ export async function fetchMe(): Promise<AuthUser | null> {
       suppressSessionExpireOn401: true,
     });
 
-  const readUser = async (res: Response): Promise<AuthUser | null> => {
-    if (!res.ok) throw new Error(await res.text());
+  await hydrateNativeAuthToken();
+  await hydrateNativeAuthMeCache();
+  syncAuthTokenFromStorage();
+
+  const runOnce = async (): Promise<AuthUser | null> => {
+    const res = await doReq();
+    if (res.status === 401) {
+      await clearAuthMeCache();
+      setAuthToken(null);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("auth:session-expired"));
+      }
+      return null;
+    }
+    if (res.status === 403) {
+      await clearAuthMeCache();
+      setAuthToken(null);
+      return null;
+    }
+    if (!res.ok) {
+      throw new Error(`auth_me_${res.status}`);
+    }
     const data = await res.json().catch(() => ({}));
-    return userFromMePayload(data);
+    const parsed = userFromMePayload(data);
+    if (parsed) await saveAuthMeCache(parsed);
+    return parsed;
   };
 
-  let u = await readUser(await doReq());
-  if (u) return u;
+  try {
+    let u = await runOnce();
+    if (u) return u;
 
-  // Натив: повтор после hydrate и короткой задержки (Preferences / LS после resume иногда отстают).
-  if (isNative()) {
-    await hydrateNativeAuthToken();
+    if (isNative()) {
+      await hydrateNativeAuthToken();
+      await hydrateNativeAuthMeCache();
+      syncAuthTokenFromStorage();
+      if (getAuthToken()) {
+        u = await runOnce();
+        if (u) return u;
+      }
+      await new Promise((r) => setTimeout(r, 220));
+      await hydrateNativeAuthToken();
+      await hydrateNativeAuthMeCache();
+      syncAuthTokenFromStorage();
+      if (getAuthToken()) {
+        u = await runOnce();
+        if (u) return u;
+      }
+    }
+    if (getAuthToken()) {
+      const cached = readAuthMeCacheFromLs();
+      if (cached) return cached;
+    }
+    return null;
+  } catch {
+    await hydrateNativeAuthMeCache();
     syncAuthTokenFromStorage();
     if (getAuthToken()) {
-      u = await readUser(await doReq());
-      if (u) return u;
+      const cached = readAuthMeCacheFromLs();
+      if (cached) return cached;
     }
-    await new Promise((r) => setTimeout(r, 220));
-    await hydrateNativeAuthToken();
-    syncAuthTokenFromStorage();
-    if (getAuthToken()) {
-      u = await readUser(await doReq());
-      if (u) return u;
-    }
+    return null;
   }
-  return null;
 }
 
 export async function login(phone: string, password: string): Promise<AuthUser & { token?: string }> {
@@ -114,6 +225,11 @@ export async function login(phone: string, password: string): Promise<AuthUser &
   const tokenStr =
     rawTok != null && String(rawTok).trim().length > 0 ? String(rawTok).trim() : null;
   setAuthToken(tokenStr);
+  const u = userFromMePayload(data);
+  if (u) {
+    await saveAuthMeCache(u);
+    return { ...u, ...(tokenStr ? { token: tokenStr } : {}) };
+  }
   return { ...(data as AuthUser), ...(tokenStr ? { token: tokenStr } : {}) };
 }
 
@@ -145,6 +261,17 @@ export async function register(
     rawTok != null && String(rawTok).trim().length > 0 ? String(rawTok).trim() : null;
   setAuthToken(token);
   const user = data.user ?? data;
+  const parsed = userFromMePayload(
+    typeof user === "object" && user
+      ? { ...user, phone: String((user as { phone?: unknown }).phone ?? phone) }
+      : null
+  );
+  if (parsed) {
+    await saveAuthMeCache(parsed);
+    const out: AuthUser & { token?: string } = { ...parsed };
+    if (token) out.token = token;
+    return out;
+  }
   const out: AuthUser & { token?: string } = {
     id: String(user?.id ?? ""),
     publicId: typeof user?.publicId === "number" ? user.publicId : 0,
@@ -152,7 +279,7 @@ export async function register(
     displayName: typeof user?.displayName === "string" ? user.displayName : null,
     surname: typeof user?.surname === "string" ? user.surname : null,
     avatarUrl: typeof user?.avatarUrl === "string" ? user.avatarUrl : null,
-    gender: typeof user?.gender === "string" ? user.gender : null,
+    gender: normalizeGenderFromApi((user as { gender?: unknown }).gender),
     birthDate: typeof user?.birthDate === "string" ? user.birthDate : null,
   };
   if (token) out.token = token;
@@ -165,6 +292,7 @@ export async function logout(): Promise<void> {
     credentials: "include",
   });
   setAuthToken(null);
+  await clearAuthMeCache();
 }
 
 /** Удаление своего аккаунта (требование App Store). После успеха нужно вызвать logout и перенаправить на вход. */
@@ -180,6 +308,7 @@ export async function deleteAccount(): Promise<void> {
     );
   }
   setAuthToken(null);
+  await clearAuthMeCache();
 }
 
 /** Загружает аватар (data URL или Blob), возвращает URL картинки с сервера */
@@ -314,7 +443,10 @@ export async function updateProfile(data: {
     throw new Error(message);
   }
   try {
-    return JSON.parse(text) as AuthUser;
+    const parsed = JSON.parse(text) as unknown;
+    const u = userFromMePayload(parsed);
+    if (!u) throw new Error("parse");
+    return u;
   } catch {
     throw new Error("Неверный ответ сервера");
   }

@@ -53,6 +53,8 @@
 	<string>PING использует галерею для выбора фото и видео.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>PING сохраняет фото и видео в галерею по вашему запросу.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>PING сопоставляет номера из вашей телефонной книги с пользователями мессенджера — чтобы показать, кто уже в Ping.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

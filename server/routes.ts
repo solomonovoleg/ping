@@ -38,6 +38,7 @@ import { ensureUserColumns, ensureChatVibeSchema, ensureCallTranscriptsSchema } 
 import { registerOpsPlatformPublicRoute } from "./admin/ops/platform.public-http";
 import { registerOpsUserReportsRoute } from "./admin/ops/reports.user-http";
 import { apiTrafficRecordMiddleware, createApiShieldLimiter } from "./middleware/api-shield";
+import { apiTrafficModuleTelemetryMiddleware } from "./admin/telemetry";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 
@@ -79,6 +80,7 @@ export async function registerRoutes(
 
   const apiShieldLimiter = createApiShieldLimiter();
   app.use(apiTrafficRecordMiddleware);
+  app.use(apiTrafficModuleTelemetryMiddleware);
   app.use("/api", apiShieldLimiter);
 
   registerCallRoutes(app);

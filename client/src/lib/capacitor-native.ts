@@ -109,6 +109,28 @@ export async function saveMediaToGallery(dataUrl: string, type: "image" | "video
   }
 }
 
+/** Номера из телефонной книги устройства (Capacitor). Пустой массив при отказе в доступе или ошибке. */
+export async function collectNativeContactPhoneStrings(): Promise<string[]> {
+  if (!isNative()) return [];
+  try {
+    const { Contacts } = await import("@capacitor-community/contacts");
+    const status = await Contacts.requestPermissions();
+    if (status.contacts !== "granted" && status.contacts !== "limited") return [];
+    const { contacts } = await Contacts.getContacts({
+      projection: { phones: true },
+    });
+    const out: string[] = [];
+    for (const c of contacts ?? []) {
+      for (const p of c.phones ?? []) {
+        if (p.number) out.push(p.number);
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** Открыть набор номера / звонок (нативно — intent DIAL). */
 export async function openDialer(phoneNumber: string): Promise<void> {
   const digits = phoneNumber.replace(/\D/g, "");

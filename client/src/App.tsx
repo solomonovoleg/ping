@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, type ComponentType } from "react";
+import { ensureChatOutboxOnlineFlush, flushChatOutbox } from "@/lib/chat-outbox";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -99,6 +100,7 @@ const FollowersList = lazyWithRetry(() => import("@/pages/FollowersList"), "foll
 const Notifications = lazyWithRetry(() => import("@/pages/Notifications"), "notifications");
 const AdminApp = lazyWithRetry(() => import("@/admin/AdminApp").then((m) => ({ default: m.AdminApp })), "admin-app");
 const PulseTemplatePreview = lazyWithRetry(() => import("@/pages/PulseTemplatePreview"), "pulse-template");
+const PulseProfileDevPreview = lazyWithRetry(() => import("@/pages/PulseProfileDevPreview"), "pulse-profile-dev");
 
 const PageFallback = () => (
   <div className="flex flex-1 items-center justify-center min-h-[200px]">
@@ -133,7 +135,9 @@ function Router() {
             <>
               <Route path="/dev/pulse-template/desktop-light" component={PulseTemplatePreview} />
               <Route path="/dev/pulse-template/desktop" component={PulseTemplatePreview} />
+              <Route path="/dev/pulse-template/stories-other" component={PulseTemplatePreview} />
               <Route path="/dev/pulse-template/stories" component={PulseTemplatePreview} />
+              <Route path="/dev/pulse-template/profile" component={PulseProfileDevPreview} />
               <Route path="/dev/pulse-template" component={PulseTemplatePreview} />
             </>
           ) : null}
@@ -168,6 +172,14 @@ const authShellClass = "min-h-[100dvh] w-full max-w-full min-w-0 overflow-x-hidd
 function AppBody() {
   const [location, setLocation] = useLocation();
   const { user, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (isLoading || !user) return;
+    const profileIncomplete = !user.displayName?.trim() || !user.surname?.trim();
+    if (profileIncomplete || location === "/onboarding") return;
+    ensureChatOutboxOnlineFlush();
+    void flushChatOutbox();
+  }, [isLoading, user?.id, user?.displayName, user?.surname, location]);
 
   if (isLoading) {
     return (

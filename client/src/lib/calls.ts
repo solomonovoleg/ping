@@ -4,6 +4,7 @@
  * Everything else (ICE config, media constraints, SDP) moved to features/call/.
  */
 import { API, API_BASE, apiFetch } from "@/lib/api-base";
+import { CALL_WS_SUBPROTOCOL } from "@shared/ws-call-handshake";
 
 export class CallTokenUnauthorizedError extends Error {
   constructor() {
@@ -37,13 +38,19 @@ const WS_BASE = (() => {
   return null;
 })();
 
-export function getCallWsUrl(token: string): string {
+/** Base `wss://…/calls` URL without secrets (token via Sec-WebSocket-Protocol). */
+export function getCallWsUrl(): string {
   if (WS_BASE) {
     const wsOrigin = WS_BASE.replace(/^https:\/\//i, "wss://");
-    return `${wsOrigin}/calls?token=${encodeURIComponent(token)}`;
+    return `${wsOrigin}/calls`;
   }
   const base = typeof window !== "undefined" ? window.location : { protocol: "http:", host: "localhost" };
   const protocol = base.protocol === "https:" ? "wss:" : "ws:";
   const host = typeof window !== "undefined" ? window.location.host : "localhost:3080";
-  return `${protocol}//${host}/calls?token=${encodeURIComponent(token)}`;
+  return `${protocol}//${host}/calls`;
+}
+
+/** Opens /calls with one-time token in subprotocol (not in URL). */
+export function openCallRealtimeWebSocket(token: string): WebSocket {
+  return new WebSocket(getCallWsUrl(), [CALL_WS_SUBPROTOCOL, token]);
 }

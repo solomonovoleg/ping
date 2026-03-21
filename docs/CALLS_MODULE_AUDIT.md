@@ -11,7 +11,7 @@
 | Слой | Компоненты |
 |------|------------|
 | **Клиент** | `useCall`, `useRealtimeSocket`, `useCallSignaling`, `useWebRtcPeer`, `CallContext`, `CallModal`, `lib/calls`, `lib/incoming-call-alert` |
-| **Сигналинг** | WebSocket `/calls?token=...` (один сокет на чаты + звонки) |
+| **Сигналинг** | WebSocket `/calls` — токен в `Sec-WebSocket-Protocol` (`ping.call.v1` + hex; `?token=` — legacy) |
 | **Сервер** | `server/calls/` (token, routes, ws.ts, missed.ts) |
 | **Медиа** | WebRTC P2P (simple-peer), только STUN (Google) |
 

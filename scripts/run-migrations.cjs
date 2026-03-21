@@ -79,6 +79,7 @@ const scripts = [
   "scripts/migrate-message-hidden.cjs",
   "scripts/migrate-messages-timestamptz.cjs",
   "scripts/migrate-message-translations.cjs",
+  "scripts/migrate-messages-chat-created-index.cjs",
   "scripts/migrate-chat-vibe.cjs",
   "scripts/migrate-admin-ops.cjs",
   "scripts/migrate-ai-search.cjs",

@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { eq, and, desc, asc, sql, gt, gte, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { IStorage } from "./types";
 import type {
   User,
@@ -57,6 +58,25 @@ export class DbStorage implements IStorage {
     await ensureUserColumns();
     const [row] = await this.db.select().from(users).where(eq(users.phone, phone)).limit(1);
     return row;
+  }
+
+  async findUsersDiscoverableByPhones(phones: string[], excludeUserId: string): Promise<User[]> {
+    await ensureUserColumns();
+    const unique = [...new Set(phones)].filter(Boolean);
+    if (unique.length === 0) return [];
+    const rows = await this.db
+      .select()
+      .from(users)
+      .where(
+        and(
+          inArray(users.phone, unique),
+          isNull(users.deletedAt),
+          eq(users.isBlocked, false),
+          eq(users.hideFromSearch, false),
+          ne(users.id, excludeUserId)
+        )
+      );
+    return rows;
   }
 
   async searchUsers(query: string, excludeUserId: string): Promise<User[]> {
@@ -1530,6 +1550,56 @@ export class DbStorage implements IStorage {
       .orderBy(desc(follows.createdAt))
       .limit(limit)
       .offset(offset);
+    return rows;
+  }
+
+  async countMutualFollowingWhoFollowTarget(viewerId: string, targetUserId: string): Promise<number> {
+    const fViewer = follows;
+    const fMutual = alias(follows, "follows_mutual_to_target");
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(fViewer)
+      .innerJoin(fMutual, eq(fViewer.followingId, fMutual.followerId))
+      .innerJoin(users, eq(users.id, fViewer.followingId))
+      .where(
+        and(
+          eq(fViewer.followerId, viewerId),
+          eq(fMutual.followingId, targetUserId),
+          isNull(users.deletedAt),
+          eq(users.isBlocked, false)
+        )
+      );
+    return row?.count ?? 0;
+  }
+
+  async listMutualFollowingWhoFollowTarget(
+    viewerId: string,
+    targetUserId: string,
+    limit: number
+  ): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]> {
+    const fViewer = follows;
+    const fMutual = alias(follows, "follows_mutual_to_target");
+    const rows = await this.db
+      .select({
+        id: users.id,
+        publicId: users.publicId,
+        displayName: users.displayName,
+        surname: users.surname,
+        avatarUrl: users.avatarUrl,
+      })
+      .from(fViewer)
+      .innerJoin(fMutual, eq(fViewer.followingId, fMutual.followerId))
+      .innerJoin(users, eq(users.id, fViewer.followingId))
+      .where(
+        and(
+          eq(fViewer.followerId, viewerId),
+          eq(fMutual.followingId, targetUserId),
+          isNull(users.deletedAt),
+          eq(users.isBlocked, false)
+        )
+      )
+      .orderBy(desc(fMutual.createdAt))
+      .limit(Math.min(Math.max(limit, 1), 20));
     return rows;
   }
 

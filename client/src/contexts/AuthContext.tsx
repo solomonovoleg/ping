@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import type { AuthUser } from "@/lib/auth";
-import { fetchMe } from "@/lib/auth";
+import { fetchMe, hydrateNativeAuthMeCache } from "@/lib/auth";
 import {
   API,
   apiFetch,
@@ -107,6 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       t = setTimeout(() => {
         void (async () => {
           await hydrateNativeAuthToken();
+          await hydrateNativeAuthMeCache();
           syncAuthTokenFromStorage();
           await refetch();
         })();

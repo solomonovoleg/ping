@@ -15,7 +15,8 @@
 | `/dev/pulse-template` | Мобильный тёмный (`MobileChatDark`, ~390px по центру) |
 | `/dev/pulse-template/desktop` | Десктоп тёмный (`MessengerChatDark`, сайдбар + тред, на весь экран) |
 | `/dev/pulse-template/desktop-light` | Десктоп светлый (`MessengerChatLight`) |
-| `/dev/pulse-template/stories` | Сториз (`MobileStoriesViewer`, мок-данные, режимы own/other) |
+| `/dev/pulse-template/stories` | Сториз, мок «мои» (`MobileStoriesViewer`) |
+| `/dev/pulse-template/stories-other` | Сториз, мок «чужие» (`initialMode="other"`) |
 
 Реальный чат — `ChatDetail`; шаблон не подменяет экран, только сверка с макетом. Реальные сториз — `StoryViewer` на ленте/профиле; см. `STORIES_README.md`.
 

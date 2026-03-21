@@ -3,12 +3,12 @@ import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 
 const STORY_VIDEO_MAX_MB = 500;
 const STORY_VIDEO_MAX_BYTES = STORY_VIDEO_MAX_MB * 1024 * 1024;
 const VIDEO_MIME_RE = /^video\//i;
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|mkv|avi|m4v|3gp|wmv|flv|ts|m2ts|mts|ogv|mpeg|mpg)$/i;
-const STORY_VIDEO_MAX_SECONDS = 14;
 const OUTPUT_CONTENT_TYPE = "video/mp4";
 const OUTPUT_EXT = ".mp4";
 const STORY_VIDEO_FILTER =
@@ -60,14 +60,27 @@ export function validateStoryVideoUpload(file: UploadFileLike): string | null {
   return null;
 }
 
-async function transcodeToStreamableMp4(inputPath: string, outputPath: string): Promise<void> {
+export type VideoTranscodeTrim = { startSec: number; durationSec: number };
+
+async function transcodeToStreamableMp4(
+  inputPath: string,
+  outputPath: string,
+  trim?: VideoTranscodeTrim,
+): Promise<void> {
   await ensureFfmpegReady();
+  const startSec = trim != null ? Math.max(0, trim.startSec) : 0;
+  const durationSec =
+    trim != null
+      ? Math.min(POST_VIDEO_MAX_SECONDS, Math.max(0.1, trim.durationSec))
+      : POST_VIDEO_MAX_SECONDS;
   const args = [
     "-y",
     "-i",
     inputPath,
+    "-ss",
+    String(startSec),
     "-t",
-    String(STORY_VIDEO_MAX_SECONDS),
+    String(durationSec),
     "-map",
     "0:v:0",
     "-map",
@@ -109,7 +122,11 @@ async function transcodeToStreamableMp4(inputPath: string, outputPath: string): 
   await runCommand("ffmpeg", args);
 }
 
-export async function transcodeStoryVideoBuffer(input: Buffer, inputExt = ".mp4"): Promise<{
+export async function transcodeStoryVideoBuffer(
+  input: Buffer,
+  inputExt = ".mp4",
+  trim?: VideoTranscodeTrim,
+): Promise<{
   buffer: Buffer;
   ext: string;
   contentType: string;
@@ -119,7 +136,7 @@ export async function transcodeStoryVideoBuffer(input: Buffer, inputExt = ".mp4"
   const outPath = path.join(tempDir, `${randomUUID()}${OUTPUT_EXT}`);
   try {
     await fs.writeFile(inPath, input);
-    await transcodeToStreamableMp4(inPath, outPath);
+    await transcodeToStreamableMp4(inPath, outPath, trim);
     const buffer = await fs.readFile(outPath);
     return { buffer, ext: OUTPUT_EXT, contentType: OUTPUT_CONTENT_TYPE };
   } finally {
@@ -127,8 +144,12 @@ export async function transcodeStoryVideoBuffer(input: Buffer, inputExt = ".mp4"
   }
 }
 
-export async function transcodeStoryVideoFileToPath(inputPath: string, targetDir: string): Promise<string> {
+export async function transcodeStoryVideoFileToPath(
+  inputPath: string,
+  targetDir: string,
+  trim?: VideoTranscodeTrim,
+): Promise<string> {
   const outPath = path.join(targetDir, `${randomUUID()}${OUTPUT_EXT}`);
-  await transcodeToStreamableMp4(inputPath, outPath);
+  await transcodeToStreamableMp4(inputPath, outPath, trim);
   return outPath;
 }

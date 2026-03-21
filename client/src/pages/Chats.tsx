@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, memo } from "react";
+import { useState, useEffect, useRef, memo, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useLocation } from "wouter";
-import { Search, Edit, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, Mic, Pin, Users } from "lucide-react";
+import { Search, Edit, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, Mic, Pin, Users, BookUser, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useChatRealtime } from "@/features/chat/hooks/useChatRealtime";
 
 import { API, apiFetch } from "@/lib/api-base";
-import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
+import {
+  addContact,
+  listContactsWithProfiles,
+  matchContactsFromPhones,
+  type ContactPhoneMatchUser,
+  type ContactUser,
+} from "@/lib/users";
+import { gatherPhoneStringsFromDevice, isWebContactPickerSupported } from "@/lib/contact-book-match";
+import { isNative } from "@/lib/capacitor-native";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { PageTitle } from "@/components/PageTitle";
@@ -265,6 +273,9 @@ export default function Chats() {
   const [groupCreateLoading, setGroupCreateLoading] = useState(false);
   const [contactsSearchQuery, setContactsSearchQuery] = useState("");
   const [contactOpeningId, setContactOpeningId] = useState<string | null>(null);
+  const [addressBookMatches, setAddressBookMatches] = useState<ContactPhoneMatchUser[]>([]);
+  const [addressBookLoading, setAddressBookLoading] = useState(false);
+  const [addressBookError, setAddressBookError] = useState<string | null>(null);
   const [typingByChatId, setTypingByChatId] = useState<Record<string, string | null>>({});
   const [voiceRecordingByChatId, setVoiceRecordingByChatId] = useState<Record<string, string | null>>({});
   const [messageSearchResults, setMessageSearchResults] = useState<SearchMessageHit[]>([]);
@@ -351,6 +362,45 @@ export default function Chats() {
     queryFn: listContactsWithProfiles,
     enabled: showContactsPage || showCreateGroupModal,
   });
+
+  const syncAddressBookMatches = useCallback(async () => {
+    setAddressBookLoading(true);
+    setAddressBookError(null);
+    try {
+      const { phones, source } = await gatherPhoneStringsFromDevice();
+      if (phones.length === 0) {
+        setAddressBookMatches([]);
+        if (source === "native") {
+          toast({
+            title: "Нет номеров для проверки",
+            description: "Разрешите доступ к контактам или проверьте книгу (нужны номера РФ: +7…).",
+          });
+        } else {
+          toast({
+            title: isWebContactPickerSupported() ? "Контакты не выбраны" : "Недоступно в этом браузере",
+            description: isWebContactPickerSupported()
+              ? undefined
+              : "Используйте приложение PING или Chrome на Android.",
+          });
+        }
+        return;
+      }
+      const matches = await matchContactsFromPhones(phones);
+      setAddressBookMatches(matches);
+      if (matches.length === 0) {
+        toast({
+          title: "Пока никого нет в Ping",
+          description: "Среди переданных номеров нет зарегистрированных пользователей.",
+        });
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Не удалось проверить контакты";
+      setAddressBookError(msg);
+      toast({ title: "Ошибка", description: msg, variant: "destructive" });
+    } finally {
+      setAddressBookLoading(false);
+    }
+  }, [toast]);
 
   // Поиск по сообщениям (с задержкой)
   useEffect(() => {
@@ -464,15 +514,156 @@ export default function Chats() {
           {/* Contacts List */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))] uix-content-x">
             {!contactsSearchQuery && (
-              <div
-                className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors"
-                onClick={() => { setShowContactsPage(false); setContactsSearchQuery(""); }}
-              >
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <UserPlus className="w-5 h-5" />
+              <>
+                <div className="rounded-2xl border border-border/40 bg-secondary/20 p-3 mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <BookUser className="w-5 h-5 text-primary" aria-hidden />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-[15px]">Кто из контактов в Ping</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {isNative()
+                          ? "Синхронизация с телефонной книгой устройства"
+                          : isWebContactPickerSupported()
+                            ? "Выберите контакты в браузере (Chrome на Android)"
+                            : "В вебе полной синхронизации нет — установите приложение"}
+                      </p>
+                    </div>
+                    <TapScaleButton
+                      type="button"
+                      haptic
+                      disabled={addressBookLoading}
+                      onClick={() => void syncAddressBookMatches()}
+                      className="shrink-0 min-h-[var(--uix-touch-min)] px-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+                      aria-label={addressBookLoading ? "Проверка контактов" : "Синхронизировать контакты"}
+                    >
+                      {addressBookLoading ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : null}
+                      {addressBookLoading ? "…" : "Синхронизировать"}
+                    </TapScaleButton>
+                  </div>
+                  {addressBookError ? (
+                    <p className="text-sm text-destructive mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>{addressBookError}</span>
+                      <button
+                        type="button"
+                        onClick={() => void syncAddressBookMatches()}
+                        className="min-h-[var(--uix-touch-min)] px-1 text-primary underline underline-offset-2"
+                      >
+                        Повторить
+                      </button>
+                    </p>
+                  ) : null}
                 </div>
-                Добавить контакт (поиск в «Чаты»)
-              </div>
+
+                {addressBookMatches.length > 0 ? (
+                  <div className="mb-4">
+                    <div className="px-1 text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                      В Ping из вашей книги
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {addressBookMatches.map((m) => (
+                        <div
+                          key={`ab-${m.id}`}
+                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl transition-colors group active:scale-[0.98]"
+                        >
+                          <button
+                            type="button"
+                            className="flex flex-1 min-w-0 items-center gap-3 text-left"
+                            onClick={async () => {
+                              if (contactOpeningId) return;
+                              setContactOpeningId(m.id);
+                              try {
+                                const chat = await startDm(m.id);
+                                setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                setShowContactsPage(false);
+                              } finally {
+                                setContactOpeningId(null);
+                              }
+                            }}
+                          >
+                            <UserAvatar
+                              avatarUrl={m.avatarUrl ?? undefined}
+                              displayName={contactDisplayName(m)}
+                              seed={String(m.id)}
+                              size={48}
+                              className="w-12 h-12 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-[16px] truncate">{contactDisplayName(m)}</h3>
+                              <p className="text-sm text-muted-foreground">
+                                {m.isInMyContacts ? "Уже в контактах" : "В Ping"}
+                              </p>
+                            </div>
+                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {!m.isInMyContacts ? (
+                              <TapScaleButton
+                                type="button"
+                                haptic
+                                subtle
+                                className="min-h-[var(--uix-touch-min)] px-2.5 text-sm text-primary font-medium"
+                                aria-label={`Добавить ${contactDisplayName(m)} в контакты`}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    await addContact(m.id);
+                                    queryClient.invalidateQueries({ queryKey: ["contacts", "list"] });
+                                    setAddressBookMatches((prev) =>
+                                      prev.map((u) => (u.id === m.id ? { ...u, isInMyContacts: true } : u))
+                                    );
+                                    toast({ title: "Добавлено в контакты" });
+                                  } catch (err) {
+                                    toast({
+                                      title: "Не удалось добавить",
+                                      description: err instanceof Error ? err.message : undefined,
+                                      variant: "destructive",
+                                    });
+                                  }
+                                }}
+                              >
+                                В контакты
+                              </TapScaleButton>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              aria-label={`Написать ${contactDisplayName(m)}`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (contactOpeningId) return;
+                                setContactOpeningId(m.id);
+                                try {
+                                  const chat = await startDm(m.id);
+                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setShowContactsPage(false);
+                                } finally {
+                                  setContactOpeningId(null);
+                                }
+                              }}
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div
+                  className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors"
+                  onClick={() => {
+                    setShowContactsPage(false);
+                    setContactsSearchQuery("");
+                  }}
+                >
+                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  Добавить контакт (поиск в «Чаты»)
+                </div>
+              </>
             )}
 
             {Object.keys(groupedContacts).length === 0 ? (

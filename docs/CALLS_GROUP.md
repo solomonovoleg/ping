@@ -10,7 +10,7 @@
 | Сервер (`.env` / `deploy.env`) | `GROUP_CALLS_ENABLED=1` |
 | Nginx | `location = /group-calls` с upgrade (как `/calls`) |
 
-Токен WebSocket: тот же эндпоинт `POST /api/calls/token`, подключение к `wss://хост/group-calls?token=…`.
+Токен WebSocket: тот же эндпоинт `POST /api/calls/token`, подключение к `wss://хост/group-calls` с токеном в `Sec-WebSocket-Protocol` (как `/calls`).
 
 ## Поведение
 

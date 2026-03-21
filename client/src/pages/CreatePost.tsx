@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Mic, Video, X, Heading1, Heading2, Heading3, Sparkles, Eye, Plus, Files } from "lucide-react";
 import { useLocation } from "wouter";
@@ -6,7 +6,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
-import { createPost, uploadPostMedia, fetchPostsByAuthor, type FeedPost } from "@/lib/posts";
+import {
+  createPost,
+  uploadPostMedia,
+  fetchPostsByAuthor,
+  type FeedPost,
+  type PostVideoTrimUpload,
+} from "@/lib/posts";
+import { PostVideoTrimmerModal } from "@/features/posts/video-trim";
 import { compressImage } from "@/lib/compress-image";
 import { resolveUrl } from "@/lib/api-base";
 import { isNative, takePhotoFromCamera, pickPhotoFromGallery } from "@/lib/capacitor-native";
@@ -25,6 +32,7 @@ import {
 import { getTextareaCaretCoordinates } from "@/lib/textarea-caret";
 import { useCreatePostDraft } from "@/hooks/useCreatePostDraft";
 import { buildPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
+import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 
 type MediaKind = "image" | "video" | "audio";
 
@@ -86,29 +94,6 @@ async function getImageAspectFromDataUrl(dataUrl: string): Promise<number | null
   }
 }
 
-const POST_VIDEO_MAX_SECONDS = 14;
-
-function probeVideoDurationSec(file: File): Promise<number | null> {
-  const isVideo =
-    file.type.startsWith("video/") || /\.(mp4|webm|mov)(\?|$)/i.test(file.name);
-  if (!isVideo) return Promise.resolve(null);
-  const objectUrl = URL.createObjectURL(file);
-  return new Promise((resolve) => {
-    const el = document.createElement("video");
-    el.preload = "metadata";
-    const done = (sec: number | null) => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(sec);
-    };
-    el.onloadedmetadata = () => {
-      const d = el.duration;
-      done(Number.isFinite(d) && d > 0 ? d : null);
-    };
-    el.onerror = () => done(null);
-    el.src = objectUrl;
-  });
-}
-
 export default function CreatePost() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
@@ -117,6 +102,8 @@ export default function CreatePost() {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const uploadIdRef = useRef(0);
   const mediaCountRef = useRef(0);
+  const videoTrimResolverRef = useRef<((t: PostVideoTrimUpload | null) => void) | null>(null);
+  const [videoTrimFile, setVideoTrimFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [mediaItems, setMediaItems] = useState<MediaSlot[]>([]);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
@@ -163,6 +150,32 @@ export default function CreatePost() {
     return () => clearTimeout(t);
   }, [selectionToast]);
 
+  const requestVideoTrim = useCallback(
+    (file: File) =>
+      new Promise<PostVideoTrimUpload | null>((resolve) => {
+        videoTrimResolverRef.current = resolve;
+        setVideoTrimFile(file);
+      }),
+    [],
+  );
+
+  const handleVideoTrimOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      if (videoTrimResolverRef.current) {
+        videoTrimResolverRef.current(null);
+        videoTrimResolverRef.current = null;
+      }
+      setVideoTrimFile(null);
+    }
+  }, []);
+
+  const handleVideoTrimConfirm = useCallback((trim: PostVideoTrimUpload) => {
+    const r = videoTrimResolverRef.current;
+    videoTrimResolverRef.current = null;
+    r?.(trim);
+    setVideoTrimFile(null);
+  }, []);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.currentTarget;
     // Сразу снимок FileList: после setState модалка размонтирует input — в части браузеров живой FileList
@@ -200,33 +213,56 @@ export default function CreatePost() {
       return;
     }
 
-    let warnedLongVideo = false;
-    for (const payload of acceptedFiles) {
-      if (payload.kind !== "video") continue;
-      const dur = await probeVideoDurationSec(payload.file);
-      if (dur != null && dur > POST_VIDEO_MAX_SECONDS + 0.05 && !warnedLongVideo) {
-        warnedLongVideo = true;
-        toast({
-          title: `Видео дольше ${POST_VIDEO_MAX_SECONDS} с будет обрезано при загрузке (как в сториз).`,
-        });
-        break;
-      }
-    }
-
-    const newSlots: MediaSlot[] = acceptedFiles.map((item) => {
-      const id = ++uploadIdRef.current;
-      const preview = URL.createObjectURL(item.file);
-      return { type: "uploading" as const, preview, id, kind: item.kind, aspectRatio: item.aspectRatio };
-    });
-    setMediaItems((prev) => [...prev, ...newSlots].slice(0, MAX_MEDIA));
-    setShowPreview(true);
-
     (async () => {
-      for (let i = 0; i < newSlots.length; i++) {
-        const slot = newSlots[i];
-        if (slot.type !== "uploading") continue;
-        const payload = acceptedFiles[i];
-        if (!payload) continue;
+      for (const payload of acceptedFiles) {
+        if (payload.kind === "video") {
+          const trim = await requestVideoTrim(payload.file);
+          if (!trim) continue;
+          const id = ++uploadIdRef.current;
+          const preview = URL.createObjectURL(payload.file);
+          setMediaItems((prev) =>
+            [...prev, { type: "uploading" as const, preview, id, kind: "video" as const, aspectRatio: null }].slice(
+              0,
+              MAX_MEDIA,
+            ),
+          );
+          setShowPreview(true);
+          try {
+            console.debug("[create-post] uploading video…", payload.file.name, payload.file.size);
+            const url = await uploadPostMedia(payload.file, trim);
+            console.debug("[create-post] uploaded:", url);
+            setMediaItems((prev) =>
+              prev.map((item) =>
+                item.type === "uploading" && item.id === id
+                  ? { type: "done" as const, url, kind: "video" as const, aspectRatio: null }
+                  : item,
+              ),
+            );
+          } catch (err) {
+            console.error("[create-post] upload failed:", err);
+            setMediaItems((prev) => prev.filter((item) => item.type !== "uploading" || item.id !== id));
+            toast({ title: err instanceof Error ? err.message : "Ошибка загрузки", variant: "destructive" });
+          } finally {
+            URL.revokeObjectURL(preview);
+          }
+          continue;
+        }
+
+        const id = ++uploadIdRef.current;
+        const preview = URL.createObjectURL(payload.file);
+        setMediaItems((prev) =>
+          [
+            ...prev,
+            {
+              type: "uploading" as const,
+              preview,
+              id,
+              kind: payload.kind,
+              aspectRatio: payload.aspectRatio,
+            },
+          ].slice(0, MAX_MEDIA),
+        );
+        setShowPreview(true);
         const file = payload.file;
         try {
           console.debug("[create-post] compressing…", file.name, file.type, file.size);
@@ -236,17 +272,17 @@ export default function CreatePost() {
           console.debug("[create-post] uploaded:", url);
           setMediaItems((prev) =>
             prev.map((item) =>
-              item.type === "uploading" && item.id === slot.id
+              item.type === "uploading" && item.id === id
                 ? { type: "done" as const, url, kind: payload.kind, aspectRatio: payload.aspectRatio }
-                : item
-            )
+                : item,
+            ),
           );
         } catch (err) {
           console.error("[create-post] upload failed:", err);
-          setMediaItems((prev) => prev.filter((item) => item.type !== "uploading" || item.id !== slot.id));
+          setMediaItems((prev) => prev.filter((item) => item.type !== "uploading" || item.id !== id));
           toast({ title: err instanceof Error ? err.message : "Ошибка загрузки", variant: "destructive" });
         } finally {
-          URL.revokeObjectURL(slot.preview);
+          URL.revokeObjectURL(preview);
         }
       }
     })();
@@ -941,6 +977,13 @@ export default function CreatePost() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <PostVideoTrimmerModal
+        open={!!videoTrimFile}
+        file={videoTrimFile}
+        onOpenChange={handleVideoTrimOpenChange}
+        onConfirm={handleVideoTrimConfirm}
+      />
     </motion.div>
   );
 }

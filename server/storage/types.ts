@@ -26,6 +26,8 @@ export interface IStorage {
   getUserByPublicId(publicId: number): Promise<User | undefined>;
   /** Поиск пользователей по номеру телефона, publicId или имени (для глобального поиска). Скрытые из поиска не возвращаются. */
   searchUsers(query: string, excludeUserId: string): Promise<User[]>;
+  /** Пользователи с номерами из списка (нормализованные +7…), исключая viewer; только активные, не в блоке модерации, не скрытые из поиска. */
+  findUsersDiscoverableByPhones(phones: string[], excludeUserId: string): Promise<User[]>;
   /** Контакты: проверка и управление */
   isContact(ownerId: string, contactUserId: string): Promise<boolean>;
   addContact(ownerId: string, contactUserId: string): Promise<void>;
@@ -41,6 +43,15 @@ export interface IStorage {
   getFollowingCount(userId: string): Promise<number>;
   getFollowersList(userId: string, limit: number, offset: number): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>;
   getFollowingList(userId: string, limit: number, offset: number): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>;
+  /**
+   * Из тех, на кого подписан viewer, кто ещё подписан на target (для строки «N общих подписчиков»).
+   */
+  countMutualFollowingWhoFollowTarget(viewerId: string, targetUserId: string): Promise<number>;
+  listMutualFollowingWhoFollowTarget(
+    viewerId: string,
+    targetUserId: string,
+    limit: number
+  ): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>;
   /** Блокировка: пользователь blocker блокирует blocked */
   addBlock(blockerId: string, blockedId: string): Promise<void>;
   removeBlock(blockerId: string, blockedId: string): Promise<void>;

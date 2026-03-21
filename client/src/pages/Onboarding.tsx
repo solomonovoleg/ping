@@ -28,7 +28,7 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
 
 export default function Onboarding() {
   const [, setLocation] = useLocation();
-  const { user, refetch } = useAuth();
+  const { user, refetch, setUserFromLogin } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [surname, setSurname] = useState("");
   const [gender, setGender] = useState<Gender | "">("");
@@ -76,13 +76,17 @@ export default function Onboarding() {
     }
     setLoading(true);
     try {
-      await updateProfile({
+      const trimmedAvatar = avatarUrl.trim();
+      const updated = await updateProfile({
         displayName: displayName.trim().slice(0, NAME_MAX_LENGTH),
         surname: surname.trim().slice(0, NAME_MAX_LENGTH),
         gender,
         birthDate: birthDate.trim() || undefined,
-        avatarUrl: avatarUrl.trim() || undefined,
+        ...(trimmedAvatar && !trimmedAvatar.startsWith("data:")
+          ? { avatarUrl: trimmedAvatar }
+          : {}),
       });
+      setUserFromLogin(updated);
       await refetch();
       setLocation("/");
     } catch (err) {
@@ -221,7 +225,7 @@ export default function Onboarding() {
           <Button
             type="submit"
             className="w-full"
-            disabled={loading || !displayName.trim() || !surname.trim() || !gender}
+            disabled={loading || uploadingAvatar || !displayName.trim() || !surname.trim() || !gender}
           >
             {loading ? "Сохранение..." : "Продолжить"}
           </Button>

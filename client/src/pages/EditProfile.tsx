@@ -113,13 +113,14 @@ export default function EditProfile() {
       setSaving(true);
       try {
         const nick = editNickname.trim().replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH);
+        const trimmedAv = editAvatarUrl.trim();
         const updated = await updateProfile({
           displayName: editDisplayName.trim().slice(0, NAME_MAX_LENGTH),
           surname: editSurname.trim().slice(0, NAME_MAX_LENGTH),
           nickname: nick.length > 0 ? nick : null,
           gender: editGender || undefined,
           birthDate: editBirthDate.trim() ? editBirthDate.trim() : null,
-          avatarUrl: editAvatarUrl.trim() || undefined,
+          ...(trimmedAv && !trimmedAv.startsWith("data:") ? { avatarUrl: trimmedAv } : {}),
           bio: editBio.trim() || null,
           profileLink: editProfileLink.trim() || null,
           coverUrl: editCoverUrl.trim() || null,
@@ -138,7 +139,7 @@ export default function EditProfile() {
         setSaving(false);
       }
     },
-    [editDisplayName, editSurname, editNickname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation]
+    [editDisplayName, editSurname, editNickname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation],
   );
 
   const handleCoverFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -443,7 +444,7 @@ export default function EditProfile() {
               type="submit"
               haptic
               className="flex-1 rounded-lg min-h-[var(--uix-touch-min)] px-4 py-2 bg-primary text-primary-foreground border border-primary-border font-medium text-sm disabled:opacity-50 disabled:pointer-events-none"
-              disabled={saving}
+              disabled={saving || uploadingAvatar || uploadingCover}
             >
               {saving ? "Сохранение…" : "Сохранить"}
             </TapScaleButton>

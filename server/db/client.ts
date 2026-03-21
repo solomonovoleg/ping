@@ -13,6 +13,16 @@ function getConnectionString(): string {
   return url;
 }
 
+/** Параллельные запросы к БД из одного процесса Node (PM2 у вас обычно instances: 1). Не ставьте выше max_connections в Postgres минус запас. */
+function getPoolMax(): number {
+  const raw = process.env.PG_POOL_MAX?.trim();
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return Math.min(100, Math.max(5, Math.floor(n)));
+  }
+  return 40;
+}
+
 let pool: Pool | null = null;
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 
@@ -20,8 +30,9 @@ export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({
       connectionString: getConnectionString(),
-      max: 10,
-      idleTimeoutMillis: 30000,
+      max: getPoolMax(),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 15_000,
     });
   }
   return pool;

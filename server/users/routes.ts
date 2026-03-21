@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { contactsPhoneMatchLimiter } from "../auth/rate-limit";
 import { requireAuth, getUserId } from "../auth/session";
 import {
   addContact,
@@ -9,6 +10,7 @@ import {
   getProfileOnly,
   getProfilePage,
   listContacts,
+  matchContactsFromPhoneBook,
   normalizeProfileIdParam,
   savePushToken,
   searchUsersForViewer,
@@ -166,6 +168,17 @@ export function registerUsersRoutes(app: Express): void {
     try {
       await addContact(userId, typeof contactUserId === "string" ? contactUserId : "");
       res.json({ ok: true });
+    } catch (error) {
+      if (respondServiceError(res, error)) return;
+      throw error;
+    }
+  });
+
+  app.post("/api/contacts/match-phones", requireAuth, contactsPhoneMatchLimiter, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    try {
+      const payload = await matchContactsFromPhoneBook(userId, req.body?.phones);
+      res.json(payload);
     } catch (error) {
       if (respondServiceError(res, error)) return;
       throw error;

@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "http";
 import type { IncomingMessage } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { CALL_WS_SUBPROTOCOL, resolveCallHandshakeToken } from "@shared/ws-call-handshake";
 import { consumeCallToken } from "./token";
 import { sendPushToUser } from "../push/send";
 import { recordMissedCall } from "./missed";
@@ -110,7 +111,13 @@ export function notifyChatListUpdate(userId: string, options?: ChatListUpdateOpt
 }
 
 export function attachCallWebSocket(httpServer: HttpServer): void {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols(protocols: Set<string>): string | false {
+      if (protocols.has(CALL_WS_SUBPROTOCOL)) return CALL_WS_SUBPROTOCOL;
+      return false;
+    },
+  });
   const HEARTBEAT_MS = numEnv("CALLS_WS_HEARTBEAT_MS", 30_000);
 
   const heartbeatTimer = setInterval(() => {
@@ -129,13 +136,14 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`);
     if (url.pathname !== "/calls") return;
-    const token = url.searchParams.get("token");
-    if (!token) {
+    const secProto = request.headers["sec-websocket-protocol"];
+    const resolved = resolveCallHandshakeToken(secProto, url.searchParams.get("token"));
+    if (!resolved) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
-    const userId = consumeCallToken(token);
+    const userId = consumeCallToken(resolved.token);
     if (!userId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();

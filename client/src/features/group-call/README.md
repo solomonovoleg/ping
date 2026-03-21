@@ -13,7 +13,7 @@
 1. **Клиент:** `VITE_GROUP_CALLS_ENABLED=1` при сборке.
 2. **Сервер:** `GROUP_CALLS_ENABLED=1` в `.env` / `deploy.env`.
 3. **Nginx:** отдельный `location = /group-calls` с WebSocket upgrade (см. `deploy/nginx-ping-moot.conf`).
-4. Токен тот же, что для `/calls`: `POST /api/calls/token`, WS `wss://…/group-calls?token=…`.
+4. Токен тот же, что для `/calls`: `POST /api/calls/token`, WS `wss://…/group-calls` + токен в `Sec-WebSocket-Protocol` (как `/calls`).
 
 ## Поведение
 

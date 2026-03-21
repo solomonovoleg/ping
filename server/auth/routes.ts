@@ -6,6 +6,7 @@ import { loginLimiter, registerLimiter } from "./rate-limit";
 import { normalizeReferralCodeInput } from "../referrals/code-generator";
 import { createToken } from "./token";
 import { getUserId, requireAuth } from "./session";
+import { normalizeGenderValue } from "../users/service";
 
 const DEFAULT_REFERRAL_LIMIT = 3;
 
@@ -131,7 +132,7 @@ export function registerAuthRoutes(app: Express): void {
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
         nickname: user.nickname ?? null,
-        gender: user.gender ?? null,
+        gender: normalizeGenderValue(user.gender) ?? null,
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,
         coverUrl: user.coverUrl ?? null,
@@ -210,7 +211,7 @@ export function registerAuthRoutes(app: Express): void {
           displayName: user.displayName ?? null,
           surname: user.surname ?? null,
           nickname: user.nickname ?? null,
-          gender: user.gender ?? null,
+          gender: normalizeGenderValue(user.gender) ?? null,
           birthDate: user.birthDate ?? null,
           avatarUrl: user.avatarUrl ?? null,
           coverUrl: user.coverUrl ?? null,
@@ -284,7 +285,7 @@ export function registerAuthRoutes(app: Express): void {
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
         nickname: user.nickname ?? null,
-        gender: user.gender ?? null,
+        gender: normalizeGenderValue(user.gender) ?? null,
         birthDate: user.birthDate ?? null,
         avatarUrl: user.avatarUrl ?? null,
         coverUrl: user.coverUrl ?? null,

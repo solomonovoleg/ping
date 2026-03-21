@@ -4,6 +4,14 @@
 
 ---
 
+## 0. AI-чат и Rules of Hooks
+
+Экран **`AI_CHAT_ID`** ренерится **`AiChatView`** из **оболочки** `export default function ChatDetail`: там только `useParams` + вычисление `chatIdParam`, затем либо `<AiChatView />`, либо `<ChatDetailView …>`.
+
+**Нельзя** снова делать `if (chatIdParam === AI_CHAT_ID) return …` внутри компонента, где уже вызваны `useChatMessages` / `useSendMessage` / `useMessageActions` (или любые хуки ниже по коду): при переходе пользователя между обычным чатом и AI React увидит **разное число хуков** и может упасть в проде.
+
+---
+
 ## 1. Три хука — один источник правды
 
 Страница чата **обязательно** вызывает три хука в таком порядке:

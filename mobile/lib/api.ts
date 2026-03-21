@@ -1,7 +1,50 @@
+import * as SecureStore from "expo-secure-store";
+
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "https://pingos.ru";
 const BASE = API_BASE.replace(/\/$/, "");
 export const API = `${BASE}/api`;
 export const UPLOADS_BASE = BASE;
+
+/** Ключи SecureStore — те же, что в AuthContext (токен + снимок профиля для офлайна). */
+export const PING_SECURE_TOKEN_KEY = "ping_auth_token";
+const PING_SECURE_USER_SNAPSHOT_KEY = "ping_auth_user_snapshot";
+
+export type AuthUser = {
+  id: string;
+  publicId: number;
+  phone: string;
+  displayName: string | null;
+  surname: string | null;
+  gender: string | null;
+  birthDate: string | null;
+  avatarUrl: string | null;
+};
+
+async function readUserSnapshot(): Promise<AuthUser | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(PING_SECURE_USER_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as AuthUser;
+    return p?.id ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeUserSnapshot(u: AuthUser | null): Promise<void> {
+  try {
+    if (!u) await SecureStore.deleteItemAsync(PING_SECURE_USER_SNAPSHOT_KEY);
+    else await SecureStore.setItemAsync(PING_SECURE_USER_SNAPSHOT_KEY, JSON.stringify(u));
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function clearStoredSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(PING_SECURE_TOKEN_KEY).catch(() => {});
+  await SecureStore.deleteItemAsync(PING_SECURE_USER_SNAPSHOT_KEY).catch(() => {});
+  setAuthToken(null);
+}
 /** For image/audio URLs from server: relative /uploads/... → full URL */
 export function resolveUrl(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -38,23 +81,43 @@ export async function apiUpload(path: string, formData: FormData): Promise<Respo
   });
 }
 
-export type AuthUser = {
-  id: string;
-  publicId: number;
-  phone: string;
-  displayName: string | null;
-  surname: string | null;
-  gender: string | null;
-  birthDate: string | null;
-  avatarUrl: string | null;
-};
-
 export async function fetchMe(): Promise<AuthUser | null> {
-  const res = await apiFetch("/auth/me");
-  if (res.status === 401) return null;
-  if (!res.ok) throw new Error(await res.text());
-  const data = await res.json();
-  return data?.id ? data : null;
+  try {
+    const res = await apiFetch("/auth/me");
+    if (res.status === 401) {
+      await clearStoredSession();
+      return null;
+    }
+    if (!res.ok) {
+      const token = await SecureStore.getItemAsync(PING_SECURE_TOKEN_KEY).catch(() => null);
+      if (token) {
+        const snap = await readUserSnapshot();
+        if (snap) return snap;
+      }
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    const u = data?.id ? (data as AuthUser) : null;
+    if (u) {
+      await writeUserSnapshot(u);
+      return u;
+    }
+    const token = await SecureStore.getItemAsync(PING_SECURE_TOKEN_KEY).catch(() => null);
+    if (token) {
+      const snap = await readUserSnapshot();
+      if (snap) return snap;
+      await SecureStore.deleteItemAsync(PING_SECURE_TOKEN_KEY).catch(() => {});
+      setAuthToken(null);
+    }
+    return null;
+  } catch {
+    const token = await SecureStore.getItemAsync(PING_SECURE_TOKEN_KEY).catch(() => null);
+    if (token) {
+      const snap = await readUserSnapshot();
+      if (snap) return snap;
+    }
+    return null;
+  }
 }
 
 export async function login(phone: string, password: string): Promise<{ user: AuthUser; token: string }> {
@@ -69,7 +132,9 @@ export async function login(phone: string, password: string): Promise<{ user: Au
   const token = data.token ?? "";
   if (token) setAuthToken(token);
   const { token: _t, ...user } = data;
-  return { user: user as AuthUser, token };
+  const u = user as AuthUser;
+  if (u?.id) await writeUserSnapshot(u);
+  return { user: u, token };
 }
 
 export async function register(
@@ -88,12 +153,14 @@ export async function register(
   const token = data.token ?? "";
   if (token) setAuthToken(token);
   const { token: _t, ...user } = data;
-  return { user: user as AuthUser, token };
+  const u = user as AuthUser;
+  if (u?.id) await writeUserSnapshot(u);
+  return { user: u, token };
 }
 
 export async function logout(): Promise<void> {
-  setAuthToken(null);
   await apiFetch("/auth/logout", { method: "POST" }).catch(() => {});
+  await clearStoredSession();
 }
 
 export type ChatItem = {
@@ -108,6 +175,62 @@ export async function getChats(): Promise<ChatItem[]> {
   const res = await apiFetch("/chats");
   if (!res.ok) throw new Error("Не удалось загрузить чаты");
   return res.json();
+}
+
+export type ContactUser = {
+  id: string;
+  publicId: number;
+  displayName: string | null;
+  surname: string | null;
+  avatarUrl: string | null;
+};
+
+export type ContactPhoneMatchUser = ContactUser & { isInMyContacts: boolean };
+
+export async function listContactsWithProfiles(): Promise<ContactUser[]> {
+  const res = await apiFetch("/contacts?list=1");
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function matchContactsFromPhones(phones: string[]): Promise<ContactPhoneMatchUser[]> {
+  const res = await apiFetch("/contacts/match-phones", {
+    method: "POST",
+    body: JSON.stringify({ phones }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось проверить контакты");
+  }
+  const data: unknown = await res.json();
+  if (!data || typeof data !== "object" || !("matches" in data)) return [];
+  const m = (data as { matches: unknown }).matches;
+  return Array.isArray(m) ? (m as ContactPhoneMatchUser[]) : [];
+}
+
+export async function addContact(contactUserId: string): Promise<void> {
+  const res = await apiFetch("/contacts", {
+    method: "POST",
+    body: JSON.stringify({ contactUserId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось добавить в контакты");
+  }
+}
+
+/** Создать или открыть личный чат с пользователем по user id. */
+export async function startDm(otherUserId: string): Promise<ChatItem> {
+  const res = await apiFetch("/chats/start-dm", {
+    method: "POST",
+    body: JSON.stringify({ userId: otherUserId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data.message as string) ?? "Не удалось открыть чат");
+  }
+  return data as ChatItem;
 }
 
 export type ChatDetail = ChatItem & {
