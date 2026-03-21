@@ -6,6 +6,9 @@ import { z } from "zod";
 /** Максимальная длина имени и фамилии (символов) */
 export const NAME_MAX_LENGTH = 12;
 
+/** Максимальная длина строки города в профиле (подсказка + ручной ввод) */
+export const PROFILE_CITY_MAX_LENGTH = 120;
+
 /** Никнейм в плашке шапки профиля (@handle), без пробелов */
 export const NICKNAME_MAX_LENGTH = 24;
 

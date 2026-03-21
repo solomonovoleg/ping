@@ -5,7 +5,14 @@ import { storage } from "../storage";
 import { getAuthorWall } from "../posts/author-wall";
 import { getStoriesByAuthorId } from "../stories/service";
 import { notifyFollow } from "../notifications/create";
-import { NAME_MAX_LENGTH, NICKNAME_MAX_LENGTH, postComments, postReactions, posts } from "@shared/schema";
+import {
+  NAME_MAX_LENGTH,
+  NICKNAME_MAX_LENGTH,
+  PROFILE_CITY_MAX_LENGTH,
+  postComments,
+  postReactions,
+  posts,
+} from "@shared/schema";
 
 export class UsersServiceError extends Error {
   status: number;
@@ -65,6 +72,7 @@ function buildUnavailableProfile(target: {
     coverUrl: null,
     showCover: false,
     profileLink: null,
+    city: null,
     hideFromSearch: true,
     bio: "Аккаунт недоступен",
     canMessage: false,
@@ -80,7 +88,7 @@ function buildUnavailableProfile(target: {
   };
 }
 
-async function resolveProfileTarget(idParam: string) {
+export async function resolveProfileTarget(idParam: string) {
   let target = await storage.getUser(idParam);
   if (!target && /^\d+$/.test(String(idParam))) {
     target = await storage.getUserByPublicId(parseInt(String(idParam), 10));
@@ -160,6 +168,7 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     coverUrl: target.coverUrl ?? null,
     showCover: (target as { showCover?: boolean }).showCover !== false,
     profileLink: target.profileLink ?? null,
+    city: (target as { city?: string | null }).city ?? null,
     hideFromSearch: target.hideFromSearch ?? false,
     bio: target.bio ?? null,
     canMessage,
@@ -247,7 +256,14 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ...(coverUrl !== undefined && { coverUrl: coverUrl === null || coverUrl === "" ? null : (typeof coverUrl === "string" ? coverUrl.trim() || null : null) }),
     ...(typeof showCover === "boolean" && { showCover }),
     ...(profileLink !== undefined && { profileLink: profileLink === null || profileLink === "" ? null : (typeof profileLink === "string" ? profileLink.trim() || null : null) }),
-    ...(city !== undefined && { city: city === null || city === "" ? null : (typeof city === "string" ? city.trim() || null : null) }),
+    ...(city !== undefined && {
+      city:
+        city === null || city === ""
+          ? null
+          : typeof city === "string"
+            ? city.trim().slice(0, PROFILE_CITY_MAX_LENGTH) || null
+            : null,
+    }),
     ...(status !== undefined && { status: status === null || status === "" ? null : (typeof status === "string" ? status.trim() || null : null) }),
     ...(pinnedPostId !== undefined && { pinnedPostId: pinnedPostId === null || pinnedPostId === "" ? null : (typeof pinnedPostId === "string" ? pinnedPostId.trim() || null : null) }),
     ...(profileVisibility === "all" || profileVisibility === "followers" ? { profileVisibility } : {}),

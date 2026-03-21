@@ -15,6 +15,7 @@ import { AvatarCropModal } from "@/components/AvatarCropModal";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import type { Gender } from "@shared/schema";
 import { NAME_MAX_LENGTH, NICKNAME_MAX_LENGTH } from "@shared/schema";
+import { CitySuggestInput } from "@/components/CitySuggestInput";
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "Мужской" },
@@ -41,6 +42,7 @@ export default function EditProfile() {
   const [editNickname, setEditNickname] = useState("");
   const [editGender, setEditGender] = useState<Gender | "">("");
   const [editBirthDate, setEditBirthDate] = useState("");
+  const [editCity, setEditCity] = useState("");
   const [editAvatarUrl, setEditAvatarUrl] = useState("");
   const [editAvatarPreview, setEditAvatarPreview] = useState<string | null>(null);
   const [editBio, setEditBio] = useState("");
@@ -67,6 +69,7 @@ export default function EditProfile() {
     setEditNickname(((user as { nickname?: string | null }).nickname ?? "").trim().replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH));
     setEditGender(normalizeGender(user.gender));
     setEditBirthDate(user.birthDate ?? "");
+    setEditCity(((user as { city?: string | null }).city ?? "").trim());
     setEditAvatarUrl(user.avatarUrl ?? "");
     setEditAvatarPreview(user.avatarUrl ? user.avatarUrl : null);
     setEditBio((user as { bio?: string | null }).bio ?? "");
@@ -122,6 +125,7 @@ export default function EditProfile() {
           birthDate: editBirthDate.trim() ? editBirthDate.trim() : null,
           ...(trimmedAv && !trimmedAv.startsWith("data:") ? { avatarUrl: trimmedAv } : {}),
           bio: editBio.trim() || null,
+          city: editCity.trim() || null,
           profileLink: editProfileLink.trim() || null,
           coverUrl: editCoverUrl.trim() || null,
           showCover: editShowCover,
@@ -139,7 +143,23 @@ export default function EditProfile() {
         setSaving(false);
       }
     },
-    [editDisplayName, editSurname, editNickname, editGender, editBirthDate, editAvatarUrl, editBio, editProfileLink, editCoverUrl, editShowCover, setUserFromLogin, refetch, toast, setLocation],
+    [
+      editDisplayName,
+      editSurname,
+      editNickname,
+      editGender,
+      editBirthDate,
+      editCity,
+      editAvatarUrl,
+      editBio,
+      editProfileLink,
+      editCoverUrl,
+      editShowCover,
+      setUserFromLogin,
+      refetch,
+      toast,
+      setLocation,
+    ],
   );
 
   const handleCoverFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -400,6 +420,19 @@ export default function EditProfile() {
               type="date"
               value={editBirthDate}
               onChange={(e) => setEditBirthDate(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="editCity">Город (по желанию)</Label>
+            <p className="text-sm text-muted-foreground">
+              Подсказки из открытых данных (Photon/OSM). Можно выбрать из списка или ввести свой вариант.
+            </p>
+            <CitySuggestInput
+              id="editCity"
+              value={editCity}
+              onChange={setEditCity}
+              disabled={saving || uploadingAvatar || uploadingCover}
             />
           </div>
 

@@ -31,6 +31,8 @@ export type AuthUser = {
   /** Адаптивная атмосфера в личных чатах */
   vibeEnabled?: boolean;
   vibeShareWithPartner?: boolean;
+  /** Город (необязательно) */
+  city?: string | null;
 };
 
 /** Как на сервере: en/ru → male|female|other; иначе null (форма профиля не теряет выбор). */
@@ -130,6 +132,7 @@ function userFromMePayload(data: unknown): AuthUser | null {
     pushEnabled: d.pushEnabled !== false,
     vibeEnabled: d.vibeEnabled === true,
     vibeShareWithPartner: d.vibeShareWithPartner === true,
+    city: (d.city as string | null | undefined) ?? null,
   };
 }
 
@@ -423,6 +426,7 @@ export async function updateProfile(data: {
   coverUrl?: string | null;
   showCover?: boolean;
   profileLink?: string | null;
+  city?: string | null;
   pushEnabled?: boolean;
 }): Promise<AuthUser> {
   const res = await apiFetch(`${API}/users/me`, {

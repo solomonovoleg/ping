@@ -87,6 +87,8 @@ export class DbStorage implements IStorage {
     const conditions = [
       ilike(users.displayName, safeLike),
       ilike(users.surname, safeLike),
+      ilike(users.nickname, safeLike),
+      ilike(sql<string>`TRIM(COALESCE(${users.displayName}, '') || ' ' || COALESCE(${users.surname}, ''))`, safeLike),
     ];
     const normalized = normalizePhone(q);
     if (normalized) conditions.push(eq(users.phone, normalized));
@@ -96,9 +98,7 @@ export class DbStorage implements IStorage {
         const num = parseInt(digits, 10);
         if (!Number.isNaN(num)) conditions.push(eq(users.publicId, num));
       }
-      if (digits.length >= 2) {
-        conditions.push(ilike(users.phone, `%${digits}%`));
-      }
+      conditions.push(ilike(users.phone, `%${escapeLike(digits)}%`));
     }
     const baseCond = and(
       isNull(users.deletedAt),

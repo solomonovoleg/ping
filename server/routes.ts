@@ -37,6 +37,8 @@ import { registerCallTranscriptRoutes } from "./call-transcripts/routes";
 import { ensureUserColumns, ensureChatVibeSchema, ensureCallTranscriptsSchema } from "./db";
 import { registerOpsPlatformPublicRoute } from "./admin/ops/platform.public-http";
 import { registerOpsUserReportsRoute } from "./admin/ops/reports.user-http";
+import { registerGeoRoutes } from "./geo/routes";
+import { registerProfilePinsRoutes } from "./profile-pins/routes";
 import { apiTrafficRecordMiddleware, createApiShieldLimiter } from "./middleware/api-shield";
 import { apiTrafficModuleTelemetryMiddleware } from "./admin/telemetry";
 
@@ -110,6 +112,8 @@ export async function registerRoutes(
   registerAdminRoutes(app);
   registerReferralRoutes(app);
   registerUsersRoutes(app);
+  registerProfilePinsRoutes(app);
+  registerGeoRoutes(app);
   registerChatsRoutes(app);
   registerMessagesRoutes(app);
   registerAiChatRoutes(app);

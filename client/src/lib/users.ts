@@ -12,6 +12,8 @@ export type PublicProfile = {
   coverUrl?: string | null;
   showCover?: boolean;
   profileLink?: string | null;
+  /** Город в профиле (по желанию) */
+  city?: string | null;
   hideFromSearch: boolean;
   bio: string | null;
   canMessage: boolean;
