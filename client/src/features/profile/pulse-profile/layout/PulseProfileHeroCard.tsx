@@ -3,6 +3,9 @@ import { Plus } from "lucide-react";
 import { usePulseProfileTheme } from "../pulse-profile-theme";
 import {
   PULSE_AVATAR_PX,
+  PULSE_AVATAR_PLUS_BADGE_PX,
+  PULSE_AVATAR_PLUS_CONTAINER_OFFSET_PX,
+  PULSE_AVATAR_PLUS_HIT_PX,
   PULSE_AVATAR_SQUIRCLE_RX,
   PULSE_PROFILE_CARD_OVERLAP_PX,
 } from "./constants";
@@ -72,7 +75,7 @@ export function PulseProfileHeroCard({
       style={{ marginTop: coverInScrollFlow ? -PULSE_PROFILE_CARD_OVERLAP_PX : 0 }}
     >
       <div
-        className="rounded-3xl px-4 py-4"
+        className="rounded-3xl px-4 pb-3 pt-1"
         style={{
           background: isDark
             ? "linear-gradient(160deg, rgba(18,14,38,0.52) 0%, rgba(10,10,22,0.48) 100%)"
@@ -85,7 +88,7 @@ export function PulseProfileHeroCard({
             : "0 1px 2px rgba(0,0,0,0.06), 0 4px 20px rgba(0,0,0,0.08)",
         }}
       >
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-5">
           <div
             className="relative shrink-0"
             style={{
@@ -123,44 +126,84 @@ export function PulseProfileHeroCard({
                   e.stopPropagation();
                   onAvatarPlusClick();
                 }}
-                className="absolute z-30 flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-all active:scale-90"
+                className="absolute z-30 flex items-end justify-end border-0 bg-transparent p-0 transition-transform active:scale-90"
                 style={{
-                  width: 22,
-                  height: 22,
-                  bottom: 0,
-                  right: 0,
-                  background: isDark ? "#1a1a2e" : "#ffffff",
-                  border: `2px solid ${isDark ? "rgba(18,18,30,0.92)" : "rgba(255,255,255,0.92)"}`,
-                  boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+                  width: PULSE_AVATAR_PLUS_HIT_PX,
+                  height: PULSE_AVATAR_PLUS_HIT_PX,
+                  bottom: -PULSE_AVATAR_PLUS_CONTAINER_OFFSET_PX,
+                  right: -PULSE_AVATAR_PLUS_CONTAINER_OFFSET_PX,
                 }}
                 aria-label="Меню аватара"
               >
-                <Plus style={{ width: 11, height: 11, color: th.accent, strokeWidth: 2.5 }} />
+                <span
+                  className="flex items-center justify-center rounded-full"
+                  style={{
+                    width: PULSE_AVATAR_PLUS_BADGE_PX,
+                    height: PULSE_AVATAR_PLUS_BADGE_PX,
+                    marginBottom: (PULSE_AVATAR_PLUS_HIT_PX - PULSE_AVATAR_PLUS_BADGE_PX) / 2,
+                    marginRight: (PULSE_AVATAR_PLUS_HIT_PX - PULSE_AVATAR_PLUS_BADGE_PX) / 2,
+                    background: isDark ? "#1a1a2e" : "#ffffff",
+                    border: `1.5px solid ${isDark ? "rgba(18,18,30,0.92)" : "rgba(255,255,255,0.92)"}`,
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.28)",
+                  }}
+                >
+                  <Plus
+                    style={{
+                      width: 8,
+                      height: 8,
+                      color: th.accent,
+                      strokeWidth: 2.75,
+                    }}
+                    aria-hidden
+                  />
+                </span>
               </button>
             ) : null}
 
           </div>
 
-          <div className="flex min-w-0 flex-1">
-            <div
-              className="min-w-0 flex-1"
-              style={{
-                borderRight: `1px solid ${statSep}`,
-              }}
-            >
-              <StatCounter target={postsCount} label="Посты" onClick={onPostsStatClick} />
+          <div
+            className="flex min-h-0 min-w-0 flex-1 flex-col justify-center"
+            style={{ minHeight: PULSE_AVATAR_PX }}
+          >
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h1
+                className="min-w-0 truncate"
+                style={{
+                  fontSize: 22,
+                  fontWeight: 900,
+                  color: th.text,
+                  letterSpacing: "-0.025em",
+                  lineHeight: 1.15,
+                }}
+              >
+                {displayName}
+              </h1>
+              {showVerified ? (
+                <div
+                  className="flex flex-shrink-0 items-center justify-center rounded-full"
+                  style={{ width: 18, height: 18, background: th.accent }}
+                  aria-label="Подтверждённый профиль"
+                >
+                  <span style={{ fontSize: 9.5, color: "white", fontWeight: 900 }}>✓</span>
+                </div>
+              ) : null}
             </div>
-            <div
-              className="min-w-0 flex-1"
-              style={{
-                borderRight: `1px solid ${statSep}`,
-              }}
-            >
-              <StatCounter target={followersCount} label="Подписчики" onClick={onFollowersClick} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <StatCounter target={followingCount} label="Подписки" onClick={onFollowingClick} />
-            </div>
+            {metaLine ? (
+              <p
+                style={{
+                  fontSize: 12.5,
+                  color: th.text,
+                  marginTop: 4,
+                  fontWeight: 400,
+                  letterSpacing: "0.01em",
+                  lineHeight: 1.35,
+                  opacity: 0.88,
+                }}
+              >
+                {metaLine}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -193,46 +236,32 @@ export function PulseProfileHeroCard({
 
         <div
           style={{
-            marginTop: avatarMenuOpen && avatarMenuItems.length > 0 ? 12 : 16,
-            paddingTop: 14,
+            marginTop: avatarMenuOpen && avatarMenuItems.length > 0 ? 6 : 8,
+            paddingTop: 7,
             borderTop: `1px solid ${nameSep}`,
           }}
         >
-          <div className="flex items-center gap-1.5">
-            <h1
+          <div className="flex min-w-0 w-full items-stretch justify-center text-center">
+            <div
+              className="flex min-w-0 flex-1 justify-center"
               style={{
-                fontSize: 22,
-                fontWeight: 900,
-                color: th.text,
-                letterSpacing: "-0.025em",
-                lineHeight: 1.1,
+                borderRight: `1px solid ${statSep}`,
               }}
             >
-              {displayName}
-            </h1>
-            {showVerified ? (
-              <div
-                className="flex flex-shrink-0 items-center justify-center rounded-full"
-                style={{ width: 18, height: 18, background: th.accent, marginTop: 1 }}
-                aria-label="Подтверждённый профиль"
-              >
-                <span style={{ fontSize: 9.5, color: "white", fontWeight: 900 }}>✓</span>
-              </div>
-            ) : null}
+              <StatCounter target={postsCount} label="Посты" onClick={onPostsStatClick} />
+            </div>
+            <div
+              className="flex min-w-0 flex-1 justify-center"
+              style={{
+                borderRight: `1px solid ${statSep}`,
+              }}
+            >
+              <StatCounter target={followersCount} label="Подписчики" onClick={onFollowersClick} />
+            </div>
+            <div className="flex min-w-0 flex-1 justify-center">
+              <StatCounter target={followingCount} label="Подписки" onClick={onFollowingClick} />
+            </div>
           </div>
-          {metaLine ? (
-            <p
-              style={{
-                fontSize: 12.5,
-                color: th.text,
-                marginTop: 5,
-                fontWeight: 400,
-                letterSpacing: "0.01em",
-              }}
-            >
-              {metaLine}
-            </p>
-          ) : null}
         </div>
       </div>
     </div>

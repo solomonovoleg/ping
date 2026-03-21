@@ -14,6 +14,7 @@ type MeUserExt = {
   gender?: string | null;
   birthDate?: string | null;
   profileLink?: string | null;
+  city?: string | null;
 };
 
 export function deriveUserProfileLayoutFields({
@@ -59,6 +60,10 @@ export function deriveUserProfileLayoutFields({
         ? `https://${profileLinkTrim}`
         : null;
 
+  const cityRaw = (isMe ? user?.city : apiProfile?.city) ?? null;
+  const cityChip =
+    typeof cityRaw === "string" && cityRaw.trim().length > 0 ? cityRaw.trim() : null;
+
   return {
     displayName,
     usernamePillText,
@@ -70,5 +75,6 @@ export function deriveUserProfileLayoutFields({
     birthChip,
     profileLinkTrim,
     profileLinkHref,
+    cityChip,
   };
 }

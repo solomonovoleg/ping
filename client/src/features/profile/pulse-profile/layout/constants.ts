@@ -3,6 +3,13 @@ export const PULSE_PROFILE_NAV_CONTENT_PB = "var(--uix-nav-bottom)";
 
 /** Сквиркл-аватар как в мобильном референсе `MobileProfile` (~84px). */
 export const PULSE_AVATAR_PX = 84;
+/** Видимый круг «+» у аватара: ~¼ диаметра на сквиркле, остальное снаружи (смещение = −0.75×диаметр). */
+export const PULSE_AVATAR_PLUS_BADGE_PX = 16;
+/** Зона нажатия вокруг бейджа (доступность). */
+export const PULSE_AVATAR_PLUS_HIT_PX = 44;
+/** Насколько сместить контейнер касания от угла аватара (наружу), чтобы бейдж имел нужный нахлёст. */
+export const PULSE_AVATAR_PLUS_CONTAINER_OFFSET_PX =
+  Math.round(PULSE_AVATAR_PLUS_BADGE_PX * 0.75) + (PULSE_AVATAR_PLUS_HIT_PX - PULSE_AVATAR_PLUS_BADGE_PX) / 2;
 /** Карточка героя заходит на обложку (margin-top). */
 export const PULSE_PROFILE_CARD_OVERLAP_PX = 52;
 /** Высота блока обложки (хедер профиля). */

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { usePulseProfileTheme } from "../pulse-profile-theme";
-import { PULSE_PROFILE_NAV_CONTENT_PB } from "./constants";
+import { PULSE_PROFILE_COVER_HEIGHT_PX, PULSE_PROFILE_NAV_CONTENT_PB } from "./constants";
 import type { PulseProfileLayoutProps } from "./types";
 import { PulseProfileCoverHeader } from "./PulseProfileCoverHeader";
 import { PulseProfileHeroCard } from "./PulseProfileHeroCard";
@@ -25,6 +25,7 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
     idChip,
     genderChip,
     birthChip,
+    cityChip = null,
     bio,
     linkDisplay,
     linkHref,
@@ -36,6 +37,7 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
     onPostsStatClick,
     actionRow,
     onHighlightNew,
+    pinnedStrip,
     mutualFollowers = null,
     activeTab,
     onTabChange,
@@ -66,6 +68,7 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
   if (idChip) metaParts.push(idChip);
   if (genderChip) metaParts.push(genderChip);
   if (birthChip) metaParts.push(`🎂 ${birthChip}`);
+  if (cityChip) metaParts.push(cityChip);
   const metaLine = metaParts.join(" · ");
 
   useEffect(() => {
@@ -95,14 +98,19 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
 
       <div style={{ paddingBottom: PULSE_PROFILE_NAV_CONTENT_PB }}>
         {renderCover ? (
-          <PulseProfileCoverHeader
-            coverUrl={coverUrl}
-            onCoverError={onCoverError}
-            scrollY={scrollY}
-            usernamePill={usernamePill}
-            onBack={onBack}
-            onMore={onMore}
-          />
+          <div
+            className="relative w-full shrink-0"
+            style={{ height: PULSE_PROFILE_COVER_HEIGHT_PX }}
+          >
+            <PulseProfileCoverHeader
+              coverUrl={coverUrl}
+              onCoverError={onCoverError}
+              scrollY={scrollY}
+              usernamePill={usernamePill}
+              onBack={onBack}
+              onMore={onMore}
+            />
+          </div>
         ) : null}
 
         <PulseProfileHeroCard
@@ -141,7 +149,11 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
             actionRow={actionRow}
           />
 
-          <PulseProfilePinnedStrip onHighlightNew={onHighlightNew} />
+          {pinnedStrip !== undefined ? (
+            pinnedStrip
+          ) : (
+            <PulseProfilePinnedStrip onHighlightNew={onHighlightNew} />
+          )}
 
           <PulseProfileTabsRow
             activeTab={activeTab}

@@ -61,6 +61,10 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
   const avatarLongPressTimerRef = useRef<number | null>(null);
   const avatarLongPressHandledRef = useRef(false);
   const storyFileInputRef = useRef<HTMLInputElement>(null);
+  const [profilePinAdd, setProfilePinAdd] = useState<
+    { kind: "post"; post: FeedPost } | { kind: "story"; storyId: string } | null
+  >(null);
+  const clearProfilePinAdd = useCallback(() => setProfilePinAdd(null), []);
 
   const { user, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
@@ -129,7 +133,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     enabled: !!activeViewersStoryId && isMe,
   });
 
-  const { reactionMutation, deletePostMutation } = useUserProfilePostMutations(toast);
+  const { reactionMutation, deletePostMutation, savePostMutation } = useUserProfilePostMutations(toast);
 
   useEffect(() => {
     if (isMe || !id.trim()) return;
@@ -313,6 +317,32 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     [refetchStories, toast]
   );
 
+  const openProfilePinPost = useCallback((post: FeedPost) => {
+    setProfilePinAdd({ kind: "post", post });
+  }, []);
+
+  const openProfilePinStory = useCallback((storyId: string) => {
+    setProfilePinAdd({ kind: "story", storyId });
+  }, []);
+
+  const handleOpenPinnedPost = useCallback(
+    (postId: string) => {
+      const seg = isMe ? "me" : encodeURIComponent(normalizedRouteId);
+      setLocation(`/profile/${seg}/post/${postId}`);
+    },
+    [isMe, normalizedRouteId, setLocation]
+  );
+
+  const handleOpenPinnedStory = useCallback(
+    (storyId: string) => {
+      const list = apiStories ?? [];
+      const idx = list.findIndex((s) => s.id === storyId);
+      if (idx >= 0) setActiveStoryIndex(idx);
+      else toast({ title: "Сториз недоступно или истекло", variant: "destructive" });
+    },
+    [apiStories, toast]
+  );
+
   const handleStoryFileSelect = useCallback(
     (file: File | null) => {
       if (!file || !user?.id) return;
@@ -357,6 +387,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
         refetchPosts(),
         refetchStories(),
         user?.id ? queryClient.invalidateQueries({ queryKey: ["profile", "me", user.id] }) : Promise.resolve(),
+        queryClient.invalidateQueries({ queryKey: ["profile-pins"] }),
       ]);
       return;
     }
@@ -375,6 +406,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     } catch {
       setProfileError(true);
     }
+    void queryClient.invalidateQueries({ queryKey: ["profile-pins"] });
   }, [id, isMe, queryClient, refetchPosts, refetchStories, user?.id]);
 
   const layout = deriveUserProfileLayoutFields({
@@ -460,6 +492,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     publicIdStr: layout.publicIdStr,
     genderChip: layout.genderChip,
     birthChip: layout.birthChip,
+    cityChip: layout.cityChip,
     profileLinkTrim: layout.profileLinkTrim,
     profileLinkHref: layout.profileLinkHref,
     authorId,
@@ -480,6 +513,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     activeStoryViewersLoading,
     reactionMutation,
     deletePostMutation,
+    savePostMutation,
     handlePullRefresh,
     pullRefreshDisabled,
     handleCopyLink,
@@ -495,5 +529,11 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     clearAvatarLongPress,
     handleAvatarMainClick,
     handleAvatarPointerDownMe,
+    profilePinAdd,
+    clearProfilePinAdd,
+    openProfilePinPost,
+    openProfilePinStory,
+    handleOpenPinnedPost,
+    handleOpenPinnedStory,
   };
 }

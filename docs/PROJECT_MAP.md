@@ -69,7 +69,7 @@ android/    Capacitor / Gradle
 | Звонки 1:1 | `features/call/` | WebRTC, контроллер, стор, типы, утилиты записи/экрана |
 | Групповые звонки | `features/group-call/` | Комната, mesh, UI (`ui/pulse-ai/`), транскрипты, WS URL, флаги |
 | Профиль (оболочка PULSE) | `features/profile/pulse-profile/` | `PulseProfileLayout`, тема, layout-блоки |
-| Профиль (экран пользователя) | `features/profile/user-profile/` | `useUserProfilePage`, `hooks/`, `model/`, `components/`, `i18n.ru.ts` |
+| Профиль (экран пользователя) | `features/profile/user-profile/` | `useUserProfilePage`, `hooks/`, `model/`, `components/`, `components/profile-pins/` (закреплённое), `i18n.ru.ts` |
 | Лента | `features/feed/` | Компоненты ленты (напр. `FeedHeader`) |
 | Посты (обрезка видео и др.) | `features/posts/` | Например `video-trim/` |
 | Доска / треки | `features/board/tracks/` | Треки, модалки |
@@ -101,6 +101,7 @@ android/    Capacitor / Gradle
 |--------|--------|------------|
 | Авторизация | `auth/` | Сессии, вход |
 | Пользователи | `users/` | Профили, подписки, блоки, контакты |
+| Закреплённое в профиле | `profile-pins/` | Папки и элементы (пост/сториз), обложки — `routes.ts`, `service.ts` |
 | Чаты | `chats/` | Чаты, участники, чтение |
 | Сообщения | `messages/` | Лента сообщений, отправка, редактирование |
 | Сохранённые сообщения | `saved-messages/` | Избранное в мессенджере |
@@ -145,7 +146,7 @@ android/    Capacitor / Gradle
 
 | Путь | Назначение |
 |------|------------|
-| `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
+| `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `profile-pins`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
 | `schema/index.ts` | Реэкспорт схем |
 | `constants.ts` | Общие константы |
 | `call-signaling.ts`, `ws-call-handshake.ts` | Контракты звонков |
@@ -236,6 +237,7 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | | `server/admin/ops/` | HTTP ops: платформа, отчёты, traffic shield |
 | | `server/ai-search/` | AI Search бэкенд |
 | | `shared/schema/platform-settings.ts`, `content-reports.ts` | Платформа и репорты контента |
+| | `server/profile-pins/`, `shared/schema/profile-pins.ts`, `client/src/lib/profile-pins.ts`, `client/.../profile-pins/` | Закреплённое на профиле: папки, посты/сториз, обложки; миграция `migrations/0016_profile_pins.sql` |
 
 ---
 

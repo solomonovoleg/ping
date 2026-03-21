@@ -3,7 +3,7 @@
  */
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { posts, users, postComments, postReactions, postViews } from "@shared/schema";
+import { posts, users, postComments, postReactions, postShares, postViews, savedPosts } from "@shared/schema";
 import { storage } from "../storage";
 
 type Row = {
@@ -33,6 +33,8 @@ export type AuthorWallPost = {
   reactionUsers: Record<string, { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>;
   myReaction: string | null;
   viewsCount: number;
+  sharesCount: number;
+  isSaved: boolean;
   createdAt: string;
   author: { id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null };
   channelName: string;
@@ -144,6 +146,25 @@ export async function getAuthorWall(
     viewRows.forEach((r) => { viewCounts[r.postId] = r.count; });
   }
 
+  const shareCounts: Record<string, number> = {};
+  if (postIds.length > 0) {
+    const shareRows = await db
+      .select({ postId: postShares.postId, count: sql<number>`count(*)::int` })
+      .from(postShares)
+      .where(inArray(postShares.postId, postIds))
+      .groupBy(postShares.postId);
+    shareRows.forEach((r) => { shareCounts[r.postId] = r.count; });
+  }
+
+  const savedPostIds = new Set<string>();
+  if (postIds.length > 0) {
+    const savedRows = await db
+      .select({ postId: savedPosts.postId })
+      .from(savedPosts)
+      .where(and(eq(savedPosts.userId, viewerId), inArray(savedPosts.postId, postIds)));
+    savedRows.forEach((r) => savedPostIds.add(r.postId));
+  }
+
   return rows.map((r: Row) => {
     const urls = (r.mediaUrls && Array.isArray(r.mediaUrls) && r.mediaUrls.length > 0)
       ? r.mediaUrls
@@ -159,6 +180,8 @@ export async function getAuthorWall(
       reactionUsers: reactionUsersByPost[r.id] ?? {},
       myReaction: myReactions[r.id] ?? null,
       viewsCount: viewCounts[r.id] ?? 0,
+      sharesCount: shareCounts[r.id] ?? 0,
+      isSaved: savedPostIds.has(r.id),
       createdAt: r.createdAt?.toISOString?.() ?? String(r.createdAt),
       author: {
         id: r.authorId,

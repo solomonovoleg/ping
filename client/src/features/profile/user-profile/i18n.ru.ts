@@ -25,6 +25,9 @@ export const userProfileRu = {
     storyDeleted: "Сториз удалена",
     storyAddedHours: (h: number) => `Сториз добавлен на ${h}ч`,
     publishError: "Ошибка",
+    postSaved: "Сохранено",
+    postUnsaved: "Убрано из сохранённого",
+    postSaveError: "Не удалось сохранить пост",
   },
   posts: {
     taggedTitle: "Отметки",
@@ -44,7 +47,11 @@ export const userProfileRu = {
     postMenu: "Меню поста",
     deleteConfirm: "Удалить пост?",
     saveBookmark: "Сохранить в избранное",
+    removeBookmark: "Убрать из сохранённого",
     share: "Поделиться",
+    copyPostLink: "Скопировать ссылку на пост",
+    openComments: "Комментарии",
+    postMenuAria: "Меню поста",
   },
   shells: {
     otherNotFoundTitle: "Пользователь не найден",

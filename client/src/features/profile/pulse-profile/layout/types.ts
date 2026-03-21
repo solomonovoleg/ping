@@ -18,11 +18,12 @@ export type PulseProfileLayoutProps = {
   /** Для dev-превью: зафиксировать тёмную/светлую тему независимо от `html.dark`. */
   themeMode?: PulseProfileThemeMode;
   /**
-   * `false`: обложка снаружи скролла (оверлей в `PullToRefresh`), pull тянет только контент под обложкой.
+   * `false`: обложка снаружи скролла (оверлей в `PullToRefresh`); pull не двигает обложку.
+   * По умолчанию обложка в потоке скролла — тянется вместе со страницей.
    * @default true
    */
   renderCover?: boolean;
-  /** Для параллакса обложки, если она вынесена в `overlayTop` у `PullToRefresh`. */
+  /** Параллакс обложки при `renderCover={false}` и оверлее в `PullToRefresh`. */
   onScrollYChange?: (scrollTop: number) => void;
   scrollRef: RefObject<HTMLDivElement | null>;
 
@@ -38,6 +39,8 @@ export type PulseProfileLayoutProps = {
   idChip: string;
   genderChip: string | null;
   birthChip: string | null;
+  /** Город в строке мета под именем (необязательно) */
+  cityChip?: string | null;
 
   bio: string | null;
   linkDisplay: string | null;
@@ -53,6 +56,8 @@ export type PulseProfileLayoutProps = {
   actionRow: ReactNode;
 
   onHighlightNew?: () => void;
+  /** Если задан — вместо заглушки «ЗАКРЕПЛЁННОЕ» из макета. `undefined` — показать старую полосу с шаблоном. */
+  pinnedStrip?: ReactNode;
 
   mutualFollowers?: PulseProfileMutualFollowersModel | null;
 

@@ -2,13 +2,14 @@ import type { ReactNode } from "react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { PULSE_IG_GRAD, usePulseProfileTheme } from "./pulse-profile-theme";
 
-/** Шапка карточки поста в ленте профиля PULSE (как в макете: кольцо, имя, галочка, «Видео · 2 дн»). */
+/** Карточка поста в ленте профиля PULSE: шапка с отступами, медиа на всю ширину, подвал с отступами. */
 export function PulseProfileThemedPostCard({
   displayName,
   avatarUrl,
   authorSeed,
   showVerified,
-  metaLine,
+  metaKind,
+  metaTime,
   headerRight,
   children,
 }: {
@@ -16,26 +17,24 @@ export function PulseProfileThemedPostCard({
   avatarUrl?: string | null;
   authorSeed: string;
   showVerified?: boolean;
-  metaLine: string;
+  /** «Видео» / «Фото» — в одной строке с именем после «·». */
+  metaKind: string | null;
+  /** Время, отдельной строкой под именем. */
+  metaTime: string;
   headerRight?: ReactNode;
   children: ReactNode;
 }) {
   const { th, isDark } = usePulseProfileTheme();
   return (
     <article
-      className="relative overflow-hidden"
+      className="relative w-full overflow-hidden"
       style={{
         background: th.postBg,
-        border: `1px solid ${th.postBorder}`,
-        borderRadius: 18,
-        padding: "14px 14px 12px",
-        marginLeft: 8,
-        marginRight: 8,
-        marginBottom: 10,
-        boxShadow: isDark ? "0 2px 14px rgba(0,0,0,0.35)" : "0 2px 12px rgba(99,102,241,0.06)",
+        borderBottom: `1px solid ${th.postBorder}`,
+        boxShadow: isDark ? "0 1px 0 rgba(0,0,0,0.2)" : undefined,
       }}
     >
-      <div className="flex items-start justify-between gap-2 mb-3">
+      <div className="flex items-start justify-between gap-2 px-3 pt-3 pb-2">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <div className="relative h-10 w-10 shrink-0">
             <div
@@ -61,7 +60,7 @@ export function PulseProfileThemedPostCard({
             </div>
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
               <h3
                 className="truncate font-bold leading-tight"
                 style={{ fontSize: 15, color: th.text, letterSpacing: "-0.02em" }}
@@ -77,9 +76,19 @@ export function PulseProfileThemedPostCard({
                   <span className="text-[9px] font-extrabold text-white">✓</span>
                 </div>
               ) : null}
+              {metaKind ? (
+                <>
+                  <span style={{ fontSize: 15, color: th.text, opacity: 0.45 }} aria-hidden>
+                    ·
+                  </span>
+                  <span className="shrink-0 font-medium" style={{ fontSize: 14, color: th.text }}>
+                    {metaKind}
+                  </span>
+                </>
+              ) : null}
             </div>
-            <p className="mt-0.5 truncate font-normal" style={{ fontSize: 12, color: th.text }}>
-              {metaLine}
+            <p className="mt-0.5 truncate font-normal" style={{ fontSize: 12, color: th.text, opacity: 0.55 }}>
+              {metaTime}
             </p>
           </div>
         </div>

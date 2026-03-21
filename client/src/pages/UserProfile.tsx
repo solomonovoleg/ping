@@ -1,4 +1,3 @@
-import { useState } from "react";
 import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 import { formatPostTime } from "@/lib/posts";
@@ -8,11 +7,8 @@ import { recordStoryView } from "@/lib/stories";
 import { buildProfilePath } from "@/lib/profile-route";
 import {
   PulseProfileLayout,
-  PulseProfileCoverHeader,
   PULSE_PROFILE_AVATAR_INNER_PX,
   PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX,
-  PULSE_PROFILE_COVER_HEIGHT_PX,
-  PULSE_PROFILE_SCROLL_BODY_PADDING_TOP_PX,
   PulseProfileAddContentStrip,
 } from "@/features/profile/pulse-profile";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -27,10 +23,10 @@ import {
   StoryDurationPickerSheet,
   StoryViewersSheet,
 } from "@/features/profile/user-profile";
+import { ProfilePinsSection } from "@/features/profile/user-profile/components/profile-pins/ProfilePinsSection";
 
 export default function UserProfile({ params: paramsProp }: { params?: { id: string } }) {
   const p = useUserProfilePage(paramsProp);
-  const [coverScrollY, setCoverScrollY] = useState(0);
 
   if (p.hasInvalidRouteId) return null;
 
@@ -58,10 +54,13 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
       displayName={p.displayName}
       avatarUrl={p.avatarUrl}
       deletePostMutation={p.deletePostMutation}
+      savePostMutation={p.savePostMutation}
+      viewerCanSave={!!p.user}
       reactionMutation={p.reactionMutation}
       showReactionPicker={p.showReactionPicker}
       setShowReactionPicker={p.setShowReactionPicker}
       setActiveCommentPostId={p.setActiveCommentPostId}
+      onOpenPinPost={p.openProfilePinPost}
     />
   );
 
@@ -72,18 +71,6 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         onRefresh={p.handlePullRefresh}
         className="min-h-0 flex-1"
         disabled={p.pullRefreshDisabled}
-        overlayTop={
-          <PulseProfileCoverHeader
-            coverUrl={p.hasCover ? p.resolvedCoverUrl : null}
-            onCoverError={() => p.setCoverLoadError(true)}
-            scrollY={coverScrollY}
-            usernamePill={p.usernamePillText}
-            onBack={() => p.setLocation("/posts")}
-            onMore={() => p.setProfileMoreOpen(true)}
-          />
-        }
-        overlayTopHeightPx={PULSE_PROFILE_COVER_HEIGHT_PX}
-        scrollPaddingTopPx={PULSE_PROFILE_SCROLL_BODY_PADDING_TOP_PX}
       >
         {p.isMe ? (
           <input
@@ -99,8 +86,6 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           />
         ) : null}
         <PulseProfileLayout
-          renderCover={false}
-          onScrollYChange={setCoverScrollY}
           scrollRef={p.pulseScrollRef}
           coverUrl={p.hasCover ? p.resolvedCoverUrl : null}
           onCoverError={() => p.setCoverLoadError(true)}
@@ -112,6 +97,7 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           idChip={Number(p.publicIdStr) === 2 ? "Founder · ID 2" : `ID ${p.publicIdStr}`}
           genderChip={p.genderChip}
           birthChip={p.birthChip}
+          cityChip={p.cityChip}
           bio={p.isMe ? (p.user as { bio?: string | null })?.bio ?? null : p.apiProfile?.bio ?? null}
           linkDisplay={p.profileLinkTrim || null}
           linkHref={p.profileLinkHref}
@@ -138,6 +124,17 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
             )
           }
           onHighlightNew={p.isMe ? () => !p.addingStory && p.storyFileInputRef.current?.click() : undefined}
+          pinnedStrip={
+            <ProfilePinsSection
+              profileRouteId={p.isMe ? "me" : p.normalizedRouteId}
+              isMe={p.isMe}
+              onHighlightNew={p.isMe ? () => !p.addingStory && p.storyFileInputRef.current?.click() : undefined}
+              pinAdd={p.profilePinAdd}
+              onClearPinAdd={p.clearProfilePinAdd}
+              onOpenPinnedPost={p.handleOpenPinnedPost}
+              onOpenPinnedStory={p.handleOpenPinnedStory}
+            />
+          }
           mutualFollowers={!p.isMe ? p.apiProfile?.mutualFollowers ?? null : null}
           activeTab={p.activeTab}
           onTabChange={p.setActiveTab}
@@ -228,6 +225,14 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           onShareStory={p.handleStoryShare}
           onArchiveStory={p.isMe ? p.handleStoryArchive : undefined}
           onDeleteStory={p.isMe ? p.handleStoryDelete : undefined}
+          onAddToPinned={
+            p.isMe
+              ? (storyId) => {
+                  p.openProfilePinStory(storyId);
+                  p.setActiveStoryIndex(null);
+                }
+              : undefined
+          }
         />
       )}
 

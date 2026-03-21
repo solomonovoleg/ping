@@ -6,12 +6,9 @@ import { ListEmptyState } from "@/components/ui/empty";
 import { UserAvatar } from "@/components/UserAvatar";
 import {
   PulseProfileLayout,
-  PulseProfileCoverHeader,
   PulseProfileAddContentStrip,
   PULSE_PROFILE_AVATAR_INNER_PX,
   PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX,
-  PULSE_PROFILE_COVER_HEIGHT_PX,
-  PULSE_PROFILE_SCROLL_BODY_PADDING_TOP_PX,
   type PulseProfileTabKey,
 } from "@/features/profile/pulse-profile";
 import { ProfileMePulseActions } from "@/features/profile/user-profile";
@@ -42,23 +39,9 @@ export default function PulseProfileDevPreview() {
           className="flex h-full min-h-0 flex-col"
           onRefresh={async () => {}}
           disabled
-          overlayTop={
-            <PulseProfileCoverHeader
-              coverUrl={null}
-              onCoverError={() => {}}
-              scrollY={coverScrollY}
-              usernamePill="oleg_solomonov"
-              onBack={() => setLocation("/dev/pulse-template")}
-              onMore={() => {}}
-            />
-          }
-          overlayTopHeightPx={PULSE_PROFILE_COVER_HEIGHT_PX}
-          scrollPaddingTopPx={PULSE_PROFILE_SCROLL_BODY_PADDING_TOP_PX}
         >
           <PulseProfileLayout
             themeMode="dark"
-            renderCover={false}
-            onScrollYChange={setCoverScrollY}
             scrollRef={scrollRef}
             coverUrl={null}
             onCoverError={() => {}}
@@ -68,8 +51,9 @@ export default function PulseProfileDevPreview() {
             displayName="Олег Соломонов"
             showVerified
             idChip="Founder · ID 2"
-            genderChip="♂ Мужской"
+            genderChip="Мужской"
             birthChip="12 мар 1995"
+            cityChip="Москва"
             bio="Создал PULSE 🔥 Потому что не где было общаться"
             linkDisplay="pulse.app"
             linkHref="https://pulse.app"
