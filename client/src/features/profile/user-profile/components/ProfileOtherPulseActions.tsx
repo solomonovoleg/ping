@@ -40,7 +40,7 @@ export function ProfileOtherPulseActions({
         className="flex-1 flex items-center justify-center rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-transform disabled:opacity-50"
         style={{ height: 40, background: th.surface, border: `1px solid ${th.border}` }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: th.textSub }}>{f.message}</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: th.text }}>{f.message}</span>
       </button>
     </div>
   );

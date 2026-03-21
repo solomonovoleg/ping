@@ -33,7 +33,7 @@ export function PulseProfileMutualFollowersRow({ data }: { data: PulseProfileMut
           ))}
         </div>
       ) : null}
-      <span style={{ fontSize: 11.5, color: th.textFaint, fontWeight: 500 }}>{mutualFollowersLabelRu(data.count)}</span>
+      <span style={{ fontSize: 11.5, color: th.text, fontWeight: 400 }}>{mutualFollowersLabelRu(data.count)}</span>
     </div>
   );
 }

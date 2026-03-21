@@ -12,7 +12,7 @@ export function PulseProfilePinnedStrip({ onHighlightNew }: { onHighlightNew?: (
           style={{
             fontSize: 11,
             fontWeight: 700,
-            color: th.textSub,
+            color: th.text,
             letterSpacing: "0.07em",
           }}
         >

@@ -78,13 +78,13 @@ export function PulseProfileThemedPostCard({
                 </div>
               ) : null}
             </div>
-            <p className="mt-0.5 truncate font-medium" style={{ fontSize: 12, color: th.textFaint }}>
+            <p className="mt-0.5 truncate font-normal" style={{ fontSize: 12, color: th.text }}>
               {metaLine}
             </p>
           </div>
         </div>
         {headerRight ? (
-          <div className="flex shrink-0 items-start gap-0.5 pt-0.5 [&_svg]:text-current" style={{ color: th.textSub }}>
+          <div className="flex shrink-0 items-start gap-0.5 pt-0.5 [&_svg]:text-current" style={{ color: th.text }}>
             {headerRight}
           </div>
         ) : null}

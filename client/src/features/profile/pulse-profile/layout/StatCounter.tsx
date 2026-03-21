@@ -30,8 +30,8 @@ export function StatCounter({
       <span
         style={{
           fontSize: compact ? 9 : 10.5,
-          color: th.textFaint,
-          fontWeight: 500,
+          color: th.text,
+          fontWeight: 400,
           marginTop: compact ? 1 : 2,
         }}
       >

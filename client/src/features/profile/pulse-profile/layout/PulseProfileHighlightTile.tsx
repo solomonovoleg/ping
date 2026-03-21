@@ -40,7 +40,7 @@ export function PulseProfileHighlightTile({
     </div>
   );
   const caption = (
-    <span style={{ fontSize: 10, color: th.textSub, fontWeight: 500 }}>{label || "Новое"}</span>
+    <span style={{ fontSize: 10, color: th.text, fontWeight: 400 }}>{label || "Новое"}</span>
   );
   if (onClick) {
     return (

@@ -32,11 +32,11 @@ export function PulseProfileTabsRow({
             style={
               activeTab === key
                 ? { background: th.tabActive, border: `1px solid ${th.tabBorder}`, color: th.accent }
-                : { background: "transparent", border: "1px solid transparent", color: th.textFaint }
+                : { background: "transparent", border: "1px solid transparent", color: th.text }
             }
           >
             <Icon style={{ width: 13, height: 13 }} aria-hidden />
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
+            <span style={{ fontSize: 12, fontWeight: activeTab === key ? 600 : 500 }}>{label}</span>
           </button>
         ))}
       </div>
@@ -56,7 +56,7 @@ export function PulseProfileTabsRow({
           {postView === "grid" ? (
             <Grid3x3 style={{ width: 14, height: 14, color: th.accent }} aria-hidden />
           ) : (
-            <List style={{ width: 14, height: 14, color: th.textFaint }} aria-hidden />
+            <List style={{ width: 14, height: 14, color: th.text }} aria-hidden />
           )}
         </button>
       ) : null}

@@ -30,7 +30,7 @@ export function PulseProfileIdentityBlock({
         <p
           style={{
             fontSize: 14,
-            color: th.textSub,
+            color: th.text,
             lineHeight: 1.55,
             marginTop: mutualFollowers && mutualFollowers.count > 0 ? 11 : 0,
             fontWeight: 400,

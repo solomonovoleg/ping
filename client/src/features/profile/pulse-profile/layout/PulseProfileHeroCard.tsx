@@ -224,9 +224,9 @@ export function PulseProfileHeroCard({
             <p
               style={{
                 fontSize: 12.5,
-                color: th.textFaint,
+                color: th.text,
                 marginTop: 5,
-                fontWeight: 500,
+                fontWeight: 400,
                 letterSpacing: "0.01em",
               }}
             >

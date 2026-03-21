@@ -42,7 +42,7 @@ export function PulseProfileIconButton({
         style={{
           width: primary ? 13 : 15,
           height: primary ? 13 : 15,
-          color: primary ? "rgba(255,255,255,0.95)" : th.textSub,
+          color: primary ? "rgba(255,255,255,0.95)" : th.text,
         }}
       />
       {primary ? (

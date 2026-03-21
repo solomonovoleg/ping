@@ -23,7 +23,7 @@ export function PulseProfileAddContentStrip({ onClick, disabled }: { onClick: ()
       >
         <Plus style={{ width: 12, height: 12, color: th.accent, strokeWidth: 2.5 }} aria-hidden />
       </div>
-      <span style={{ fontSize: 13.5, fontWeight: 500, color: th.textFaint }}>Добавить контент</span>
+      <span style={{ fontSize: 13.5, fontWeight: 400, color: th.text }}>Добавить контент</span>
     </button>
   );
 }
