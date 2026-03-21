@@ -3,7 +3,18 @@ import { getDb } from "../db";
 import { notifyMentionsPost } from "../notifications/mentions";
 import { notifyChatListUpdate } from "../calls/ws";
 import { storage } from "../storage";
-import { extractHashtags, postComments, postReactions, postShares, postViews, posts, savedPosts, users } from "@shared/schema";
+import {
+  extractHashtags,
+  extractMentions,
+  MAX_POST_MENTIONS,
+  postComments,
+  postReactions,
+  postShares,
+  postViews,
+  posts,
+  savedPosts,
+  users,
+} from "@shared/schema";
 import { getFeedAlgoConfig } from "../feed/config";
 import type { PostMediaLayout } from "@shared/post-media-layout";
 
@@ -27,6 +38,10 @@ type CreatePostInput = {
 
 export async function createPost(input: CreatePostInput) {
   const { userId, text, imageUrl, mediaUrls, mediaLayout, isDraft, visibility } = input;
+  const mentionTokens = extractMentions(text);
+  if (mentionTokens.length > MAX_POST_MENTIONS) {
+    throw new PostsServiceError(400, `Не больше ${MAX_POST_MENTIONS} упоминаний (@) в посте`);
+  }
   const firstUrl = mediaUrls?.length ? mediaUrls[0] : imageUrl;
   const hashtags = extractHashtags(text);
   const db = getDb();
@@ -476,6 +491,27 @@ export async function listPostsForViewer(params: {
     });
   }
 
+  const shareCounts: Record<string, number> = {};
+  if (postIds.length > 0) {
+    const shareRows = await db
+      .select({ postId: postShares.postId, count: sql<number>`count(*)::int` })
+      .from(postShares)
+      .where(inArray(postShares.postId, postIds))
+      .groupBy(postShares.postId);
+    shareRows.forEach((r) => {
+      shareCounts[r.postId] = r.count;
+    });
+  }
+
+  const savedPostIds = new Set<string>();
+  if (postIds.length > 0) {
+    const savedRows = await db
+      .select({ postId: savedPosts.postId })
+      .from(savedPosts)
+      .where(and(eq(savedPosts.userId, viewerId), inArray(savedPosts.postId, postIds)));
+    savedRows.forEach((r) => savedPostIds.add(r.postId));
+  }
+
   return rows.map((r) => {
     const urls = (r.mediaUrls && Array.isArray(r.mediaUrls) && r.mediaUrls.length > 0)
       ? r.mediaUrls
@@ -492,6 +528,8 @@ export async function listPostsForViewer(params: {
       reactionUsers: reactionUsersByPost[r.id] ?? {},
       myReaction: myReactions[r.id] ?? null,
       viewsCount: viewCounts[r.id] ?? 0,
+      sharesCount: shareCounts[r.id] ?? 0,
+      isSaved: savedPostIds.has(r.id),
       createdAt: r.createdAt?.toISOString?.() ?? r.createdAt,
       author: {
         id: r.authorId,
@@ -624,7 +662,12 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
     .select({ count: sql<number>`count(*)::int` })
     .from(postViews)
     .where(eq(postViews.postId, postId));
+  const [shareCountRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(postShares)
+    .where(eq(postShares.postId, postId));
   let myReaction: string | null = null;
+  let isSaved = false;
   if (viewerId) {
     const [my] = await db
       .select({ emoji: postReactions.emoji })
@@ -632,6 +675,12 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
       .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, viewerId)))
       .limit(1);
     myReaction = my?.emoji ?? null;
+    const [savedRow] = await db
+      .select({ postId: savedPosts.postId })
+      .from(savedPosts)
+      .where(and(eq(savedPosts.userId, viewerId), eq(savedPosts.postId, postId)))
+      .limit(1);
+    isSaved = !!savedRow;
   }
   const reactionUsersByPost: Record<string, { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null }[]> = {};
   whoReactedRows.forEach((r) => {
@@ -655,6 +704,8 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
     reactionUsers: reactionUsersByPost,
     myReaction,
     viewsCount: viewRow?.count ?? 0,
+    sharesCount: shareCountRow?.count ?? 0,
+    isSaved,
     createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
     author: {
       id: row.authorId,

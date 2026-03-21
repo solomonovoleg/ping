@@ -57,6 +57,10 @@ export function registerPostsRoutes(app: Express): void {
       res.status(201).json(payload);
     } catch (e) {
       console.error("Create post error:", e);
+      if (e instanceof PostsServiceError) {
+        res.status(e.status).json({ message: e.message });
+        return;
+      }
       let message = e instanceof Error ? e.message : "Ошибка публикации";
       if (message.includes("relation") && message.includes("does not exist")) {
         message = "Сервис постов недоступен. Выполните миграцию: node scripts/migrate-posts.cjs";

@@ -33,6 +33,7 @@ import { getTextareaCaretCoordinates } from "@/lib/textarea-caret";
 import { useCreatePostDraft } from "@/hooks/useCreatePostDraft";
 import { buildPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
 import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { CreatePostPulseMobile } from "@/pages/CreatePostPulseMobile";
 
 type MediaKind = "image" | "video" | "audio";
 
@@ -100,6 +101,8 @@ export default function CreatePost() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
   const uploadIdRef = useRef(0);
   const mediaCountRef = useRef(0);
   const videoTrimResolverRef = useRef<((t: PostVideoTrimUpload | null) => void) | null>(null);
@@ -133,6 +136,14 @@ export default function CreatePost() {
     return buildPostMediaLayout(aspects);
   })();
   const canPublish = (text.trim().length > 0 || mediaUrls.length > 0) && !isPublishing && !hasUploading;
+  const pulseMobile = isMobile;
+
+  const pulseHandleLine =
+    user?.nickname?.trim() != null && user.nickname.trim() !== ""
+      ? user.nickname.trim().startsWith("@")
+        ? user.nickname.trim()
+        : `@${user.nickname.trim()}`
+      : user?.profileLink?.trim() || (user?.publicId != null ? `id${user.publicId}` : "");
 
   const { clearDraft } = useCreatePostDraft(
     MAX_CHARS,
@@ -491,44 +502,78 @@ export default function CreatePost() {
       exit={{ y: "100%" }}
       transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
     >
-      {/* Header: сетка 3 колонки — заголовок строго по центру */}
-      <div className="glass uix-content-x pt-safe-offset-2 pb-[var(--uix-space-3)] border-b border-border/50 z-10 sticky top-0">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-[var(--uix-space-2)]">
-          <div className="flex justify-start min-w-0">
-            <TapScaleButton
-              type="button"
-              onClick={() => setLocation("/posts")}
-              haptic
-              subtle
-              className="text-foreground hover:bg-secondary px-2 py-2 -ml-2 rounded-full transition-colors font-medium text-[15px] leading-none min-h-[var(--uix-touch-min)] flex items-center shrink-0"
-              aria-label="Отмена"
-            >
-              Отмена
-            </TapScaleButton>
-          </div>
-          <h1 className="text-center text-[17px] font-semibold leading-tight tracking-tight text-foreground truncate max-w-[min(200px,46vw)]">
-            Новая запись
-          </h1>
-          <div className="flex justify-end min-w-0">
-            <TapScaleButton
-              type="button"
-              onClick={handlePublish}
-              disabled={!canPublish}
-              haptic
-              className={cn(
-                "shrink-0 px-[var(--uix-space-4)] py-2 rounded-full font-semibold text-[13px] leading-none min-h-[40px] flex items-center justify-center transition-all",
-                canPublish
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/15"
-                  : "bg-secondary text-muted-foreground cursor-not-allowed"
-              )}
-            >
-              {isPublishing ? "Публикуем…" : "Опубликовать"}
-            </TapScaleButton>
+      {!pulseMobile ? (
+        <div className="glass uix-content-x pt-safe-offset-2 pb-[var(--uix-space-3)] border-b border-border/50 z-10 sticky top-0">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-[var(--uix-space-2)]">
+            <div className="flex justify-start min-w-0">
+              <TapScaleButton
+                type="button"
+                onClick={() => setLocation("/posts")}
+                haptic
+                subtle
+                className="text-foreground hover:bg-secondary px-2 py-2 -ml-2 rounded-full transition-colors font-medium text-[15px] leading-none min-h-[var(--uix-touch-min)] flex items-center shrink-0"
+                aria-label="Отмена"
+              >
+                Отмена
+              </TapScaleButton>
+            </div>
+            <h1 className="text-center text-[17px] font-semibold leading-tight tracking-tight text-foreground truncate max-w-[min(200px,46vw)]">
+              Новая запись
+            </h1>
+            <div className="flex justify-end min-w-0">
+              <TapScaleButton
+                type="button"
+                onClick={handlePublish}
+                disabled={!canPublish}
+                haptic
+                className={cn(
+                  "shrink-0 px-[var(--uix-space-4)] py-2 rounded-full font-semibold text-[13px] leading-none min-h-[40px] flex items-center justify-center transition-all",
+                  canPublish
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/15"
+                    : "bg-secondary text-muted-foreground cursor-not-allowed"
+                )}
+              >
+                {isPublishing ? "Публикуем…" : "Опубликовать"}
+              </TapScaleButton>
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
+
+      {pulseMobile ? (
+        <CreatePostPulseMobile
+          onBack={() => setLocation("/posts")}
+          displayName={displayName || "Профиль"}
+          handleLine={pulseHandleLine}
+          avatarUrl={user?.avatarUrl}
+          showVerified={Boolean(user)}
+          text={text}
+          setText={setText}
+          textAreaRef={textAreaRef}
+          maxChars={MAX_CHARS}
+          mediaItems={mediaItems}
+          mediaUrls={mediaUrls}
+          previewLayout={previewLayout}
+          hasUploading={hasUploading}
+          onRemoveMedia={removeMedia}
+          canPublish={canPublish}
+          isPublishing={isPublishing}
+          onPublish={handlePublish}
+          isProofreading={isProofreading}
+          onProofread={handleProofread}
+          error={error}
+          availableSlots={availableMediaSlots}
+          isNativePlatform={isNativePlatform}
+          onNativePickPhoto={() => void handleAddFromNative("gallery")}
+          onOpenMediaPicker={() => setShowMediaPicker(true)}
+          imageInputRef={imageInputRef}
+          videoInputRef={videoInputRef}
+          onFileChange={(e) => void handleFileChange(e)}
+        />
+      ) : null}
 
       {/* Editor Area */}
+      {!pulseMobile ? (
       <div
         className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 uix-content-x flex flex-col gap-[var(--uix-space-4)] pt-[var(--uix-space-4)] pb-[calc(var(--uix-nav-bottom)+var(--uix-space-6))]"
         onScroll={() => {
@@ -579,7 +624,7 @@ export default function CreatePost() {
           </p>
         </div>
 
-        {selectionToast && !showPreview && (
+        {selectionToast && !showPreview && !pulseMobile && (
           <motion.div
             className={cn(
               "fixed z-[160] rounded-2xl border border-border/70 bg-background/95 px-[var(--uix-space-4)] py-[var(--uix-space-3)] shadow-lg backdrop-blur",
@@ -837,6 +882,7 @@ export default function CreatePost() {
           </p>
         </div>
       </div>
+      ) : null}
 
       <AnimatePresence>
         {showMediaPicker && (

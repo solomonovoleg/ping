@@ -1,6 +1,6 @@
 import { getDb } from "../db";
 import { notifications } from "@shared/schema";
-import { extractMentions } from "@shared/schema/posts";
+import { extractMentions, MAX_POST_MENTIONS } from "@shared/schema/posts";
 import type { IStorage } from "../storage/types";
 
 /** Решить упоминание @id или @name в userId (или null) */
@@ -38,6 +38,7 @@ export async function notifyMentionsPost(
   const seen = new Set<string>();
   const excerpt = text.slice(0, 100);
   for (const m of mentions) {
+    if (seen.size >= MAX_POST_MENTIONS) break;
     const userId = await resolveMentionToUserId(m, storage, authorId);
     if (!userId || seen.has(userId)) continue;
     seen.add(userId);
@@ -70,6 +71,7 @@ export async function notifyMentionsComment(
   const seen = new Set<string>();
   const excerpt = text.slice(0, 100);
   for (const m of mentions) {
+    if (seen.size >= MAX_POST_MENTIONS) break;
     const userId = await resolveMentionToUserId(m, storage, authorId);
     if (!userId || seen.has(userId)) continue;
     seen.add(userId);

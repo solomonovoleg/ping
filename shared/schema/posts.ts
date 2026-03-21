@@ -11,6 +11,9 @@ export function extractHashtags(text: string): string[] {
   return Array.from(set);
 }
 
+/** Максимум разных @упоминаний в одном посте (уникальные токены после extractMentions). */
+export const MAX_POST_MENTIONS = 5;
+
 /** Извлечь упоминания @username или @id из текста (без @) */
 export function extractMentions(text: string): string[] {
   const matches = text.match(/@[a-zA-Zа-яёА-ЯЁ0-9_]+/g) ?? [];
