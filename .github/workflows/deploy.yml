@@ -1,0 +1,368 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/deploy.yml"
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "scripts/**"
+      - "migrations/**"
+      - "drizzle.config.ts"
+      - "ecosystem.config.cjs"
+      - "vite.config.ts"
+      - "postcss.config.js"
+      - "tailwind.config.*"
+      - "package.json"
+      - "package-lock.json"
+      - "script/build.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      client: ${{ steps.filter.outputs.client }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server:
+              - "server/**"
+              - "shared/**"
+              - "scripts/**"
+              - "migrations/**"
+              - "drizzle.config.ts"
+              - "ecosystem.config.cjs"
+              - "package.json"
+              - "package-lock.json"
+              - "script/build.ts"
+              - ".github/workflows/deploy.yml"
+            client:
+              - "client/**"
+              - "shared/**"
+              - "vite.config.ts"
+              - "postcss.config.js"
+              - "tailwind.config.*"
+              - "package.json"
+              - "package-lock.json"
+              - ".github/workflows/deploy.yml"
+
+  deploy-server:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name == 'workflow_dispatch' || needs.detect-changes.outputs.server == 'true'
+    timeout-minutes: 30
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+      DEPLOY_REMOTE_DIR: ${{ secrets.DEPLOY_REMOTE_DIR }}
+      DEPLOY_APP_PORT: ${{ secrets.DEPLOY_APP_PORT }}
+      DEPLOY_PM2_APP_NAME: ${{ secrets.DEPLOY_PM2_APP_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build project
+        run: npm run build
+
+      - name: Install rsync + sshpass
+        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
+
+      - name: Upload server files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+          APP_PORT="${DEPLOY_APP_PORT:-3081}"
+          APP_NAME="${DEPLOY_PM2_APP_NAME:-ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "mkdir -p ${REMOTE_DIR} ${REMOTE_DIR}/dist ${REMOTE_DIR}/dist/public"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            --exclude ".env" \
+            --exclude "uploads" \
+            --exclude "dist" \
+            --filter "P uploads/" \
+            --filter "P dist/public/" \
+            . "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            dist/index.cjs dist/seed-admin.cjs dist/seed-first-user.cjs \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd ${REMOTE_DIR} && PORT=${APP_PORT} PM2_APP_NAME='${APP_NAME}' bash scripts/server-setup.sh"
+
+  deploy-client:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name == 'workflow_dispatch' || needs.detect-changes.outputs.client == 'true'
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+      DEPLOY_REMOTE_DIR: ${{ secrets.DEPLOY_REMOTE_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build client
+        run: npx vite build
+
+      - name: Install rsync + sshpass
+        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
+
+      - name: Upload client dist/public
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "mkdir -p ${REMOTE_DIR}/dist/public"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            dist/public/ "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/public/"
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/deploy.yml"
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "scripts/**"
+      - "migrations/**"
+      - "drizzle.config.ts"
+      - "ecosystem.config.cjs"
+      - "vite.config.ts"
+      - "postcss.config.js"
+      - "tailwind.config.*"
+      - "package.json"
+      - "package-lock.json"
+      - "script/build.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      client: ${{ steps.filter.outputs.client }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server:
+              - "server/**"
+              - "shared/**"
+              - "scripts/**"
+              - "migrations/**"
+              - "drizzle.config.ts"
+              - "ecosystem.config.cjs"
+              - "package.json"
+              - "package-lock.json"
+              - "script/build.ts"
+              - ".github/workflows/deploy.yml"
+            client:
+              - "client/**"
+              - "shared/**"
+              - "vite.config.ts"
+              - "postcss.config.js"
+              - "tailwind.config.*"
+              - "package.json"
+              - "package-lock.json"
+              - ".github/workflows/deploy.yml"
+
+  deploy-server:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name == 'workflow_dispatch' || needs.detect-changes.outputs.server == 'true'
+    timeout-minutes: 30
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+      DEPLOY_REMOTE_DIR: ${{ secrets.DEPLOY_REMOTE_DIR }}
+      DEPLOY_APP_PORT: ${{ secrets.DEPLOY_APP_PORT }}
+      DEPLOY_PM2_APP_NAME: ${{ secrets.DEPLOY_PM2_APP_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build project
+        run: npm run build
+
+      - name: Install rsync + sshpass
+        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
+
+      - name: Upload server files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+          APP_PORT="${DEPLOY_APP_PORT:-3081}"
+          APP_NAME="${DEPLOY_PM2_APP_NAME:-ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "mkdir -p ${REMOTE_DIR} ${REMOTE_DIR}/dist ${REMOTE_DIR}/dist/public"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            --exclude ".env" \
+            --exclude "uploads" \
+            --exclude "dist" \
+            --filter "P uploads/" \
+            --filter "P dist/public/" \
+            . "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            dist/index.cjs dist/seed-admin.cjs dist/seed-first-user.cjs \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd ${REMOTE_DIR} && PORT=${APP_PORT} PM2_APP_NAME='${APP_NAME}' bash scripts/server-setup.sh"
+
+  deploy-client:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name == 'workflow_dispatch' || needs.detect-changes.outputs.client == 'true'
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+      DEPLOY_REMOTE_DIR: ${{ secrets.DEPLOY_REMOTE_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build client
+        run: npx vite build
+
+      - name: Install rsync + sshpass
+        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
+
+      - name: Upload client dist/public
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "mkdir -p ${REMOTE_DIR}/dist/public"
+
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
+            dist/public/ "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/public/"
