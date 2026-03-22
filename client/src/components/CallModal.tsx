@@ -941,6 +941,17 @@ export function CallModal({
           }
         }}
       >
+        {/* Голосовой звонок: без этого в DOM нет элемента с ref={remoteVideoRef} — удалённый поток не привязывается и абонент не слышен (видео ок: там <video> в layout). */}
+        {remoteStream && !(isVideo && state === "connected") && (
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            muted={false}
+            className="pointer-events-none absolute left-0 top-0 z-0 h-px w-px overflow-hidden opacity-0"
+            aria-hidden
+          />
+        )}
         {showVideo ? (
           <div className="pointer-events-none absolute inset-0 z-0 bg-black" aria-hidden />
         ) : pulseStageDecor ? (
