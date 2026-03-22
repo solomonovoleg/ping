@@ -9,14 +9,58 @@ import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { formatMessageTime, parseMessageDate } from "../utils/format";
 import { buildProfilePath } from "@/lib/profile-route";
 import { extractFirstUrl } from "@/lib/link-preview";
+import { parseExternalVideoUrl } from "@/lib/external-video";
 import { LinkPreviewCard } from "./LinkPreviewCard";
+import { ExternalVideoEmbedCard } from "./ExternalVideoEmbedCard";
 import { UserAvatar } from "@/components/UserAvatar";
 import { VoiceMessagePlayer } from "@/components/VoiceMessagePlayer";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import { CodeBlock } from "./CodeBlock";
 import { PulseDmSentVideoNote } from "@/features/chat/components/pulse/PulseDmSentVideoNote";
+import { useOfflineResolvedMediaUrl } from "@/hooks/useOfflineResolvedMediaUrl";
 import { parseCodeSegments } from "../utils/code-detect";
 import type { ApiMessage } from "../types";
+
+function ChatInlineMediaThumb({
+  src,
+  type,
+  onOpenMedia,
+}: {
+  src: string;
+  type: "image" | "video";
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
+}) {
+  const offlineReadySrc = useOfflineResolvedMediaUrl(src);
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (offlineReadySrc && onOpenMedia) onOpenMedia(offlineReadySrc, type);
+      }}
+      className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
+    >
+      {type === "image" ? (
+        <img
+          src={offlineReadySrc}
+          alt="Фото"
+          className="max-h-[280px] w-full object-cover"
+          loading="lazy"
+          decoding="async"
+        />
+      ) : (
+        <video
+          src={offlineReadySrc}
+          className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]"
+          playsInline
+          muted
+        />
+      )}
+    </button>
+  );
+}
 
 /** Разбивает текст на фрагменты: URL — ссылки, @[Name](id) — ссылки на профиль */
 function linkifyTextWithMentions(
@@ -663,31 +707,17 @@ function ChatMessageRowInner({
                 );
               })()
             ) : msg.type === "image" ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const url = resolveUrl(msg.content);
-                  if (url && onOpenMedia) onOpenMedia(url, "image");
-                }}
-                className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <img src={resolveUrl(msg.content)} alt="Фото" className="max-h-[280px] w-full object-cover" loading="lazy" decoding="async" />
-              </button>
+              <ChatInlineMediaThumb
+                src={resolveUrl(msg.content)}
+                type="image"
+                onOpenMedia={onOpenMedia}
+              />
             ) : msg.type === "video" ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const url = resolveUrl(msg.content);
-                  if (url && onOpenMedia) onOpenMedia(url, "video");
-                }}
-                className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <video src={resolveUrl(msg.content)} className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]" playsInline muted />
-              </button>
+              <ChatInlineMediaThumb
+                src={resolveUrl(msg.content)}
+                type="video"
+                onOpenMedia={onOpenMedia}
+              />
             ) : msg.type === "video_note" ? (
               <>
                 {pulseMobileDm && isMe ? (
@@ -798,7 +828,9 @@ function ChatMessageRowInner({
                 })()}
                 {msg.type === "text" && (() => {
                   const url = extractFirstUrl(msg.content);
-                  return url ? <LinkPreviewCard url={url} /> : null;
+                  if (!url) return null;
+                  const externalVideo = parseExternalVideoUrl(url);
+                  return externalVideo ? <ExternalVideoEmbedCard url={url} /> : <LinkPreviewCard url={url} />;
                 })()}
               </>
             )}

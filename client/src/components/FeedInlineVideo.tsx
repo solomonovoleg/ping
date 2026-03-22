@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, type CSSProperties, type SyntheticEvent } from "react";
+import { useEffect, useRef, useCallback, useState, type CSSProperties, type SyntheticEvent } from "react";
 import { useFeedScrollRoot } from "@/contexts/FeedScrollRootContext";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useReelsFeedVideoGestures, useSeamlessVideoLoop } from "@/lib/reels-video";
@@ -28,6 +28,7 @@ type FeedInlineVideoProps = {
 /**
  * Видео в ленте: автовоспроизведение без звука при попадании в видимую область скролла.
  * Одновременно играет не больше одного ролика (остальные на паузе).
+ * У роликов в зоне скролла поднимаем preload (быстрее старт); вне зоны — только metadata.
  */
 export function FeedInlineVideo({
   src,
@@ -41,16 +42,38 @@ export function FeedInlineVideo({
   const scrollRootRef = useFeedScrollRoot();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const reducedMotion = usePrefersReducedMotion();
+  const [preloadAhead, setPreloadAhead] = useState(false);
+  const [holdSpeed, setHoldSpeed] = useState<1 | 2 | 3>(1);
 
   const useSeamless = !reducedMotion && seamlessLoop;
   useSeamlessVideoLoop(videoRef, { enabled: useSeamless, srcKey: src });
 
+  const showReelsGestures = !!feedReelsInteraction && !reducedMotion;
+
   useReelsFeedVideoGestures(videoRef, {
-    enabled: !!feedReelsInteraction && !reducedMotion,
+    enabled: showReelsGestures,
     reducedMotion,
     onDoubleTap: () => feedReelsInteraction?.onDoubleTapFire(),
     srcKey: src,
+    onHoldSpeed: (rate) => setHoldSpeed(rate),
   });
+
+  /** За пределами экрана — не держим агрессивный буфер; в коридоре ленты — auto. */
+  useEffect(() => {
+    if (reducedMotion) return;
+    const el = videoRef.current;
+    if (!el) return;
+    const root = scrollRootRef?.current ?? null;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0];
+        setPreloadAhead(!!e?.isIntersecting);
+      },
+      { root, rootMargin: "85% 0px 85% 0px", threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [src, scrollRootRef, reducedMotion]);
 
   useEffect(() => {
     if (reducedMotion) return;
@@ -67,7 +90,7 @@ export function FeedInlineVideo({
         const v = videoRef.current;
         if (!v) return;
         const ratio = e.intersectionRatio;
-        const shouldPlay = e.isIntersecting && ratio >= 0.42;
+        const shouldPlay = e.isIntersecting && ratio >= 0.38;
         if (!shouldPlay) {
           v.pause();
           v.playbackRate = 1;
@@ -99,6 +122,14 @@ export function FeedInlineVideo({
   useEffect(() => {
     const v = videoRef.current;
     if (!v || reducedMotion) return;
+    const onPause = () => setHoldSpeed(1);
+    v.addEventListener("pause", onPause);
+    return () => v.removeEventListener("pause", onPause);
+  }, [reducedMotion, src]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || reducedMotion) return;
     v.muted = !soundOn;
   }, [soundOn, reducedMotion, src]);
 
@@ -121,17 +152,48 @@ export function FeedInlineVideo({
     );
   }
 
-  return (
+  const preload = preloadAhead ? "auto" : "metadata";
+
+  const videoNode = (
     <video
       ref={setVideoRef}
       src={src}
       muted={!soundOn}
       loop={!useSeamless}
       playsInline
-      className={cn(className, feedReelsInteraction && "cursor-pointer touch-manipulation")}
+      className={cn(className, showReelsGestures && "cursor-pointer touch-manipulation")}
       style={style}
-      preload="metadata"
+      preload={preload}
       onLoadedMetadata={onLoadedMetadata}
     />
+  );
+
+  if (!showReelsGestures) {
+    return videoNode;
+  }
+
+  const cls = className ?? "";
+  const fillParent = cls.includes("inset-0") && cls.includes("absolute");
+  const collageFill = !fillParent && /\bh-full\b/.test(cls) && /\bw-full\b/.test(cls);
+
+  return (
+    <div
+      className={cn(
+        fillParent && "absolute inset-0 overflow-hidden",
+        collageFill && "relative h-full w-full min-h-0 min-w-0",
+        !fillParent && !collageFill && "relative w-full max-w-full",
+      )}
+    >
+      {videoNode}
+      {holdSpeed > 1 ? (
+        <div
+          className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/15 bg-black/60 px-3 py-1.5 text-[15px] font-bold tabular-nums text-white shadow-lg backdrop-blur-sm"
+          aria-live="polite"
+          aria-label={`Скорость воспроизведения ×${holdSpeed}`}
+        >
+          ×{holdSpeed}
+        </div>
+      ) : null}
+    </div>
   );
 }

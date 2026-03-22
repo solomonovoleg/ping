@@ -71,6 +71,7 @@ import { PullToRefresh } from "@/components/PullToRefresh";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 import { FeedHeader } from "@/features/feed/components/FeedHeader";
+import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 import { playLikeActionSound } from "@/lib/send-sound";
 import { FeedScrollRootContext } from "@/contexts/FeedScrollRootContext";
@@ -939,16 +940,37 @@ export default function Posts() {
       setMyAvatarMenu(true);
     },
   });
-  const wrappedMyCircleLongPress = {
-    onPointerDown: (e: React.PointerEvent) => {
-      longPressActiveRef.current = false;
-      myCircleLongPress.onPointerDown();
-    },
-    onPointerUp: () => {
-      myCircleLongPress.onPointerUp();
-    },
-    onPointerLeave: () => myCircleLongPress.onPointerLeave(),
-    onPointerCancel: () => myCircleLongPress.onPointerCancel(),
+  const storyCirclePointerRef = useRef<{
+    id: string | null;
+    x: number;
+    y: number;
+    moved: boolean;
+  }>({
+    id: null,
+    x: 0,
+    y: 0,
+    moved: false,
+  });
+
+  const onStoryCirclePointerDown = (id: string, e: React.PointerEvent<HTMLDivElement>) => {
+    storyCirclePointerRef.current = {
+      id,
+      x: e.clientX,
+      y: e.clientY,
+      moved: false,
+    };
+  };
+
+  const onStoryCirclePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const state = storyCirclePointerRef.current;
+    if (!state.id || state.moved) return;
+    const dx = Math.abs(e.clientX - state.x);
+    const dy = Math.abs(e.clientY - state.y);
+    if (dx > 10 || dy > 8) state.moved = true;
+  };
+
+  const onStoryCirclePointerCancel = () => {
+    storyCirclePointerRef.current = { id: null, x: 0, y: 0, moved: false };
   };
 
   const handleMyCircleTap = () => {
@@ -1010,14 +1032,34 @@ export default function Posts() {
                 <div 
                   key={String(story.id)} 
                   className="flex flex-col items-center gap-1.5 cursor-pointer flex-shrink-0 group"
-                  onClick={() => {
+                  onPointerDown={(e) => {
+                    onStoryCirclePointerDown(String(story.id), e);
+                    if (isMe) {
+                      longPressActiveRef.current = false;
+                      myCircleLongPress.onPointerDown();
+                    }
+                  }}
+                  onPointerMove={onStoryCirclePointerMove}
+                  onPointerUp={() => {
+                    if (isMe) myCircleLongPress.onPointerUp();
+                    const state = storyCirclePointerRef.current;
+                    const isTap = state.id === String(story.id) && !state.moved;
+                    storyCirclePointerRef.current = { id: null, x: 0, y: 0, moved: false };
+                    if (!isTap) return;
                     if (isMe) {
                       handleMyCircleTap();
                     } else {
                       setActiveStoryIndex(idx);
                     }
                   }}
-                  {...(isMe ? wrappedMyCircleLongPress : {})}
+                  onPointerCancel={() => {
+                    onStoryCirclePointerCancel();
+                    if (isMe) myCircleLongPress.onPointerCancel();
+                  }}
+                  onPointerLeave={() => {
+                    onStoryCirclePointerCancel();
+                    if (isMe) myCircleLongPress.onPointerLeave();
+                  }}
                 >
                   <div className="relative">
                     <div className={cn(
@@ -1093,6 +1135,13 @@ export default function Posts() {
               )}
             </div>
           </div>
+
+          {user?.id ? (
+            <EdgeCompanionFeedCard
+              userId={user.id}
+              onOpen={() => setLocation("/edge/companion")}
+            />
+          ) : null}
 
           {hashtagFilter && (
             <div className="uix-content-x-tight py-2 flex items-center gap-2 border-b border-border/50 bg-secondary/20">

@@ -7,6 +7,7 @@ import { normalizeReferralCodeInput } from "../referrals/code-generator";
 import { createToken } from "./token";
 import { getUserId, requireAuth } from "./session";
 import { normalizeGenderValue } from "../users/service";
+import { bootstrapServiceThreadForNewUser } from "../service-chat/service";
 
 const DEFAULT_REFERRAL_LIMIT = 3;
 
@@ -111,6 +112,11 @@ export function registerAuthRoutes(app: Express): void {
       } catch (e) {
         console.error("Create welcome chat for invitee:", e);
       }
+    }
+    try {
+      await bootstrapServiceThreadForNewUser(user.id);
+    } catch (e) {
+      console.error("[service-chat/register-bootstrap]", e);
     }
     if (!req.session) {
       console.error("[auth/register] session not available");

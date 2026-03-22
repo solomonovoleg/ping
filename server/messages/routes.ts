@@ -11,6 +11,7 @@ import {
   editOwnTextMessage,
   listChatMessages,
   MessagesServiceError,
+  requestVoiceOrVideoNoteTranscription,
   sendChatMessage,
 } from "./service";
 
@@ -122,4 +123,26 @@ export function registerMessagesRoutes(app: Express): void {
       throw error;
     }
   });
+
+  app.post(
+    "/api/chats/:chatId/messages/:messageId/transcribe",
+    noStorePrivateJson,
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const userId = getUserId(req)!;
+      const chatId = param(req.params, "chatId");
+      const messageId = param(req.params, "messageId");
+      try {
+        const result = await requestVoiceOrVideoNoteTranscription(userId, chatId, messageId);
+        res.json(result);
+      } catch (error) {
+        if (error instanceof MessagesServiceError) {
+          res.status(error.status).json({ message: error.message });
+          return;
+        }
+        console.error("[messages] POST transcribe failed", { chatId, messageId, userId, err: error });
+        throw error;
+      }
+    },
+  );
 }

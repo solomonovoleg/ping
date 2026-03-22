@@ -60,6 +60,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { useToast } from "@/hooks/use-toast";
 
 const ADMIN_ROLES = ["moderator", "admin", "super_admin"];
+type MediaPermissionState = PermissionState | "unknown";
 
 export default function Settings() {
   const { user, refetch } = useAuth();
@@ -83,6 +84,8 @@ export default function Settings() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [mediaPrimeBusy, setMediaPrimeBusy] = useState<null | "mic" | "cam">(null);
+  const [microphonePermission, setMicrophonePermission] = useState<MediaPermissionState>("unknown");
+  const [cameraPermission, setCameraPermission] = useState<MediaPermissionState>("unknown");
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -228,6 +231,33 @@ export default function Settings() {
     setTheme(newTheme);
   };
 
+  const readPermissionState = async (name: "microphone" | "camera"): Promise<MediaPermissionState> => {
+    if (typeof navigator === "undefined" || !navigator.permissions?.query) return "unknown";
+    try {
+      const status = await navigator.permissions.query({ name: name as PermissionName });
+      return status.state;
+    } catch {
+      return "unknown";
+    }
+  };
+
+  const refreshMediaPermissionStates = async () => {
+    const [micState, camState] = await Promise.all([
+      readPermissionState("microphone"),
+      readPermissionState("camera"),
+    ]);
+    setMicrophonePermission(micState);
+    setCameraPermission(camState);
+  };
+
+  useEffect(() => {
+    void refreshMediaPermissionStates();
+  }, []);
+
+  const getPermissionLabel = (state: MediaPermissionState) => (state === "granted" ? "Активно" : "Не активно");
+  const isMicrophoneActive = microphonePermission === "granted";
+  const isCameraAndMicActive = microphonePermission === "granted" && cameraPermission === "granted";
+
   const runPrimeMicrophone = async () => {
     setMediaPrimeBusy("mic");
     try {
@@ -251,6 +281,7 @@ export default function Settings() {
         });
       }
     } finally {
+      await refreshMediaPermissionStates();
       setMediaPrimeBusy(null);
     }
   };
@@ -278,6 +309,7 @@ export default function Settings() {
         });
       }
     } finally {
+      await refreshMediaPermissionStates();
       setMediaPrimeBusy(null);
     }
   };
@@ -474,40 +506,54 @@ export default function Settings() {
               Камера и микрофон
             </h3>
             <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm space-y-3">
-              <p className="text-sm leading-snug text-muted-foreground">
-                Браузер запоминает разрешение для этого сайта. Мы используем одинаковые настройки захвата для звонков,
-                голосовых и «голос → текст», чтобы система не спрашивала заново из‑за другого профиля микрофона. В
-                диалоге доступа выберите вариант с сохранением («Всегда разрешать» / «Разрешить для сайта»), если он
-                есть. В приложении PING доступ к камере запрашивается через систему один раз.
-              </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <Button
                   type="button"
                   variant="secondary"
-                  className="min-h-[var(--uix-touch-min)] justify-start gap-2 sm:flex-1"
+                  className="min-h-[var(--uix-touch-min)] justify-between gap-2 sm:flex-1"
                   disabled={mediaPrimeBusy !== null}
                   onClick={() => void runPrimeMicrophone()}
                 >
-                  {mediaPrimeBusy === "mic" ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                  ) : (
-                    <Mic className="h-4 w-4 shrink-0" aria-hidden />
-                  )}
-                  Разрешить микрофон
+                  <span className="flex items-center gap-2">
+                    {mediaPrimeBusy === "mic" ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <Mic className="h-4 w-4 shrink-0" aria-hidden />
+                    )}
+                    Микрофон
+                  </span>
+                  <span
+                    className={cn(
+                      "text-xs font-medium rounded-full px-2 py-0.5",
+                      isMicrophoneActive ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {getPermissionLabel(microphonePermission)}
+                  </span>
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
-                  className="min-h-[var(--uix-touch-min)] justify-start gap-2 sm:flex-1"
+                  className="min-h-[var(--uix-touch-min)] justify-between gap-2 sm:flex-1"
                   disabled={mediaPrimeBusy !== null}
                   onClick={() => void runPrimeCameraMic()}
                 >
-                  {mediaPrimeBusy === "cam" ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                  ) : (
-                    <Video className="h-4 w-4 shrink-0" aria-hidden />
-                  )}
-                  Камера + микрофон
+                  <span className="flex items-center gap-2">
+                    {mediaPrimeBusy === "cam" ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <Video className="h-4 w-4 shrink-0" aria-hidden />
+                    )}
+                    Камера + микрофон
+                  </span>
+                  <span
+                    className={cn(
+                      "text-xs font-medium rounded-full px-2 py-0.5",
+                      isCameraAndMicActive ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {isCameraAndMicActive ? "Активно" : "Не активно"}
+                  </span>
                 </Button>
               </div>
             </div>
@@ -842,6 +888,30 @@ export default function Settings() {
                 <span>Сейчас: {new Date().toISOString()} → локально {new Date().getHours().toString().padStart(2, "0")}:{new Date().getMinutes().toString().padStart(2, "0")}</span>
               </div>
             </div>
+          </div>
+
+          {/* Creator card */}
+          <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm mt-2">
+            <button
+              type="button"
+              onClick={() => setLocation("/profile/2")}
+              className="w-full flex items-center justify-between gap-3 p-3.5 hover:bg-secondary/50 transition-colors duration-75 active:scale-[0.99]"
+              aria-label="Открыть профиль участника id2"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <img
+                  src="/creator-oleg-solomonov.png"
+                  alt="Создатель Олег Соломнов"
+                  className="w-10 h-10 shrink-0 rounded-xl object-contain bg-transparent"
+                  loading="lazy"
+                />
+                <div className="min-w-0 text-left">
+                  <p className="text-sm font-medium text-foreground truncate">Создатель Олег Соломнов</p>
+                  <p className="text-xs text-muted-foreground truncate">Профиль участника id2</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
+            </button>
           </div>
 
           {/* Logout Button */}

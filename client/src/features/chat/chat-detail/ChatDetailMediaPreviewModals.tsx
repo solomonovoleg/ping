@@ -1,6 +1,7 @@
 import { Lock, ArrowUp } from "lucide-react";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { formatVideoNoteTime } from "./format-video-note-time";
+import { VIDEO_NOTE_MAX_DURATION_SEC } from "@/features/chat/constants";
 
 /** Полноэкранный предпросмотр голосового перед отправкой (не PULSE DM медиа-режим). */
 export function ChatDetailVoicePreviewModal({
@@ -89,13 +90,21 @@ export function ChatDetailVideoNoteModal({
   return (
     <div className="fixed inset-0 z-[140] bg-black/75 backdrop-blur-sm px-4 py-6 flex flex-col items-center justify-center">
       <div className="w-full max-w-sm rounded-3xl border border-white/15 bg-background/90 p-4 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-2">
           <p className="text-sm font-semibold">
             {phase === "recording" ? "Запись видеокружка" : "Просмотр видеокружка"}
           </p>
-          <span className="text-xs font-medium text-muted-foreground tabular-nums">
-            {formatVideoNoteTime(durationSec)}
-          </span>
+          <div className="flex flex-col items-end gap-0.5 text-right">
+            <span className="text-xs font-medium text-muted-foreground tabular-nums">
+              <span className="text-foreground/90">{formatVideoNoteTime(durationSec)}</span>
+              {phase === "recording" ? (
+                <span className="text-muted-foreground/80"> / {formatVideoNoteTime(VIDEO_NOTE_MAX_DURATION_SEC)}</span>
+              ) : null}
+            </span>
+            {phase === "recording" ? (
+              <span className="text-[10px] text-muted-foreground">Максимум {VIDEO_NOTE_MAX_DURATION_SEC} с</span>
+            ) : null}
+          </div>
         </div>
         {phase === "recording" && (
           <div className="mb-3 flex items-center justify-between rounded-xl border border-border/60 bg-muted/50 px-3 py-2 text-xs">

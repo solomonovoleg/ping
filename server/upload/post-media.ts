@@ -4,12 +4,13 @@ import { randomUUID } from "crypto";
 import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
-import { s3Configured, uploadToS3 } from "./s3";
+import { s3Configured, uploadToS3, uploadToS3WithKey } from "./s3";
 import { AVATAR_VIDEO_MAX_SECONDS, POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 import {
   transcodeStoryVideoBuffer,
   transcodeStoryVideoFileToPath,
   validateStoryVideoUpload,
+  type VideoTranscodeProfile,
   type VideoTranscodeTrim,
 } from "./story-video-transcode";
 
@@ -34,6 +35,10 @@ function parsePostVideoTrim(body: Record<string, unknown> | undefined): VideoTra
   if (!Number.isFinite(durationSec)) durationSec = cap;
   durationSec = Math.min(cap, Math.max(0.1, durationSec));
   return { startSec, durationSec, maxSegmentSec: cap };
+}
+
+function getVideoTranscodeProfile(trim: VideoTranscodeTrim | undefined): VideoTranscodeProfile {
+  return trim?.maxSegmentSec === AVATAR_VIDEO_MAX_SECONDS ? "avatar" : "default";
 }
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "posts");
@@ -131,6 +136,7 @@ export function registerPostMediaUploadRoutes(app: Express): void {
         const mediaKind = detectPostMediaKind(req.file);
         const videoTrim =
           mediaKind === "video" ? parsePostVideoTrim(req.body as Record<string, unknown>) : undefined;
+        const videoProfile = mediaKind === "video" ? getVideoTranscodeProfile(videoTrim) : "default";
         if (mediaKind === "video") {
           const videoErr = validateStoryVideoUpload(req.file);
           if (videoErr) {
@@ -143,13 +149,29 @@ export function registerPostMediaUploadRoutes(app: Express): void {
           let buffer: Buffer = req.file.buffer;
           let ext = path.extname(req.file.originalname) || ".jpg";
           let contentType = req.file.mimetype;
+          let posterBuffer: Buffer | undefined;
+          let posterExt = ".jpg";
+          let posterContentType = "image/jpeg";
           if (mediaKind === "video") {
-            const transcoded = await transcodeStoryVideoBuffer(buffer, ext, videoTrim);
+            const transcoded = await transcodeStoryVideoBuffer(buffer, ext, videoTrim, videoProfile);
             buffer = transcoded.buffer;
             ext = transcoded.ext;
             contentType = transcoded.contentType;
+            posterBuffer = transcoded.posterBuffer;
+            posterExt = transcoded.posterExt ?? posterExt;
+            posterContentType = transcoded.posterContentType ?? posterContentType;
           }
-          const url = await uploadToS3("posts", buffer, contentType, ext);
+          const url =
+            mediaKind === "video" && videoProfile === "avatar"
+              ? await (async () => {
+                  const objectBase = `posts/${randomUUID()}`;
+                  const videoUrl = await uploadToS3WithKey(`${objectBase}${ext}`, buffer, contentType);
+                  if (posterBuffer) {
+                    await uploadToS3WithKey(`${objectBase}${posterExt}`, posterBuffer, posterContentType);
+                  }
+                  return videoUrl;
+                })()
+              : await uploadToS3("posts", buffer, contentType, ext);
           res.status(201).json({ url });
           return;
         }
@@ -158,9 +180,9 @@ export function registerPostMediaUploadRoutes(app: Express): void {
         let filename = file.filename ?? "";
         if (mediaKind === "video" && file.path) {
           const sourcePath = file.path;
-          const transcodedPath = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR, videoTrim);
+          const transcoded = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR, videoTrim, videoProfile);
           fs.unlink(sourcePath, () => {});
-          filename = path.basename(transcodedPath);
+          filename = path.basename(transcoded.videoPath);
         }
         res.status(201).json({ url: `/uploads/posts/${filename}` });
       } catch (err) {

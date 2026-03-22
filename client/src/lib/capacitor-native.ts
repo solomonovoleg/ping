@@ -107,6 +107,38 @@ export function triggerLightHaptic(): void {
     .catch(() => {});
 }
 
+/** Выраженный позитивный отклик (успех операции). */
+export function triggerSuccessHaptic(): void {
+  if (!isNative()) return;
+  import("@capacitor/haptics")
+    .then((mod) => {
+      if (typeof (mod.Haptics as { notification?: (opts: { type: string }) => void }).notification === "function") {
+        (mod.Haptics as { notification: (opts: { type: string }) => void }).notification({
+          type: (mod as unknown as { NotificationType?: { Success?: string } }).NotificationType?.Success ?? "SUCCESS",
+        });
+      } else {
+        mod.Haptics.impact({ style: mod.ImpactStyle.Light });
+      }
+    })
+    .catch(() => {});
+}
+
+/** Выраженный негативный отклик (ошибка / отказ). */
+export function triggerErrorHaptic(): void {
+  if (!isNative()) return;
+  import("@capacitor/haptics")
+    .then((mod) => {
+      if (typeof (mod.Haptics as { notification?: (opts: { type: string }) => void }).notification === "function") {
+        (mod.Haptics as { notification: (opts: { type: string }) => void }).notification({
+          type: (mod as unknown as { NotificationType?: { Error?: string } }).NotificationType?.Error ?? "ERROR",
+        });
+      } else {
+        mod.Haptics.impact({ style: mod.ImpactStyle.Light });
+      }
+    })
+    .catch(() => {});
+}
+
 /** Самая мягкая вибрация — «выбор» (свайп экрана, отпускание pull-to-refresh). Ещё тоньше, чем Light. */
 export function triggerSelectionHaptic(): void {
   if (!isNative()) return;

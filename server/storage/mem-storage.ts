@@ -8,6 +8,8 @@ import type {
   CallParticipantHistory,
   CallTranscriptSegment,
   CallCommandSuggestion,
+  UserReminder,
+  VoiceTask,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { createUsersStore } from "./users-store";
@@ -43,6 +45,9 @@ const chatMemberPrefsMem = new Map<string, { pinnedAt: Date | null; hiddenAt: Da
 function chatMemberPrefsKey(userId: string, chatId: string): string {
   return `${userId}\t${chatId}`;
 }
+
+const memUserReminders: UserReminder[] = [];
+const memVoiceTasks: VoiceTask[] = [];
 
 export class MemStorage implements IStorage {
   private users = createUsersStore();
@@ -958,5 +963,59 @@ export class MemStorage implements IStorage {
       triggerType: data.triggerType,
       createdAt: new Date(),
     };
+  }
+
+  async createUserReminder(data: { userId: string; title: string; fireAt: Date }): Promise<UserReminder> {
+    const row: UserReminder = {
+      id: crypto.randomUUID(),
+      userId: data.userId,
+      title: data.title.trim() || "Напоминание",
+      fireAt: data.fireAt,
+      dismissedAt: null,
+      createdAt: new Date(),
+    };
+    memUserReminders.push(row);
+    return row;
+  }
+
+  async listDueUserReminders(userId: string, before: Date): Promise<UserReminder[]> {
+    return memUserReminders
+      .filter((r) => r.userId === userId && !r.dismissedAt && r.fireAt <= before)
+      .sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime())
+      .slice(0, 50);
+  }
+
+  async dismissUserReminder(userId: string, id: string): Promise<boolean> {
+    const row = memUserReminders.find((r) => r.id === id && r.userId === userId && !r.dismissedAt);
+    if (!row) return false;
+    row.dismissedAt = new Date();
+    return true;
+  }
+
+  async createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask> {
+    const row: VoiceTask = {
+      id: crypto.randomUUID(),
+      userId: data.userId,
+      title: data.title.trim() || "Задача",
+      doneAt: null,
+      createdAt: new Date(),
+    };
+    memVoiceTasks.push(row);
+    return row;
+  }
+
+  async listOpenVoiceTasks(userId: string, limit: number): Promise<VoiceTask[]> {
+    const lim = Math.min(100, Math.max(1, limit));
+    return memVoiceTasks
+      .filter((t) => t.userId === userId && !t.doneAt)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, lim);
+  }
+
+  async completeVoiceTask(userId: string, id: string): Promise<boolean> {
+    const row = memVoiceTasks.find((t) => t.id === id && t.userId === userId && !t.doneAt);
+    if (!row) return false;
+    row.doneAt = new Date();
+    return true;
   }
 }

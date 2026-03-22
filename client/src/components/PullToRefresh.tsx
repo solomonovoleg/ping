@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Loader2, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
@@ -62,10 +62,11 @@ export function PullToRefresh({
   const internalScrollRef = useRef<HTMLDivElement>(null);
   const effectiveScrollRef = scrollRef ?? internalScrollRef;
   const startYRef = useRef(0);
-  const startScrollTopRef = useRef(0);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealFiredRef = useRef(false);
+  const pullYRef = useRef(0);
+  pullYRef.current = pullY;
 
   useEffect(() => {
     if (!showScrollToTop) return;
@@ -119,42 +120,67 @@ export function PullToRefresh({
     };
   }, [pullY, refreshing, holdRevealMs, onHoldReveal]);
 
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (disabled) return;
-    revealFiredRef.current = false;
-    startYRef.current = e.touches[0].clientY;
-    startScrollTopRef.current = effectiveScrollRef.current?.scrollTop ?? 0;
-  }, [disabled]);
+  /**
+   * Нативные слушатели: React часто вешает touchmove как passive — тогда preventDefault не
+   * останавливает скролл, и pull-to-refresh в ленте «не цепляется». passive: false только на move.
+   */
+  useEffect(() => {
+    const el = effectiveScrollRef.current;
+    if (!el || disabled) return;
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (disabled || refreshing) return;
-    const scrollTop = effectiveScrollRef.current?.scrollTop ?? 0;
-    if (scrollTop > 2) return;
-    const y = e.touches[0].clientY;
-    const delta = y - startYRef.current;
-    if (delta <= 0) return;
-    const resisted = Math.min(delta * RESISTANCE, delta);
-    setPullY(resisted);
-  }, [disabled, refreshing]);
-
-  const handleTouchEnd = useCallback(() => {
-    if (refreshing) return;
-    if (revealFiredRef.current) {
+    const touchStart = (e: TouchEvent) => {
+      if (refreshing) return;
+      if (!e.touches[0]) return;
       revealFiredRef.current = false;
-      setPullY(0);
-      return;
-    }
-    if (pullY >= PULL_THRESHOLD) {
-      onPastThresholdRelease?.();
-      triggerSelectionHaptic();
-      setPullY(0);
-      setRefreshing(true);
-      Promise.resolve(onRefresh())
-        .finally(() => setRefreshing(false));
-    } else {
-      setPullY(0);
-    }
-  }, [onRefresh, onPastThresholdRelease, pullY, refreshing]);
+      startYRef.current = e.touches[0]?.clientY ?? 0;
+    };
+
+    const touchMove = (e: TouchEvent) => {
+      if (refreshing) return;
+      const scrollTop = el.scrollTop;
+      if (scrollTop > 2) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const delta = t.clientY - startYRef.current;
+      if (delta <= 0) return;
+      const resisted = Math.min(delta * RESISTANCE, delta);
+      if (scrollTop <= 0 && delta > 0) {
+        e.preventDefault();
+      }
+      setPullY(resisted);
+    };
+
+    const touchEnd = () => {
+      if (refreshing) return;
+      if (revealFiredRef.current) {
+        revealFiredRef.current = false;
+        setPullY(0);
+        return;
+      }
+      const py = pullYRef.current;
+      if (py >= PULL_THRESHOLD) {
+        onPastThresholdRelease?.();
+        void triggerSelectionHaptic();
+        setPullY(0);
+        setRefreshing(true);
+        Promise.resolve(onRefresh()).finally(() => setRefreshing(false));
+      } else {
+        setPullY(0);
+      }
+    };
+
+    el.addEventListener("touchstart", touchStart, { passive: true });
+    el.addEventListener("touchmove", touchMove, { passive: false });
+    el.addEventListener("touchend", touchEnd);
+    el.addEventListener("touchcancel", touchEnd);
+
+    return () => {
+      el.removeEventListener("touchstart", touchStart);
+      el.removeEventListener("touchmove", touchMove);
+      el.removeEventListener("touchend", touchEnd);
+      el.removeEventListener("touchcancel", touchEnd);
+    };
+  }, [disabled, refreshing, onRefresh, onPastThresholdRelease]);
 
   return (
     <div className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", className)}>
@@ -197,10 +223,6 @@ export function PullToRefresh({
           paddingTop: scrollPaddingTopPx,
           WebkitOverflowScrolling: "touch",
         }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={handleTouchEnd}
       >
         {children}
       </div>

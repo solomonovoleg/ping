@@ -32,6 +32,9 @@ export function resolveApiModule(pathRaw: string): string {
   if (path.startsWith("/api/call-transcripts")) return "call_transcripts";
   if (path.startsWith("/api/contacts")) return "contacts";
   if (path.startsWith("/api/platform")) return "platform";
+  if (path.startsWith("/api/pingok-micro")) return "pingok_micro";
+  if (path.startsWith("/api/reminders")) return "reminders";
+  if (path.startsWith("/api/service-chat")) return "service_chat";
   if (path.startsWith("/api/board")) return "board";
   if (path === "/api/build-info" || path.startsWith("/api/time")) return "core";
   if (/\/upload\/(voice|post-media|story-media|chat-media|avatar|cover)/.test(path)) return "upload";
@@ -68,6 +71,9 @@ export const MODULE_LABELS_RU: Record<string, string> = {
   reports: "Жалобы пользователей (API)",
   platform: "Платформа (публичные настройки)",
   board: "Доска",
+  pingok_micro: "ПИНГОК МИКРО (голос)",
+  reminders: "Напоминания (Пингок)",
+  service_chat: "Service Chat",
   core: "Служебные (время, build)",
   upload: "Загрузка медиа",
   other: "Прочее API",

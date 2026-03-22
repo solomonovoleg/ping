@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@source "../../ПИНГОК МИКРО/client/**/*.{ts,tsx}";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -843,6 +844,147 @@
   to {
     transform: scale(1);
     opacity: 1;
+  }
+}
+
+/* ─── ПИНГОК МИКРО — голосовой виджет (PULSE UIX) ─── */
+@keyframes pingok-ring-fill {
+  from {
+    stroke-dashoffset: 150.796;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pingok-ring-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+@keyframes pingok-hint-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+@keyframes pingok-mode-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(129, 140, 248, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(129, 140, 248, 0.28);
+  }
+}
+@keyframes pingok-v-bar {
+  0%,
+  100% {
+    transform: scaleY(0.22);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes pingok-v-bar-shimmer {
+  0%,
+  100% {
+    background-position: 0% 100%;
+  }
+  50% {
+    background-position: 0% 0%;
+  }
+}
+@keyframes pingok-v-aurora {
+  0%,
+  100% {
+    background-position: 0% 50%;
+    opacity: 0.55;
+  }
+  50% {
+    background-position: 100% 50%;
+    opacity: 0.8;
+  }
+}
+@keyframes pingok-v-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(700%);
+  }
+}
+@keyframes pingok-v-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pingok-v-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes pingok-v-check-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.pingok-ring-animate {
+  animation: pingok-ring-fill 2.8s linear forwards;
+}
+.pingok-voice-aurora {
+  animation: pingok-v-aurora 3.5s ease-in-out infinite;
+}
+.pingok-voice-sweep {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  animation: pingok-v-sweep 2.8s ease-in-out infinite;
+}
+.pingok-voice-v-in {
+  animation: pingok-v-in 0.3s ease forwards;
+}
+.pingok-voice-live-dot {
+  animation: pingok-v-dot 1.4s ease-in-out infinite;
+}
+.pingok-voice-check {
+  animation: pingok-v-check-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pingok-ring-animate {
+    animation: none;
+    stroke-dashoffset: 0 !important;
+  }
+  .pingok-voice-aurora,
+  .pingok-voice-sweep,
+  .pingok-voice-live-dot,
+  .pingok-voice-check,
+  .pingok-voice-v-in,
+  .pingok-voice-bar {
+    animation: none !important;
   }
 }
 

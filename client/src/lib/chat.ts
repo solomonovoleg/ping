@@ -50,6 +50,22 @@ export async function getMessages(
   return Array.isArray(data) ? data : [];
 }
 
+/** Расшифровка голосового или видеокружка по запросу из меню сообщения. */
+export async function transcribeVoiceOrVideoNoteMessage(
+  chatId: string,
+  messageId: string,
+): Promise<{ transcript: string }> {
+  const res = await apiFetch(
+    `${API}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/transcribe`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось расшифровать");
+  }
+  return res.json() as Promise<{ transcript: string }>;
+}
+
 export type SearchMessageHit = {
   messageId: string;
   chatId: string;
@@ -119,6 +135,33 @@ export async function patchChatMemberMe(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { message?: string }).message || "Не удалось сохранить");
+  }
+}
+
+export type ServiceChatThreadMeta = {
+  id: string;
+  hostUserId: string;
+  targetUserId: string;
+  localRepliesEnabled: boolean;
+  globalRepliesAllowed: boolean;
+};
+
+export async function getServiceChatThread(chatId: string): Promise<ServiceChatThreadMeta | null> {
+  const res = await apiFetch(`${API}/service-chat/chats/${encodeURIComponent(chatId)}`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { thread?: ServiceChatThreadMeta | null };
+  return data.thread ?? null;
+}
+
+export async function setServiceChatLocalReplies(chatId: string, enabled: boolean): Promise<void> {
+  const res = await apiFetch(`${API}/service-chat/chats/${encodeURIComponent(chatId)}/local-replies`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось изменить обратную связь");
   }
 }
 

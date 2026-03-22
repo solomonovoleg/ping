@@ -3,6 +3,7 @@ import { Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-base";
 import { TapScaleButton } from "@/components/ui/tap-scale";
+import { useOfflineResolvedMediaUrl } from "@/hooks/useOfflineResolvedMediaUrl";
 
 const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
 const SPEED_STORAGE_KEY = "ping:voice-speed";
@@ -85,6 +86,7 @@ export function VoiceMessagePlayer({
   onEnded: onEndedProp,
   autoPlay,
 }: Props) {
+  const mediaSrc = useOfflineResolvedMediaUrl(src, { autoCache: true });
   const audioRef = useRef<HTMLAudioElement>(null);
   const blobUrlRef = useRef<string | null>(null);
   const hasSetSrcRef = useRef(false);
@@ -114,8 +116,8 @@ export function VoiceMessagePlayer({
     el.removeAttribute("src");
     el.load();
     // Загружаем метаданные сразу, чтобы показать длительность до воспроизведения
-    if (src) {
-      el.src = src;
+    if (mediaSrc) {
+      el.src = mediaSrc;
       hasSetSrcRef.current = true;
       // Safari/iOS иногда не подтягивает duration до явного load().
       el.load();
@@ -186,22 +188,22 @@ export function VoiceMessagePlayer({
         blobUrlRef.current = null;
       }
     };
-  }, [src]);
+  }, [mediaSrc, src]);
 
   const setAudioSrc = useCallback(async (): Promise<boolean> => {
     const el = audioRef.current;
-    if (!el || !src) return false;
+    if (!el || !mediaSrc) return false;
     if (hasSetSrcRef.current) return true;
     try {
       // Prefer native media loading via <audio src>, avoids CORS/auth fetch issues on iOS/Capacitor.
-      el.src = src;
+      el.src = mediaSrc;
       hasSetSrcRef.current = true;
       return true;
     } catch {
       setLoadError(true);
       return false;
     }
-  }, [src]);
+  }, [mediaSrc]);
 
   const togglePlay = useCallback(async () => {
     const el = audioRef.current;

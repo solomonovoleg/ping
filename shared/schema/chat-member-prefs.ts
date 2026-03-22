@@ -27,5 +27,5 @@ export type ChatMemberPrefs = typeof chatMemberPrefs.$inferSelect;
 export type InsertChatMemberPrefs = typeof chatMemberPrefs.$inferInsert;
 
 /** Допустимые значения list_section для API */
-export const CHAT_LIST_SECTIONS = ["general", "friends", "work", "promo"] as const;
+export const CHAT_LIST_SECTIONS = ["general", "friends", "work", "promo", "invitations"] as const;
 export type ChatListSection = (typeof CHAT_LIST_SECTIONS)[number];

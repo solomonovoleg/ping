@@ -18,6 +18,7 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { PlatformAnnouncementBar } from "@/features/admin-ops/PlatformAnnouncementBar";
 import { usePreferPhoneChrome } from "@/hooks/use-prefer-phone-chrome";
+import { usePingokRemindersPoll } from "@/hooks/usePingokRemindersPoll";
 
 import feedIcon from "@/assets/images/feed-icon.png";
 import { NavPulseCenterLogoButton } from "@pingok-micro/NavPulseCenterLogoButton";
@@ -28,6 +29,7 @@ const PULSE_NAV_LOGO_SRC = "/F-PING.png?v=6";
 /** Порядок вкладок для свайпа: Чаты → Лента → Борд */
 const SWIPEABLE_PATHS = ["/", "/posts", "/board"] as const;
 const SWIPE_THRESHOLD_PX = 56;
+const SWIPE_EDGE_START_PX = 28;
 const SWIPE_ANIMATION_MS = 320;
 
 interface AppLayoutProps {
@@ -66,10 +68,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const queryClient = useQueryClient();
   const reducedMotion = usePrefersReducedMotion();
   const preferPhoneChrome = usePreferPhoneChrome();
+  usePingokRemindersPoll(Boolean(user?.id));
 
   // Мягкие свайпы между экранами: направление анимации (null = по тапу в навбаре)
   const [transitionDirection, setTransitionDirection] = useState<"left" | "right" | null>(null);
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number; edge: "left" | "right" | "none" } | null>(
+    null
+  );
 
   const basePath = location.split("?")[0];
   const contentKey = basePath;
@@ -101,7 +106,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
     (e: React.TouchEvent) => {
       if (!isSwipeable) return;
       const t = e.touches[0];
-      touchStartRef.current = { x: t.clientX, y: t.clientY };
+      const w = window.innerWidth || document.documentElement.clientWidth || 0;
+      const edge =
+        t.clientX <= SWIPE_EDGE_START_PX
+          ? "left"
+          : t.clientX >= w - SWIPE_EDGE_START_PX
+            ? "right"
+            : "none";
+      touchStartRef.current = { x: t.clientX, y: t.clientY, edge };
     },
     [isSwipeable]
   );
@@ -109,10 +121,18 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const onTouchEnd = useCallback(
     (e: React.TouchEvent) => {
       if (!isSwipeable || !touchStartRef.current) return;
+      if (touchStartRef.current.edge === "none") {
+        touchStartRef.current = null;
+        return;
+      }
       const t = e.changedTouches[0];
       const deltaX = t.clientX - touchStartRef.current.x;
       const deltaY = t.clientY - touchStartRef.current.y;
+      const edge = touchStartRef.current.edge;
       touchStartRef.current = null;
+      // Global page swipe only from edge and only in matching direction:
+      // left edge -> swipe right (back), right edge -> swipe left (next).
+      if ((deltaX > 0 && edge !== "left") || (deltaX < 0 && edge !== "right")) return;
       handleSwipeEnd(deltaX, deltaY);
     },
     [isSwipeable, handleSwipeEnd]

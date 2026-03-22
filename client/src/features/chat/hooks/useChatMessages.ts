@@ -13,6 +13,12 @@ import {
 } from "@/lib/chat-outbox";
 import { getDraft } from "@/lib/chat-drafts";
 import { API, apiFetch } from "@/lib/api-base";
+import {
+  getOfflineChatDetails,
+  getOfflineMessages,
+  saveOfflineChatDetails,
+  saveOfflineMessages,
+} from "@/lib/chat-offline-store";
 import { isUuid } from "../utils/format";
 import { parseMessageDate } from "../utils/format";
 import { MESSAGES_PAGE, CHAT_LOAD_TIMEOUT_MS } from "../constants";
@@ -107,6 +113,33 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     setLoading(true);
     setError(null);
     currentChatIdRef.current = id;
+    let offlineSnapshotApplied = false;
+
+    if (isUuid(id)) {
+      void (async () => {
+        const details = await getOfflineChatDetails(id);
+        const offlineFolderId = details.currentFolderId ?? details.folders.find((folder) => folder.isMain)?.id ?? null;
+        const offlineMessages = await getOfflineMessages(id, offlineFolderId);
+        if (currentChatIdRef.current !== id) return;
+        if (!details.chat) return;
+        offlineSnapshotApplied = true;
+        setResolvedChatId(id);
+        setChat(details.chat);
+        setFolders(details.folders);
+        setCurrentFolderId(offlineFolderId);
+        setHasMoreMessages(offlineMessages.length >= MESSAGES_PAGE);
+        if (user?.id) {
+          void mergeOutboxIntoServerList(id, user.id, offlineMessages, offlineFolderId).then((merged) => {
+            if (currentChatIdRef.current === id) setMessages(merged);
+          });
+        } else {
+          setMessages(offlineMessages);
+        }
+        const draft = getDraft(id) ?? "";
+        onDraftRestoreRef.current?.(id, draft);
+        setLoading(false);
+      })();
+    }
 
     const fetchWithTimeout = (url: string, opts?: RequestInit) =>
       Promise.race([
@@ -120,6 +153,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       const url = `${API}/chats/dm-by-public-id/${encodeURIComponent(id)}?limit=${MESSAGES_PAGE}`;
       const safetyTimeout = setTimeout(() => {
         if (currentChatIdRef.current === id) {
+          if (offlineSnapshotApplied) return;
           setLoading(false);
           setError("Загрузка прервана. Проверьте интернет и нажмите «Повторить».");
         }
@@ -128,16 +162,18 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         .then(async (res) => {
           if (currentChatIdRef.current !== id) return;
           if (!res.ok) {
-            setChat(null);
-            setMessages([]);
-            const statusFallback =
-              res.status === 401 ? "Сессия истекла. Войдите снова."
-              : res.status === 404 ? "Пользователь не найден"
-              : res.status === 429
-                ? "Слишком много открытий чатов за короткое время. Подождите минуту."
-              : "Не удалось загрузить чат";
-            const errMsg = await readApiErrorMessage(res, statusFallback);
-            setError(errMsg);
+            if (!offlineSnapshotApplied) {
+              setChat(null);
+              setMessages([]);
+              const statusFallback =
+                res.status === 401 ? "Сессия истекла. Войдите снова."
+                : res.status === 404 ? "Пользователь не найден"
+                : res.status === 429
+                  ? "Слишком много открытий чатов за короткое время. Подождите минуту."
+                : "Не удалось загрузить чат";
+              const errMsg = await readApiErrorMessage(res, statusFallback);
+              setError(errMsg);
+            }
             setLoading(false);
             return;
           }
@@ -155,7 +191,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           const chatData = "chat" in data && data.chat ? data.chat : (data as ApiChat);
           const cId = chatData?.id;
           if (!cId || typeof cId !== "string") {
-            setError("Не удалось открыть чат");
+            if (!offlineSnapshotApplied) setError("Не удалось открыть чат");
             setLoading(false);
             return;
           }
@@ -170,18 +206,22 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           } else {
             setMessages(list);
           }
+          void saveOfflineChatDetails(cId, chatData, [], null);
+          void saveOfflineMessages(cId, null, list);
           const draft = getDraft(cId) ?? "";
           onDraftRestoreRef.current?.(cId, draft);
         })
         .catch((e) => {
           if (currentChatIdRef.current === id) {
-            setError(e?.message === "timeout" ? "Превышено время ожидания. Проверьте интернет." : "Ошибка загрузки");
-            setLoading(false);
+            if (!offlineSnapshotApplied) {
+              setError(e?.message === "timeout" ? "Превышено время ожидания. Проверьте интернет." : "Ошибка загрузки");
+              setLoading(false);
+            }
           }
         })
         .finally(() => {
           clearTimeout(safetyTimeout);
-          if (currentChatIdRef.current === id) setLoading(false);
+          if (currentChatIdRef.current === id && !offlineSnapshotApplied) setLoading(false);
         });
       return;
     }
@@ -194,12 +234,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       .then(async ([chatRes, foldersRes]) => {
         if (currentChatIdRef.current !== id) return;
         if (!chatRes.ok) {
-          setChat(null);
-          setMessages([]);
-          setFolders([]);
-          setCurrentFolderId(null);
-          const fb = chatRes.status === 404 ? "Чат не найден" : "Не удалось загрузить чат";
-          setError(await readApiErrorMessage(chatRes, fb));
+          if (!offlineSnapshotApplied) {
+            setChat(null);
+            setMessages([]);
+            setFolders([]);
+            setCurrentFolderId(null);
+            const fb = chatRes.status === 404 ? "Чат не найден" : "Не удалось загрузить чат";
+            setError(await readApiErrorMessage(chatRes, fb));
+          }
           setLoading(false);
           return;
         }
@@ -257,15 +299,17 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
             setMessages(arr);
           }
         }
+        void saveOfflineChatDetails(id, chatData, foldersList, folderId);
+        void saveOfflineMessages(id, folderId, list);
         if (currentChatIdRef.current !== id) return;
         const draft = getDraft(id) ?? "";
         onDraftRestoreRef.current?.(id, draft);
       })
       .catch(() => {
-        if (currentChatIdRef.current === id) setError("Ошибка загрузки");
+        if (currentChatIdRef.current === id && !offlineSnapshotApplied) setError("Ошибка загрузки");
       })
       .finally(() => {
-        if (currentChatIdRef.current === id) setLoading(false);
+        if (currentChatIdRef.current === id && !offlineSnapshotApplied) setLoading(false);
       });
   }, [chatIdParam, user?.id]);
 
@@ -342,8 +386,18 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
             setMessages(arr);
           }
         }
+        void saveOfflineMessages(chatId, folderId, list);
       } catch {
-        if (currentChatIdRef.current === chatId) setError("Не удалось загрузить сообщения");
+        const cachedMessages = await getOfflineMessages(chatId, folderId);
+        if (currentChatIdRef.current === chatId) {
+          if (cachedMessages.length > 0) {
+            setMessages(cachedMessages);
+            setHasMoreMessages(cachedMessages.length >= MESSAGES_PAGE);
+            setError(null);
+          } else {
+            setError("Не удалось загрузить сообщения");
+          }
+        }
       } finally {
         if (currentChatIdRef.current === chatId) setLoading(false);
       }
@@ -377,6 +431,16 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   useEffect(() => {
     loadChatAndMessages();
   }, [loadChatAndMessages]);
+
+  useEffect(() => {
+    if (!chatId || !chat) return;
+    void saveOfflineChatDetails(chatId, chat, folders, currentFolderId);
+  }, [chatId, chat, folders, currentFolderId]);
+
+  useEffect(() => {
+    if (!chatId) return;
+    void saveOfflineMessages(chatId, currentFolderId, messages);
+  }, [chatId, currentFolderId, messages]);
 
   // При выходе из чата: обновить список чатов (без PUT /read без messageId — иначе ложные «прочитано»).
   useEffect(() => {

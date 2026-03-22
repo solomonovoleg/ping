@@ -194,6 +194,7 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
       if (process.env.DATABASE_URL) {
         const { processScheduledMessages } = require("./messages/service");
+        const { processServiceChatWorker } = require("./service-chat/worker");
         setInterval(async () => {
           try {
             const n = await processScheduledMessages();
@@ -202,6 +203,14 @@ app.use((req, res, next) => {
             console.warn("[scheduled] worker error:", e);
           }
         }, 60_000);
+        setInterval(async () => {
+          try {
+            const n = await processServiceChatWorker();
+            if (n > 0) log(`[service-chat] sent ${n} step(s)`);
+          } catch (e) {
+            console.warn("[service-chat] worker error:", e);
+          }
+        }, 10_000);
       }
     },
   );

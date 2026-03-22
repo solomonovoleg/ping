@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   Activity,
   HardDrive,
+  MessageSquareText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/lib/auth";
@@ -37,6 +38,7 @@ const NAV = [
   { path: "/admin/referrals", label: "Пригласительные", icon: Ticket },
   { path: "/admin/admins", label: "Админы", icon: Shield },
   { path: "/admin/settings", label: "Настройки", icon: Settings },
+  { path: "/admin/service-chat", label: "Service Chat", icon: MessageSquareText },
   { path: "/admin/ops", label: "Операции", icon: SlidersHorizontal },
   { path: "/admin/audit", label: "Аудит", icon: History },
 ];

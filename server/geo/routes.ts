@@ -9,7 +9,8 @@ export function registerGeoRoutes(app: Express): void {
       const suggestions = await fetchCitySuggestions(q);
       res.setHeader("Cache-Control", "private, max-age=120");
       res.json({ suggestions });
-    } catch {
+    } catch (err) {
+      console.warn("[geo] city-suggest failed:", err);
       res.json({ suggestions: [] });
     }
   });

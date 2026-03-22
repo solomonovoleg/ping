@@ -95,6 +95,7 @@ const BoardTracksList = lazyWithRetry(() => import("@/features/board/tracks/Trac
 const BoardTracksDetail = lazyWithRetry(() => import("@/pages/BoardTracksDetail"), "board-tracks-detail");
 const Settings = lazyWithRetry(() => import("@/pages/Settings"), "settings");
 const SavedMessages = lazyWithRetry(() => import("@/pages/SavedMessages"), "saved-messages");
+const EdgeCompanion = lazyWithRetry(() => import("@/pages/EdgeCompanion"), "edge-companion");
 const Subscribers = lazyWithRetry(() => import("@/pages/Subscribers"), "subscribers");
 const FollowersList = lazyWithRetry(() => import("@/pages/FollowersList"), "followers-list");
 const Notifications = lazyWithRetry(() => import("@/pages/Notifications"), "notifications");
@@ -159,6 +160,7 @@ function Router() {
           <Route path="/board" component={Board} />
           <Route path="/settings" component={Settings} />
           <Route path="/saved" component={SavedMessages} />
+          <Route path="/edge/companion" component={EdgeCompanion} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>
@@ -237,6 +239,7 @@ function App() {
             <Route path="/admin/referrals" component={AdminApp} />
             <Route path="/admin/admins" component={AdminApp} />
             <Route path="/admin/settings" component={AdminApp} />
+            <Route path="/admin/service-chat" component={AdminApp} />
             <Route path="/admin/audit" component={AdminApp} />
             <Route path="/admin/ops" component={AdminApp} />
             <Route path="/admin/monitors" component={AdminApp} />

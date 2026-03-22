@@ -8,6 +8,7 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { cn } from "@/lib/utils";
 import { playPulseUiTone } from "@/lib/chat-pulse-ui-sound";
 import type { VoiceRecorderState } from "@/hooks/useVoiceRecorder";
+import { VIDEO_NOTE_MAX_DURATION_SEC } from "@/features/chat/constants";
 
 const BARS: number[] = Array.from({ length: 40 }, (_, i) =>
   3 + Math.abs(Math.sin(i * 0.6 + 1.3) * 10 + Math.sin(i * 1.7) * 4),
@@ -434,7 +435,10 @@ export function PulseDmComposerMedia({
           <span className="text-[11px] font-medium" style={{ color: acc }}>
             Запись видеокружка
           </span>
-          <span className="font-mono text-[11px] tabular-nums text-white/45">{formatClock(videoNoteDurationSec)}</span>
+          <span className="font-mono text-[11px] tabular-nums text-white/45">
+            <span className="text-white/70">{formatClock(videoNoteDurationSec)}</span>
+            <span className="text-white/30"> / {formatClock(VIDEO_NOTE_MAX_DURATION_SEC)}</span>
+          </span>
         </div>
         <div className="mb-2 flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px]">
           {videoNoteLocked ? (

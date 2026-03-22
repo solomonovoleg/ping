@@ -16,3 +16,6 @@ export const GROUP_GAP_MIN_MS = 5 * 60 * 1000;
 
 export const MESSAGES_PAGE = 50;
 export const CHAT_LOAD_TIMEOUT_MS = 15000;
+
+/** Максимальная длительность одного видеокружка при записи в чате (сек). */
+export const VIDEO_NOTE_MAX_DURATION_SEC = 60;

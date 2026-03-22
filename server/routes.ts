@@ -39,6 +39,10 @@ import { registerOpsPlatformPublicRoute } from "./admin/ops/platform.public-http
 import { registerOpsUserReportsRoute } from "./admin/ops/reports.user-http";
 import { registerGeoRoutes } from "./geo/routes";
 import { registerProfilePinsRoutes } from "./profile-pins/routes";
+import { registerPingokMicroRoutes } from "./pingok-micro/routes";
+import { registerRemindersRoutes } from "./reminders/routes";
+import { registerServiceChatRoutes } from "./service-chat/routes";
+import { registerEdgeRoutes } from "./edge/routes";
 import {
   apiTrafficRecordMiddleware,
   createApiShieldMutationLimiter,
@@ -71,7 +75,13 @@ export async function registerRoutes(
   // CORS для /uploads не перезаписываем: глобальный CORS уже выставил Allow-Origin (origin или capacitor://localhost при Bearer).
   // Раньше здесь ставили "*", из-за чего в приложении с Bearer браузер отклонял ответ (с credentials нельзя *).
   ensureUploadsDirs();
-  app.use("/uploads", express.static(UPLOADS_ROOT));
+  app.use(
+    "/uploads",
+    express.static(UPLOADS_ROOT, {
+      immutable: true,
+      maxAge: "365d",
+    })
+  );
 
   // Сессия должна быть ДО любых маршрутов с requireAuth, иначе req.session не заполняется → 401 на /api/calls/token и др.
   setupSession(app);
@@ -114,6 +124,10 @@ export async function registerRoutes(
   registerOpsPlatformPublicRoute(app);
 
   registerAuthRoutes(app);
+  registerPingokMicroRoutes(app);
+  registerRemindersRoutes(app);
+  registerServiceChatRoutes(app);
+  registerEdgeRoutes(app);
   registerOpsUserReportsRoute(app);
   registerAdminRoutes(app);
   registerReferralRoutes(app);

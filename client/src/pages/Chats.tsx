@@ -21,6 +21,7 @@ import {
   Trash2,
   Briefcase,
   Megaphone,
+  Inbox,
   Heart,
   LayoutList,
   Sparkles,
@@ -68,6 +69,9 @@ import {
   patchChatMemberMe,
   deleteChatForMe,
   deleteChatForEveryone,
+  getServiceChatThread,
+  setServiceChatLocalReplies,
+  type ServiceChatThreadMeta,
   type SearchMessageHit,
 } from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
@@ -92,6 +96,7 @@ import {
   EASING_OUT_BEZIER,
 } from "@/lib/motion";
 import { formatTimeLocal, formatDateShortLocal, parseServerTimestamp } from "@/lib/timezone";
+import { getOfflineChatList, saveOfflineChatList } from "@/lib/chat-offline-store";
 
 /** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM» (локальное время). */
 function formatLastSeen(iso: string | null | undefined): string | null {
@@ -109,15 +114,29 @@ function formatLastSeen(iso: string | null | undefined): string | null {
 }
 
 async function fetchChats(): Promise<ApiChat[]> {
-  const res = await apiFetch(`${API}/chats`, { cache: "no-store" });
-  if (!res.ok) throw new Error("Не удалось загрузить чаты");
-  return res.json();
+  try {
+    const res = await apiFetch(`${API}/chats`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Не удалось загрузить чаты");
+    const chats = (await res.json()) as ApiChat[];
+    void saveOfflineChatList("all", Array.isArray(chats) ? chats : []);
+    return Array.isArray(chats) ? chats : [];
+  } catch {
+    const cached = await getOfflineChatList("all");
+    if (cached.length > 0) return cached;
+    throw new Error("Не удалось загрузить чаты");
+  }
 }
 
 async function fetchHiddenChats(): Promise<ApiChat[]> {
-  const res = await apiFetch(`${API}/chats?hidden=1`, { cache: "no-store" });
-  if (!res.ok) throw new Error("Не удалось загрузить скрытые чаты");
-  return res.json();
+  try {
+    const res = await apiFetch(`${API}/chats?hidden=1`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Не удалось загрузить скрытые чаты");
+    const chats = (await res.json()) as ApiChat[];
+    void saveOfflineChatList("hidden", Array.isArray(chats) ? chats : []);
+    return Array.isArray(chats) ? chats : [];
+  } catch {
+    return getOfflineChatList("hidden");
+  }
 }
 
 /** Согласованно с бейджем в списке: число и/или флаг с сервера. */
@@ -145,6 +164,7 @@ const LIST_SECTION_TABS = [
   { id: "friends" as const, label: "Друзья", icon: Heart },
   { id: "work" as const, label: "Работа", icon: Briefcase },
   { id: "promo" as const, label: "Реклама", icon: Megaphone },
+  { id: "invitations" as const, label: "Приглашения", icon: Inbox },
 ];
 
 function formatChatTime(createdAt: string): string {
@@ -287,6 +307,11 @@ const ChatRow = memo(function ChatRow({
         window.setTimeout(() => {
           blockClickRef.current = false;
         }, 500);
+        try {
+          window.getSelection()?.removeAllRanges();
+        } catch {
+          /* ignore */
+        }
         triggerContextMenuOpenFeedback();
         onLongPressMenu();
       }, CHAT_SERVICE_MENU_LONG_PRESS_MS);
@@ -415,6 +440,8 @@ const ChatRow = memo(function ChatRow({
         onPointerCancel={clearLongPress}
         className={cn(
           "uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors duration-75 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5",
+          /* Long-press меню: без этого WebKit даёт выделение/«копировать» вместо жеста */
+          "select-none [-webkit-touch-callout:none]",
           "border-border/20 hover:bg-secondary/40 touch-pan-y",
           suppressUnreadVisual
             ? "border-dashed border-border/35 bg-card/45 opacity-[0.92] hover:bg-secondary/35 dark:bg-card/40"
@@ -474,10 +501,12 @@ export default function Chats() {
     refetchOnMount: "always",
   });
 
-  const [listSectionTab, setListSectionTab] = useState<"all" | "friends" | "work" | "promo">("all");
+  const [listSectionTab, setListSectionTab] = useState<"all" | "friends" | "work" | "promo" | "invitations">("all");
   /** Полоса скрытых чатов вверху списка после pull-to-refresh (если есть скрытые). */
   const [hiddenPeekOpen, setHiddenPeekOpen] = useState(false);
   const [serviceMenuChat, setServiceMenuChat] = useState<ApiChat | null>(null);
+  const [serviceThreadMeta, setServiceThreadMeta] = useState<ServiceChatThreadMeta | null>(null);
+  const [serviceThreadLoading, setServiceThreadLoading] = useState(false);
   const [confirmDeleteAllChat, setConfirmDeleteAllChat] = useState<ApiChat | null>(null);
   const [confirmLeaveChat, setConfirmLeaveChat] = useState<ApiChat | null>(null);
   /** Удаление из диалога — кнопка без авто-закрытия Radix Action, чтобы дождаться API. */
@@ -647,7 +676,10 @@ export default function Chats() {
   }, [hasCustomListSections, listSectionTab]);
 
   const filteredBySection = useMemo(() => {
-    if (listSectionTab === "all") return filteredChats;
+    if (listSectionTab === "all") {
+      // Service chats stay in dedicated section only.
+      return filteredChats.filter((c) => (c.listSection ?? "general") !== "invitations");
+    }
     return filteredChats.filter((c) => (c.listSection ?? "general") === listSectionTab);
   }, [filteredChats, listSectionTab]);
 
@@ -695,6 +727,19 @@ export default function Chats() {
     setServiceMenuChat(null);
     requestAnimationFrame(() => setConfirmDeleteAllChat(c));
   }, []);
+
+  useEffect(() => {
+    if (!serviceMenuChat) {
+      setServiceThreadMeta(null);
+      setServiceThreadLoading(false);
+      return;
+    }
+    setServiceThreadLoading(true);
+    getServiceChatThread(serviceMenuChat.id)
+      .then((meta) => setServiceThreadMeta(meta))
+      .catch(() => setServiceThreadMeta(null))
+      .finally(() => setServiceThreadLoading(false));
+  }, [serviceMenuChat]);
 
   const runDeleteLeave = useCallback(async () => {
     const chat = confirmLeaveChat;
@@ -1387,6 +1432,32 @@ export default function Chats() {
             {serviceMenuChat ? (
               <>
                 <div className="space-y-2">
+                {serviceThreadMeta && serviceThreadMeta.hostUserId === user?.id ? (
+                  <TapScaleButton
+                    type="button"
+                    className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium leading-snug text-foreground shadow-sm shadow-black/[0.04] dark:shadow-black/25 disabled:opacity-60"
+                    subtle
+                    disabled={serviceThreadLoading}
+                    onClick={async () => {
+                      if (!serviceMenuChat || !serviceThreadMeta) return;
+                      const next = !serviceThreadMeta.localRepliesEnabled;
+                      try {
+                        await setServiceChatLocalReplies(serviceMenuChat.id, next);
+                        setServiceThreadMeta({ ...serviceThreadMeta, localRepliesEnabled: next });
+                        toast({ title: next ? "Обратная связь включена локально" : "Локальная обратная связь отключена" });
+                      } catch (e) {
+                        toast({
+                          title: "Не удалось",
+                          description: e instanceof Error ? e.message : "Ошибка",
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                  >
+                    <MessageCircle className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                    {serviceThreadMeta.localRepliesEnabled ? "Отключить локальные ответы" : "Включить локальные ответы"}
+                  </TapScaleButton>
+                ) : null}
                 <TapScaleButton
                   type="button"
                   className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium leading-snug text-foreground shadow-sm shadow-black/[0.04] dark:shadow-black/25"
@@ -1463,6 +1534,7 @@ export default function Chats() {
                       { id: "friends", label: "Друзья" },
                       { id: "work", label: "Работа" },
                       { id: "promo", label: "Реклама" },
+                      { id: "invitations", label: "Приглашения" },
                     ] as const
                   ).map((s) => {
                     const selected = (serviceMenuChat.listSection ?? "general") === s.id;

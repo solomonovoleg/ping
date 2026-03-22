@@ -17,6 +17,8 @@ import type {
   CallParticipantHistory,
   CallTranscriptSegment,
   CallCommandSuggestion,
+  UserReminder,
+  VoiceTask,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 
@@ -321,4 +323,14 @@ export interface IStorage {
     newConfidence: number;
     triggerType: string;
   }): Promise<ChatVibeHistoryEntry>;
+
+  /** Напоминания (ПИНГОК / будильник in-app) */
+  createUserReminder(data: { userId: string; title: string; fireAt: Date }): Promise<UserReminder>;
+  listDueUserReminders(userId: string, before: Date): Promise<UserReminder[]>;
+  dismissUserReminder(userId: string, id: string): Promise<boolean>;
+
+  /** Голосовые задачи */
+  createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask>;
+  listOpenVoiceTasks(userId: string, limit: number): Promise<VoiceTask[]>;
+  completeVoiceTask(userId: string, id: string): Promise<boolean>;
 }

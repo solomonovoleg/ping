@@ -34,6 +34,12 @@ function isVideoAvatarUrl(url: string): boolean {
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
 }
 
+function getVideoAvatarPosterUrl(url: string): string | undefined {
+  const trimmed = url.trim();
+  if (!trimmed || !isVideoAvatarUrl(trimmed)) return undefined;
+  return trimmed.replace(/\.(mp4|webm|mov|m4v)(\?[^#]*)?$/i, ".jpg$2");
+}
+
 export type UserAvatarProps = {
   /** URL картинки аватара; если нет — показывается векторный аватар по умолчанию */
   avatarUrl?: string | null;
@@ -77,6 +83,7 @@ export function UserAvatar({
   const [videoError, setVideoError] = useState(false);
   const resolvedUrl = avatarUrl?.trim() ? resolveUrl(avatarUrl.trim()) : "";
   const isVideo = resolvedUrl ? isVideoAvatarUrl(resolvedUrl) : false;
+  const posterUrl = resolvedUrl ? getVideoAvatarPosterUrl(resolvedUrl) : undefined;
   const reducedMotion = usePrefersReducedMotion();
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -102,6 +109,7 @@ export function UserAvatar({
 
   const showImage = resolvedUrl && !isVideo && !imageError;
   const showVideo = Boolean(resolvedUrl && isVideo && !videoError);
+  const videoPreload = size >= 48 ? "auto" : "metadata";
 
   const useSeamlessAvatarLoop = !reducedMotion && showVideo;
   useSeamlessVideoLoop(videoRef, { enabled: useSeamlessAvatarLoop, srcKey: resolvedUrl });
@@ -140,10 +148,12 @@ export function UserAvatar({
         src={resolvedUrl}
         className={cn(shapeClass, !showOnlineIndicator && className)}
         style={{ width: size, height: size, ...radiusStyle }}
+        autoPlay={!reducedMotion}
         muted
         playsInline
         loop={!reducedMotion && !useSeamlessAvatarLoop}
-        preload="metadata"
+        preload={videoPreload}
+        poster={posterUrl}
         aria-label={ariaLabel}
         onError={() => setVideoError(true)}
       />

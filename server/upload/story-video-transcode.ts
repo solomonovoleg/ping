@@ -11,12 +11,18 @@ const VIDEO_MIME_RE = /^video\//i;
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|mkv|avi|m4v|3gp|wmv|flv|ts|m2ts|mts|ogv|mpeg|mpg)$/i;
 const OUTPUT_CONTENT_TYPE = "video/mp4";
 const OUTPUT_EXT = ".mp4";
+const POSTER_CONTENT_TYPE = "image/jpeg";
+const POSTER_EXT = ".jpg";
 const STORY_VIDEO_FILTER =
   "scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease,hqdn3d=1.1:1.0:2.5:2.2,eq=brightness=0.03:contrast=1.05:saturation=1.08,unsharp=3:3:0.25:3:3:0.12";
 /** Минимальный фильтр: работает на «урезанных» сборках ffmpeg без hqdn3d и т.п. */
 const STORY_VIDEO_FILTER_SIMPLE = "scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease";
 const STORY_AUDIO_FILTER =
   "highpass=f=80,lowpass=f=14000,acompressor=threshold=-18dB:ratio=2.5:attack=12:release=160,alimiter=limit=0.92,loudnorm=I=-16:LRA=11:TP=-1.5";
+const AVATAR_VIDEO_FILTER =
+  "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,scale='min(320,iw)':-2:force_original_aspect_ratio=decrease";
+const AVATAR_VIDEO_FILTER_TINY =
+  "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,scale='min(240,iw)':-2:force_original_aspect_ratio=decrease";
 
 let ffmpegReadyPromise: Promise<void> | null = null;
 
@@ -69,6 +75,8 @@ export type VideoTranscodeTrim = {
   maxSegmentSec?: number;
 };
 
+export type VideoTranscodeProfile = "default" | "avatar";
+
 function buildFfmpegTranscodeArgs(
   inputPath: string,
   outputPath: string,
@@ -76,7 +84,14 @@ function buildFfmpegTranscodeArgs(
   durationSec: number,
   vf: string,
   withAudioFilter: boolean,
-  opts: { forceR30: boolean; profileMain: boolean; includeAudio: boolean },
+  opts: {
+    forceR30: boolean;
+    profileMain: boolean;
+    includeAudio: boolean;
+    videoBitrate: string;
+    videoMaxRate: string;
+    videoBufSize: string;
+  },
 ): string[] {
   const args: string[] = [
     "-y",
@@ -122,11 +137,11 @@ function buildFfmpegTranscodeArgs(
   }
   args.push(
     "-b:v",
-    "2500k",
+    opts.videoBitrate,
     "-maxrate",
-    "3000k",
+    opts.videoMaxRate,
     "-bufsize",
-    "6000k",
+    opts.videoBufSize,
     "-movflags",
     "+faststart",
     outputPath,
@@ -142,6 +157,7 @@ async function transcodeToStreamableMp4(
   inputPath: string,
   outputPath: string,
   trim?: VideoTranscodeTrim,
+  profile: VideoTranscodeProfile = "default",
 ): Promise<void> {
   await ensureFfmpegReady();
   const cap = trim?.maxSegmentSec ?? POST_VIDEO_MAX_SECONDS;
@@ -149,68 +165,164 @@ async function transcodeToStreamableMp4(
   const durationSec =
     trim != null ? Math.min(cap, Math.max(0.1, trim.durationSec)) : cap;
 
-  const attempts: { label: string; args: string[] }[] = [
-    {
-      label: "premium",
-      args: buildFfmpegTranscodeArgs(
-        inputPath,
-        outputPath,
-        startSec,
-        durationSec,
-        STORY_VIDEO_FILTER,
-        true,
-        { forceR30: true, profileMain: true, includeAudio: true },
-      ),
-    },
-    {
-      label: "simple",
-      args: buildFfmpegTranscodeArgs(
-        inputPath,
-        outputPath,
-        startSec,
-        durationSec,
-        STORY_VIDEO_FILTER_SIMPLE,
-        false,
-        { forceR30: true, profileMain: true, includeAudio: true },
-      ),
-    },
-    {
-      label: "relaxed_no_r30",
-      args: buildFfmpegTranscodeArgs(
-        inputPath,
-        outputPath,
-        startSec,
-        durationSec,
-        STORY_VIDEO_FILTER_SIMPLE,
-        false,
-        { forceR30: false, profileMain: false, includeAudio: true },
-      ),
-    },
-    {
-      label: "video_only",
-      args: buildFfmpegTranscodeArgs(
-        inputPath,
-        outputPath,
-        startSec,
-        durationSec,
-        STORY_VIDEO_FILTER_SIMPLE,
-        false,
-        { forceR30: false, profileMain: false, includeAudio: false },
-      ),
-    },
-    {
-      label: "safe_pixel_scale",
-      args: buildFfmpegTranscodeArgs(
-        inputPath,
-        outputPath,
-        startSec,
-        durationSec,
-        STORY_VIDEO_FILTER_SAFE,
-        false,
-        { forceR30: false, profileMain: false, includeAudio: false },
-      ),
-    },
-  ];
+  const attempts: { label: string; args: string[] }[] =
+    profile === "avatar"
+      ? [
+          {
+            label: "avatar_primary",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              AVATAR_VIDEO_FILTER,
+              false,
+              {
+                forceR30: false,
+                profileMain: true,
+                includeAudio: false,
+                videoBitrate: "420k",
+                videoMaxRate: "520k",
+                videoBufSize: "1040k",
+              },
+            ),
+          },
+          {
+            label: "avatar_safe",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              AVATAR_VIDEO_FILTER_TINY,
+              false,
+              {
+                forceR30: false,
+                profileMain: false,
+                includeAudio: false,
+                videoBitrate: "320k",
+                videoMaxRate: "420k",
+                videoBufSize: "840k",
+              },
+            ),
+          },
+          {
+            label: "avatar_safe_pixel_scale",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              AVATAR_VIDEO_FILTER_TINY,
+              false,
+              {
+                forceR30: false,
+                profileMain: false,
+                includeAudio: false,
+                videoBitrate: "260k",
+                videoMaxRate: "340k",
+                videoBufSize: "680k",
+              },
+            ),
+          },
+        ]
+      : [
+          {
+            label: "premium",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              STORY_VIDEO_FILTER,
+              true,
+              {
+                forceR30: true,
+                profileMain: true,
+                includeAudio: true,
+                videoBitrate: "2500k",
+                videoMaxRate: "3000k",
+                videoBufSize: "6000k",
+              },
+            ),
+          },
+          {
+            label: "simple",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              STORY_VIDEO_FILTER_SIMPLE,
+              false,
+              {
+                forceR30: true,
+                profileMain: true,
+                includeAudio: true,
+                videoBitrate: "2500k",
+                videoMaxRate: "3000k",
+                videoBufSize: "6000k",
+              },
+            ),
+          },
+          {
+            label: "relaxed_no_r30",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              STORY_VIDEO_FILTER_SIMPLE,
+              false,
+              {
+                forceR30: false,
+                profileMain: false,
+                includeAudio: true,
+                videoBitrate: "2500k",
+                videoMaxRate: "3000k",
+                videoBufSize: "6000k",
+              },
+            ),
+          },
+          {
+            label: "video_only",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              STORY_VIDEO_FILTER_SIMPLE,
+              false,
+              {
+                forceR30: false,
+                profileMain: false,
+                includeAudio: false,
+                videoBitrate: "2500k",
+                videoMaxRate: "3000k",
+                videoBufSize: "6000k",
+              },
+            ),
+          },
+          {
+            label: "safe_pixel_scale",
+            args: buildFfmpegTranscodeArgs(
+              inputPath,
+              outputPath,
+              startSec,
+              durationSec,
+              STORY_VIDEO_FILTER_SAFE,
+              false,
+              {
+                forceR30: false,
+                profileMain: false,
+                includeAudio: false,
+                videoBitrate: "2500k",
+                videoMaxRate: "3000k",
+                videoBufSize: "6000k",
+              },
+            ),
+          },
+        ];
 
   let lastErr: unknown;
   for (const { label, args } of attempts) {
@@ -229,22 +341,70 @@ async function transcodeToStreamableMp4(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+async function extractPosterFrame(
+  inputPath: string,
+  outputPath: string,
+  profile: VideoTranscodeProfile,
+): Promise<void> {
+  await ensureFfmpegReady();
+  const vf = profile === "avatar" ? AVATAR_VIDEO_FILTER : STORY_VIDEO_FILTER_SAFE;
+  const args = [
+    "-y",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-ss",
+    "0.05",
+    "-i",
+    inputPath,
+    "-frames:v",
+    "1",
+    "-vf",
+    vf,
+    "-q:v",
+    "4",
+    outputPath,
+  ];
+  await runCommand("ffmpeg", args);
+}
+
 export async function transcodeStoryVideoBuffer(
   input: Buffer,
   inputExt = ".mp4",
   trim?: VideoTranscodeTrim,
+  profile: VideoTranscodeProfile = "default",
 ): Promise<{
   buffer: Buffer;
   ext: string;
   contentType: string;
+  posterBuffer?: Buffer;
+  posterExt?: string;
+  posterContentType?: string;
 }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "story-video-"));
   const inPath = path.join(tempDir, `${randomUUID()}${inputExt || ".mp4"}`);
   const outPath = path.join(tempDir, `${randomUUID()}${OUTPUT_EXT}`);
+  const posterPath = path.join(tempDir, `${randomUUID()}${POSTER_EXT}`);
   try {
     await fs.writeFile(inPath, input);
-    await transcodeToStreamableMp4(inPath, outPath, trim);
+    await transcodeToStreamableMp4(inPath, outPath, trim, profile);
     const buffer = await fs.readFile(outPath);
+    if (profile === "avatar") {
+      try {
+        await extractPosterFrame(outPath, posterPath, profile);
+        const posterBuffer = await fs.readFile(posterPath);
+        return {
+          buffer,
+          ext: OUTPUT_EXT,
+          contentType: OUTPUT_CONTENT_TYPE,
+          posterBuffer,
+          posterExt: POSTER_EXT,
+          posterContentType: POSTER_CONTENT_TYPE,
+        };
+      } catch (err) {
+        console.warn("[story-video-transcode] avatar poster extraction failed:", err);
+      }
+    }
     return { buffer, ext: OUTPUT_EXT, contentType: OUTPUT_CONTENT_TYPE };
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -255,8 +415,18 @@ export async function transcodeStoryVideoFileToPath(
   inputPath: string,
   targetDir: string,
   trim?: VideoTranscodeTrim,
-): Promise<string> {
+  profile: VideoTranscodeProfile = "default",
+): Promise<{ videoPath: string; posterPath?: string }> {
   const outPath = path.join(targetDir, `${randomUUID()}${OUTPUT_EXT}`);
-  await transcodeToStreamableMp4(inputPath, outPath, trim);
-  return outPath;
+  await transcodeToStreamableMp4(inputPath, outPath, trim, profile);
+  if (profile === "avatar") {
+    const posterPath = outPath.slice(0, -OUTPUT_EXT.length) + POSTER_EXT;
+    try {
+      await extractPosterFrame(outPath, posterPath, profile);
+      return { videoPath: outPath, posterPath };
+    } catch (err) {
+      console.warn("[story-video-transcode] avatar poster extraction failed:", err);
+    }
+  }
+  return { videoPath: outPath };
 }

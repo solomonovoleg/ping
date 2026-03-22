@@ -2,6 +2,7 @@
   "include": [
     "client/src/**/*",
     "shared/**/*",
+    "EDGE/src/**/*",
     "server/**/*",
     "ПИНГОК МИКРО/client/**/*",
     "ПИНГОК МИКРО/server/**/*",
@@ -26,7 +27,8 @@
     "paths": {
       "@/*": ["./client/src/*"],
       "@shared/*": ["./shared/*"],
-      "@pingok-micro/*": ["./ПИНГОК МИКРО/client/*"]
+      "@pingok-micro/*": ["./ПИНГОК МИКРО/client/*"],
+      "@pingok-micro-shared/*": ["./ПИНГОК МИКРО/shared/*"]
     }
   }
 }

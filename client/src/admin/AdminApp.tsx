@@ -11,6 +11,7 @@ import AdminAudit from "@/pages/admin/Audit";
 import AdminOps from "@/pages/admin/Ops";
 import AdminMonitors from "@/pages/admin/Monitors";
 import AdminDisk from "@/pages/admin/Disk";
+import AdminServiceChat from "@/pages/admin/ServiceChat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -132,6 +133,8 @@ export function AdminApp() {
       <AdminMonitors />
     ) : location === "/admin/disk" ? (
       <AdminDisk />
+    ) : location === "/admin/service-chat" ? (
+      <AdminServiceChat />
     ) : (
       <AdminDashboard />
     );

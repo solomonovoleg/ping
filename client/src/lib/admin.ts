@@ -357,3 +357,92 @@ export async function fetchAdminReferralCodes(): Promise<AdminReferralCode[]> {
   const data = await res.json();
   return data.codes ?? [];
 }
+
+export type ServiceChatHostState = {
+  hostUserId: string;
+  enabled: boolean;
+  globalRepliesAllowed: boolean;
+  activatedAt: string | null;
+  displayName: string | null;
+  surname: string | null;
+  publicId: number;
+};
+
+export type ServiceChatTemplateStep = {
+  id: string;
+  orderIndex: number;
+  content: string;
+  mediaJson?: string | null;
+  delayAfterReadSec: number;
+};
+
+export type ServiceChatTemplate = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  steps: ServiceChatTemplateStep[];
+};
+
+export async function fetchServiceChatState(): Promise<{ hosts: ServiceChatHostState[] }> {
+  const res = await adminFetch("/service-chat/admin/state");
+  if (!res.ok) throw new Error("Не удалось загрузить service-chat");
+  return res.json();
+}
+
+export async function updateServiceChatHostConfig(payload: {
+  hostUserId: string;
+  enabled: boolean;
+  globalRepliesAllowed: boolean;
+}): Promise<void> {
+  const res = await adminFetch("/service-chat/admin/host", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось сохранить хоста");
+  }
+}
+
+export async function fetchServiceChatTemplates(hostUserId: string): Promise<{ templates: ServiceChatTemplate[] }> {
+  const res = await adminFetch(`/service-chat/admin/templates/${encodeURIComponent(hostUserId)}`);
+  if (!res.ok) throw new Error("Не удалось загрузить шаблоны");
+  return res.json();
+}
+
+export async function replaceServiceChatTemplate(payload: {
+  hostUserId: string;
+  name: string;
+  steps: Array<{ content: string; delayAfterReadSec: number; mediaJson?: string | null }>;
+}): Promise<void> {
+  const res = await adminFetch(`/service-chat/admin/templates/${encodeURIComponent(payload.hostUserId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: payload.name, steps: payload.steps }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось сохранить шаблон");
+  }
+}
+
+export async function runServiceChatCampaign(payload: {
+  hostUserId: string;
+  mode: "all" | "selected" | "personal";
+  targetUserIds?: string[];
+  content?: string;
+  mediaJson?: string | null;
+}): Promise<{ campaignId: string; targetCount: number; affectedThreads: number; sentMessagesTo: number }> {
+  const res = await adminFetch("/service-chat/admin/campaigns", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось запустить рассылку");
+  }
+  return res.json();
+}

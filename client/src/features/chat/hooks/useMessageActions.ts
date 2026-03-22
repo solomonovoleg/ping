@@ -4,7 +4,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { addMessageReaction, removeMessageReaction, saveMessage, unsaveMessage, isMessageSaved, sendMessage } from "@/lib/chat";
+import {
+  addMessageReaction,
+  removeMessageReaction,
+  saveMessage,
+  unsaveMessage,
+  isMessageSaved,
+  sendMessage,
+  transcribeVoiceOrVideoNoteMessage,
+} from "@/lib/chat";
 import { triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { API, apiFetch } from "@/lib/api-base";
 import { playDeleteSound } from "@/lib/send-sound";
@@ -28,6 +36,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const [messageSavedMap, setMessageSavedMap] = useState<Record<string, boolean>>({});
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [shatteringMessageId, setShatteringMessageId] = useState<string | null>(null);
+  const [transcriptRequestingIds, setTranscriptRequestingIds] = useState<Set<string>>(new Set());
 
   const messageMenuRef = useRef<HTMLDivElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,6 +174,42 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     }
     closeMenu();
   }, [toast, closeMenu]);
+
+  const handleRequestTranscript = useCallback(
+    async (msg: ApiMessage) => {
+      if (!msg.id || (msg.type !== "voice" && msg.type !== "video_note")) return;
+      const existing = typeof msg.transcript === "string" ? msg.transcript.trim() : "";
+      if (existing) {
+        closeMenu();
+        return;
+      }
+      setTranscriptRequestingIds((prev) => new Set(prev).add(msg.id));
+      try {
+        const { transcript } = await transcribeVoiceOrVideoNoteMessage(chatId, msg.id);
+        setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, transcript } : m)));
+        void triggerLightHaptic();
+        toast({ title: "Расшифровка готова" });
+        closeMenu();
+      } catch (e) {
+        const raw = e instanceof Error ? e.message : "Не удалось расшифровать";
+        const normalized = raw.trim().toLowerCase();
+        const title =
+          normalized === "fetch failed" ||
+          normalized === "failed to fetch" ||
+          normalized.includes("network")
+            ? "Сервис расшифровки недоступен. Проверьте сеть и попробуйте позже."
+            : raw;
+        toast({ title, variant: "destructive" });
+      } finally {
+        setTranscriptRequestingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(msg.id);
+          return next;
+        });
+      }
+    },
+    [chatId, setMessages, toast, closeMenu],
+  );
 
   const restoreMessageInList = useCallback((removedMsg: ApiMessage) => {
     setMessages((prev) => {
@@ -379,5 +424,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     highlightedMessageId,
     shatteringMessageId,
     handleShatterComplete,
+    transcriptRequestingIds,
+    handleRequestTranscript,
   };
 }

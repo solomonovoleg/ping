@@ -1,5 +1,13 @@
 apply plugin: 'com.android.application'
 
+def versionCodeEnv = (System.getenv("PING_ANDROID_VERSION_CODE") ?: "1").trim()
+def versionNameEnv = (System.getenv("PING_ANDROID_VERSION_NAME") ?: "1.0.0").trim()
+def releaseStoreFilePath = (System.getenv("PING_ANDROID_KEYSTORE_FILE") ?: "").trim()
+def releaseStorePassword = (System.getenv("PING_ANDROID_KEYSTORE_PASSWORD") ?: "").trim()
+def releaseKeyAlias = (System.getenv("PING_ANDROID_KEY_ALIAS") ?: "").trim()
+def releaseKeyPassword = (System.getenv("PING_ANDROID_KEY_PASSWORD") ?: "").trim()
+def hasReleaseSigning = !releaseStoreFilePath.isEmpty() && !releaseStorePassword.isEmpty() && !releaseKeyAlias.isEmpty() && !releaseKeyPassword.isEmpty()
+
 android {
     namespace "ru.pingmoot.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +15,8 @@ android {
         applicationId "ru.pingmoot.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode Integer.parseInt(versionCodeEnv)
+        versionName versionNameEnv
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +24,22 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFilePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

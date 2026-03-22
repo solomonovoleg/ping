@@ -33,15 +33,12 @@ function getClient(): S3Client {
  * Загружает буфер в S3 и возвращает публичный URL объекта.
  * URL в формате path-style: https://s3.cloud.ru/bucket-name/key
  */
-export async function uploadToS3(
-  keyPrefix: string,
+export async function uploadToS3WithKey(
+  key: string,
   buffer: Buffer,
   contentType: string,
-  extension = ""
 ): Promise<string> {
   const client = getClient();
-  const key = `${keyPrefix}/${randomUUID()}${extension}`;
-
   const allowPublicRead = process.env.S3_PUBLIC_ACL === "1" || process.env.S3_PUBLIC_ACL === "true";
   await client.send(
     new PutObjectCommand({
@@ -49,6 +46,7 @@ export async function uploadToS3(
       Key: key,
       Body: buffer,
       ContentType: contentType,
+      CacheControl: "public, max-age=31536000, immutable",
       ...(allowPublicRead && { ACL: ObjectCannedACL.public_read }),
     })
   );
@@ -56,4 +54,14 @@ export async function uploadToS3(
   // Path-style URL для Cloud.ru: https://s3.cloud.ru/bucket/key
   const base = endpoint!.replace(/\/$/, "");
   return `${base}/${bucket}/${key}`;
+}
+
+export async function uploadToS3(
+  keyPrefix: string,
+  buffer: Buffer,
+  contentType: string,
+  extension = ""
+): Promise<string> {
+  const key = `${keyPrefix}/${randomUUID()}${extension}`;
+  return uploadToS3WithKey(key, buffer, contentType);
 }

@@ -14,6 +14,7 @@ import { apiFetch } from "@/lib/api-base";
 import { isNative, saveMediaToGallery, triggerLightHaptic } from "@/lib/capacitor-native";
 import { useToast } from "@/hooks/use-toast";
 import { TapScaleButton } from "@/components/ui/tap-scale";
+import { useOfflineResolvedMediaUrl } from "@/hooks/useOfflineResolvedMediaUrl";
 import {
   DURATION_NORMAL_MS,
   DURATION_NORMAL_S,
@@ -34,7 +35,8 @@ type MediaViewerProps = {
 };
 
 export function MediaViewer({ open, onClose, src, type }: MediaViewerProps) {
-  const validSrc = typeof src === "string" && src.trim().length > 0;
+  const offlineReadySrc = useOfflineResolvedMediaUrl(src, { autoCache: open });
+  const validSrc = typeof offlineReadySrc === "string" && offlineReadySrc.trim().length > 0;
   const [scale, setScale] = useState(1);
   const [loadError, setLoadError] = useState(false);
   const [showActions, setShowActions] = useState(false);
@@ -98,7 +100,7 @@ export function MediaViewer({ open, onClose, src, type }: MediaViewerProps) {
   const saveFile = useCallback(async () => {
     setSaving(true);
     try {
-      const res = await apiFetch(src);
+      const res = await apiFetch(offlineReadySrc || src);
       if (!res.ok) throw new Error("fetch failed");
       const blob = await res.blob();
       const ext = type === "image" ? "jpg" : type === "video_note" ? "mp4" : "mp4";
@@ -159,7 +161,7 @@ export function MediaViewer({ open, onClose, src, type }: MediaViewerProps) {
       setSaving(false);
       setShowActions(false);
     }
-  }, [src, type, toast]);
+  }, [offlineReadySrc, src, type, toast]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -240,7 +242,7 @@ export function MediaViewer({ open, onClose, src, type }: MediaViewerProps) {
               <p className="text-white/80 text-center">Не удалось загрузить медиа</p>
             ) : isImage ? (
               <img
-                src={src}
+                src={offlineReadySrc}
                 alt=""
                 className="max-h-[90vh] max-w-full object-contain select-none"
                 style={{
@@ -253,7 +255,7 @@ export function MediaViewer({ open, onClose, src, type }: MediaViewerProps) {
               />
             ) : (
               <video
-                src={src}
+                src={offlineReadySrc}
                 controls
                 playsInline
                 className="max-h-[90vh] max-w-full rounded-lg object-contain"

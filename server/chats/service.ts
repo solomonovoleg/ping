@@ -12,6 +12,7 @@ import { and, eq, gt, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { stories, storyViews } from "@shared/schema";
 import { CHAT_LIST_SECTIONS, type ChatListSection } from "@shared/schema";
+import { markServiceStepRead } from "../service-chat/service";
 
 export class ChatsServiceError extends Error {
   status: number;
@@ -389,6 +390,7 @@ export async function markChatRead(chatId: string, userId: string, messageId?: s
   }
   if (!messageId) return;
   await storage.updateLastReadByMessageId(chatId, userId, messageId);
+  await markServiceStepRead(chatId, messageId);
   const lastReadAt = await storage.getChatMemberLastReadAt(chatId, userId);
   if (lastReadAt) {
     notifyChatRead(chatId, userId, lastReadAt.toISOString());

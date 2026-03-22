@@ -20,23 +20,32 @@ export async function transcribeAudioChunk(params: {
   if (process.env.CALL_TRANSCRIPTS_ASR_API_KEY?.trim()) {
     headers.Authorization = `Bearer ${process.env.CALL_TRANSCRIPTS_ASR_API_KEY.trim()}`;
   }
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      audioBase64: params.audioBase64,
-      mimeType: params.mimeType,
-      language: params.language,
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        audioBase64: params.audioBase64,
+        mimeType: params.mimeType,
+        language: params.language,
+        callId: params.callId,
+        speakerUserId: params.speakerUserId,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => ({}))) as { text?: string; confidence?: number };
+    const text = typeof data.text === "string" ? data.text.trim() : "";
+    if (!text) return null;
+    return {
+      text,
+      confidence: typeof data.confidence === "number" ? data.confidence : 82,
+    };
+  } catch (error) {
+    // ASR backend is optional; network failures should not crash chat/call flows.
+    console.warn("[asr-provider] transcribe request failed", {
       callId: params.callId,
-      speakerUserId: params.speakerUserId,
-    }),
-  });
-  if (!res.ok) return null;
-  const data = (await res.json().catch(() => ({}))) as { text?: string; confidence?: number };
-  const text = typeof data.text === "string" ? data.text.trim() : "";
-  if (!text) return null;
-  return {
-    text,
-    confidence: typeof data.confidence === "number" ? data.confidence : 82,
-  };
+      err: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }

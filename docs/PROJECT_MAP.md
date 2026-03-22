@@ -37,6 +37,7 @@
 client/     React UI, страницы, features, hooks, API adapters (Vite)
 server/     Express API, WebSocket (calls, group-calls, realtime), upload, storage
 shared/     Схемы Drizzle, общие типы и константы (без runtime-логики приложения)
+EDGE/       Отдельный microservice для gamification и game logic (Express + TS)
 docs/       Продуктовые и архитектурные документы, гайды
 scripts/    Деплой, миграции, сиды
 ios/        Capacitor / Xcode
@@ -76,6 +77,7 @@ android/    Capacitor / Gradle
 | История звонков в борде | `features/board/call-history/` | Список/деталь, связка с треками |
 | Уведомления | `features/notifications/` | Колокол, хуки непрочитанного |
 | Админ ops (клиент) | `features/admin-ops/` | Секции платформы, трафик, отчёты, API диска, публичные бары — см. `api.ts`, `i18n.ru.ts` |
+| EDGE companion (клиент) | `features/edge-companion/` | UIX-карточка EDGE в ленте + компоненты интерактива персонажа для отдельной страницы |
 
 ### Прочее на клиенте
 
@@ -107,6 +109,10 @@ android/    Capacitor / Gradle
 | Сохранённые сообщения | `saved-messages/` | Избранное в мессенджере |
 | AI-чат | `ai-chat/` | Диалог с AI |
 | AI Search | `ai-search/` | Поиск, индексация — см. `docs/AI_SEARCH_ALGORITHM.md` |
+| ПИНГОК МИКРО (API) | `pingok-micro/` | `routes.ts`: parse, memory-search, **execute**, send-dm; `time-parse.ts`, `execute-service.ts` |
+| Напоминания (Пингок) | `reminders/` | `GET /api/reminders/due`, `POST /api/reminders/:id/dismiss` |
+| Service Chat | `service-chat/` | Хост-сообщения: шаблоны цепочек after-read, рассылки, локальная/глобальная обратная связь |
+| EDGE adapter | `edge/` | Лёгкая интеграция отдельного EDGE-сервиса: прокси `/api/edge/*` без нагрузки на core-модули |
 | Посты | `posts/` | Лента, CRUD, просмотры |
 | Комментарии | `comments/` | Комментарии к постам |
 | Реакции | `reactions/` | Реакции на посты |
@@ -146,7 +152,7 @@ android/    Capacitor / Gradle
 
 | Путь | Назначение |
 |------|------------|
-| `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `profile-pins`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
+| `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `profile-pins`, `user-reminders`, `voice-tasks`, `service-chat`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
 | `schema/index.ts` | Реэкспорт схем |
 | `constants.ts` | Общие константы |
 | `call-signaling.ts`, `ws-call-handshake.ts` | Контракты звонков |
@@ -165,6 +171,7 @@ android/    Capacitor / Gradle
 | `ios/`, `android/` | Нативные оболочки Capacitor |
 | `uploads/` | Локальные файлы (не коммитить медиа) |
 | `ПИНГОК МИКРО/` | Отдельный микросервис голосовых команд: `server/` (Express, NLU-заглушка), `client/` (оверлей + long-press логотипа), `shared/` типы; `npm run dev:pingok-micro` |
+| `EDGE/` | Отдельный микросервис геймификации: модульные `rules/service/routes`, свой запуск `npm run dev:edge`, UIX-подбор `EDGE/docs/GAMIFICATION_UIX_GITHUB.md`, **спека движка кампаний** `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` |
 
 База данных (смысл таблиц, слой storage): `docs/DB.md`.
 
@@ -245,7 +252,13 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | | `client/src/lib/avatar-square-crop.ts` | Утилиты квадратного кропа аватара (профиль сквиркл / чаты круг); `AvatarCropModal` |
 | 2026-03 | `server/security/ssrf-guard.ts` | Базовая защита от SSRF для исходящих fetch по пользовательскому URL (сейчас — link-preview) |
 | 2026-03 | `client/src/lib/reels-video/` | Бесшовный цикл видео (`useSeamlessVideoLoop`), жесты ленты: двойной тап, удержание ×2 / сдвиг вверх ×3 (`useReelsFeedVideoGestures`); `FeedInlineVideo`, аватар-видео |
-| 2026-03 | `ПИНГОК МИКРО/` | Голосовой ассистент: отдельный HTTP-процесс (`POST /v1/parse`), клиентский оверлей, удержание центрального логотипа ~2.8 с в `AppLayout`; алиас Vite `@pingok-micro/*` |
+| 2026-03 | `ПИНГОК МИКРО/`, `server/pingok-micro/routes.ts` | Голос: оверлей + long-press в `AppLayout`; `POST /api/pingok-micro/v1/parse` + `POST .../v1/memory-search` (`tryGlobalMemorySearch`); интенты find/show — поиск в оверлее и переход в чат/пост; `shared/parse-heuristic.ts`; опционально отдельный процесс `POST /v1/parse` |
+| 2026-03 | `server/reminders/`, `migrations/0021_user_reminders_voice_tasks.sql`, `usePingokRemindersPoll` | Напоминания и задачи Пингок: таблицы `user_reminders`, `voice_tasks`; `POST /api/pingok-micro/v1/execute` + `send-dm`; опрос due + тост в `AppLayout` |
+| 2026-03 | `server/service-chat/`, `shared/schema/service-chat.ts`, `migrations/0022_service_chat.sql`, `client/src/pages/admin/ServiceChat.tsx` | Service Chat: выбор хоста, шаблонные цепочки after-read для новых пользователей, рассылки all/selected/personal, папка `Приглашения`, глобальная и локальная обратная связь |
+| 2026-03 | `client/src/lib/chat-offline-store.ts`, `client/src/lib/media-offline-cache.ts`, `client/src/hooks/useOfflineResolvedMediaUrl.ts` | Android/offline: локальный кеш списка чатов, последних сообщений и уже просмотренных медиа; резолв локального media URL для офлайн-открытия |
+| 2026-03 | `EDGE/`, `server/edge/`, `client/src/lib/edge-gamification.ts` | Новый изолированный EDGE микросервис (gamification/game logic) + тонкий адаптер `/api/edge/*` в основной платформе; модуль `companion` с состоянием персонажа, заданиями и лидербордом |
+| 2026-03 | `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` | Архитектура движка: кампании, surfaces, задания (EDGE + platform), лидерборд, призы/итоги, Board создателя, эволюция под новые UI (каталог) |
+| 2026-03 | `client/src/features/edge-companion/`, `client/src/pages/EdgeCompanion.tsx`, `client/src/pages/Posts.tsx` | Новый UIX-слой EDGE: карточка интерактивного персонажа в ленте и полноценный экран погружения `/edge/companion` |
 
 ---
 

@@ -117,9 +117,9 @@ export function registerStoryMediaUploadRoutes(app: Express): void {
         let filename = file.filename ?? "";
         if (mediaKind === "video" && file.path) {
           const sourcePath = file.path;
-          const transcodedPath = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR);
+          const transcoded = await transcodeStoryVideoFileToPath(sourcePath, UPLOADS_DIR);
           fs.unlink(sourcePath, () => {});
-          filename = path.basename(transcodedPath);
+          filename = path.basename(transcoded.videoPath);
         }
         res.status(201).json({ url: `/uploads/stories/${filename}` });
       } catch (err) {

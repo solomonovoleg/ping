@@ -78,6 +78,7 @@ async function buildAll() {
     logLevel: "info",
     alias: {
       "@shared": path.join(root, "shared"),
+      "@pingok-micro-shared": path.join(root, "ПИНГОК МИКРО", "shared"),
     },
   });
 

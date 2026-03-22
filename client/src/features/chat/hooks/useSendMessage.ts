@@ -21,6 +21,7 @@ import { triggerLightHaptic } from "@/lib/capacitor-native";
 import { takePhotoFromCamera, pickPhotoFromGallery } from "@/lib/capacitor-native";
 import { playSendSound } from "@/lib/send-sound";
 import type { ApiMessage } from "../types";
+import { VIDEO_NOTE_MAX_DURATION_SEC } from "../constants";
 
 export type UseSendMessageParams = {
   chatId: string;
@@ -101,6 +102,7 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
   const videoNotePressConsumedRef = useRef(false);
   const videoNotePointerStartYRef = useRef<number | null>(null);
   const videoNotePointerActiveRef = useRef(false);
+  const stopVideoNoteRecordingRef = useRef<(() => Promise<void>) | null>(null);
 
   const handleCancelEdit = useCallback(() => {
     setEditingId(null);
@@ -617,14 +619,19 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
         if (event.data.size > 0) videoNoteChunksRef.current.push(event.data);
       };
       recorder.start(250);
+      clearVideoNoteTimer();
       setVideoNoteState("recording");
       setVideoNoteLocked(false);
       setVideoNoteDurationSec(0);
       videoNoteStartedAtRef.current = Date.now();
-      clearVideoNoteTimer();
       videoNoteTimerRef.current = setInterval(() => {
-        if (!videoNoteStartedAtRef.current) return;
-        setVideoNoteDurationSec(Math.floor((Date.now() - videoNoteStartedAtRef.current) / 1000));
+        const started = videoNoteStartedAtRef.current;
+        if (!started) return;
+        const sec = Math.min(VIDEO_NOTE_MAX_DURATION_SEC, Math.floor((Date.now() - started) / 1000));
+        setVideoNoteDurationSec(sec);
+        if (sec >= VIDEO_NOTE_MAX_DURATION_SEC) {
+          void stopVideoNoteRecordingRef.current?.();
+        }
       }, 250);
     } catch (err) {
       stopVideoNoteStream();
@@ -677,6 +684,8 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     setVideoNoteState("preview");
     setVideoNoteLocked(false);
   }, [clearVideoNoteMirrorPipeline, clearVideoNoteTimer, stopVideoNoteStream, revokeVideoNotePreview]);
+
+  stopVideoNoteRecordingRef.current = stopVideoNoteRecording;
 
   const cancelVideoNote = useCallback(() => {
     clearVideoNotePressTimer();

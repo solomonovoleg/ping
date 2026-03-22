@@ -16,6 +16,8 @@ import type {
   ChatVibeBatch,
   ChatVibeHistoryEntry,
   CallTranscriptSegment,
+  UserReminder,
+  VoiceTask,
 } from "@shared/schema";
 import {
   users,
@@ -41,6 +43,8 @@ import {
   callTranscriptSegments,
   callCommandSuggestions,
   callTrackItems,
+  userReminders,
+  voiceTasks,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getDb, getPool, ensureUserColumns } from "../db";
@@ -1961,5 +1965,72 @@ export class DbStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  async createUserReminder(data: { userId: string; title: string; fireAt: Date }): Promise<UserReminder> {
+    const [row] = await this.db
+      .insert(userReminders)
+      .values({
+        userId: data.userId,
+        title: data.title.trim() || "Напоминание",
+        fireAt: data.fireAt,
+      })
+      .returning();
+    return row;
+  }
+
+  async listDueUserReminders(userId: string, before: Date): Promise<UserReminder[]> {
+    return this.db
+      .select()
+      .from(userReminders)
+      .where(
+        and(
+          eq(userReminders.userId, userId),
+          isNull(userReminders.dismissedAt),
+          lte(userReminders.fireAt, before),
+        ),
+      )
+      .orderBy(asc(userReminders.fireAt))
+      .limit(50);
+  }
+
+  async dismissUserReminder(userId: string, id: string): Promise<boolean> {
+    const now = new Date();
+    const rows = await this.db
+      .update(userReminders)
+      .set({ dismissedAt: now })
+      .where(and(eq(userReminders.id, id), eq(userReminders.userId, userId), isNull(userReminders.dismissedAt)))
+      .returning({ id: userReminders.id });
+    return rows.length > 0;
+  }
+
+  async createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask> {
+    const [row] = await this.db
+      .insert(voiceTasks)
+      .values({
+        userId: data.userId,
+        title: data.title.trim() || "Задача",
+      })
+      .returning();
+    return row;
+  }
+
+  async listOpenVoiceTasks(userId: string, limit: number): Promise<VoiceTask[]> {
+    return this.db
+      .select()
+      .from(voiceTasks)
+      .where(and(eq(voiceTasks.userId, userId), isNull(voiceTasks.doneAt)))
+      .orderBy(desc(voiceTasks.createdAt))
+      .limit(Math.min(100, Math.max(1, limit)));
+  }
+
+  async completeVoiceTask(userId: string, id: string): Promise<boolean> {
+    const now = new Date();
+    const rows = await this.db
+      .update(voiceTasks)
+      .set({ doneAt: now })
+      .where(and(eq(voiceTasks.id, id), eq(voiceTasks.userId, userId), isNull(voiceTasks.doneAt)))
+      .returning({ id: voiceTasks.id });
+    return rows.length > 0;
   }
 }

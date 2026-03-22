@@ -19,7 +19,7 @@ export type ApiChat = {
   createdAt: string;
   /** Закреплён в списке (сервер). */
   pinnedAt?: string | null;
-  /** Полка: general | friends | work | promo */
+  /** Полка: general | friends | work | promo | invitations */
   listSection?: string;
   lastMessage?: { type: string; content: string; createdAt: string } | null;
   hasUnread?: boolean;

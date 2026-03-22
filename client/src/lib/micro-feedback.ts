@@ -106,6 +106,22 @@ function playSuccessSound(): void {
   play();
 }
 
+/** ПИНГОК готов к речи: мягкий «ping-yes» (два коротких воздушных тона вверх). */
+export function playPingokReadySound(): void {
+  if (isNative() || !getMicroSoundsEnabled()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  const play = () => {
+    playTone(ctx, 740, 0.042, 0.055);
+    setTimeout(() => playTone(ctx, 988, 0.052, 0.048), 62);
+  };
+  if (ctx.state === "suspended") {
+    ctx.resume().then(play).catch(() => {});
+    return;
+  }
+  play();
+}
+
 /** Полный микро-отклик на тап: хаптик (нативно) + опционально тихий звук (веб). */
 export function triggerTapFeedback(options: { haptic?: boolean; sound?: boolean } = {}): void {
   const { haptic = true, sound = false } = options;
@@ -117,6 +133,11 @@ export function triggerTapFeedback(options: { haptic?: boolean; sound?: boolean 
 
 /** Отклик «успех»: хаптик + мягкий двухнотный звук (лайк, реакция, сохранение). */
 export function triggerSuccessFeedback(): void {
-  import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+  import("@/lib/capacitor-native").then(({ triggerSuccessHaptic }) => triggerSuccessHaptic());
   playSuccessSound();
+}
+
+/** Отклик «ошибка»: явный хаптик ошибки (на вебе — без звука). */
+export function triggerErrorFeedback(): void {
+  import("@/lib/capacitor-native").then(({ triggerErrorHaptic }) => triggerErrorHaptic());
 }

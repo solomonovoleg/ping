@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 
-const HOLD_MS = 2000;
+/** Короче, чем раньше (2 с), иначе кажется, что ускорения нет. */
+const HOLD_MS = 520;
 const DOUBLE_TAP_MS = 320;
 /** Движение до активации удержания — отмена таймера (скролл ленты). */
 const MOVE_CANCEL_BEFORE_HOLD_PX = 14;
@@ -13,18 +14,22 @@ type Options = {
   onDoubleTap: () => void;
   /** Смена источника — переподписка на новый элемент. */
   srcKey: string;
+  /** Ускорение по удержанию: 1 — отпустили, 2 / 3 — множитель. */
+  onHoldSpeed?: (rate: 1 | 2 | 3) => void;
 };
 
 /**
  * Жесты «как в рилсах» на элементе video:
  * - двойной тап → callback (например реакция 🔥);
- * - удержание ≥2 с → playbackRate 2; если потянуть вверх ≥10 px от точки нажатия → 3, вернуть палец ниже порога → снова 2;
+ * - удержание ~0,5 с → playbackRate 2; если потянуть вверх ≥10 px от точки нажатия → 3, вернуть палец ниже порога → снова 2;
  * - отпускание → playbackRate 1.
  */
 export function useReelsFeedVideoGestures(videoRef: RefObject<HTMLVideoElement | null>, options: Options) {
-  const { enabled, reducedMotion, onDoubleTap, srcKey } = options;
+  const { enabled, reducedMotion, onDoubleTap, srcKey, onHoldSpeed } = options;
   const onDoubleTapRef = useRef(onDoubleTap);
   onDoubleTapRef.current = onDoubleTap;
+  const onHoldSpeedRef = useRef(onHoldSpeed);
+  onHoldSpeedRef.current = onHoldSpeed;
 
   useEffect(() => {
     const v = videoRef.current;
@@ -46,12 +51,15 @@ export function useReelsFeedVideoGestures(videoRef: RefObject<HTMLVideoElement |
       holdActive = false;
       v.playbackRate = 1;
       clearHoldTimer();
+      onHoldSpeedRef.current?.(1);
     };
 
     const applyRateFromClientY = (clientY: number) => {
       if (!holdActive) return;
       const up = startY - clientY;
-      v.playbackRate = up >= DRAG_UP_FOR_3X_PX ? 3 : 2;
+      const rate = up >= DRAG_UP_FOR_3X_PX ? 3 : 2;
+      v.playbackRate = rate;
+      onHoldSpeedRef.current?.(rate);
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -63,8 +71,8 @@ export function useReelsFeedVideoGestures(videoRef: RefObject<HTMLVideoElement |
       holdTimer = setTimeout(() => {
         holdTimer = null;
         if (!pointerDown) return;
-        if (v.paused) return;
         holdActive = true;
+        if (v.paused) void v.play().catch(() => {});
         v.playbackRate = 2;
         applyRateFromClientY(startY);
       }, HOLD_MS);
@@ -106,6 +114,7 @@ export function useReelsFeedVideoGestures(videoRef: RefObject<HTMLVideoElement |
       pointerDown = false;
       clearHoldTimer();
       v.playbackRate = 1;
+      onHoldSpeedRef.current?.(1);
       v.removeEventListener("pointerdown", onPointerDown);
       v.removeEventListener("pointermove", onPointerMove);
       v.removeEventListener("pointerup", onPointerUp);

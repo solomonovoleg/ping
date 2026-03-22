@@ -30,3 +30,6 @@ export * from "./call-transcripts";
 export * from "./platform-settings";
 export * from "./content-reports";
 export * from "./profile-pins";
+export * from "./user-reminders";
+export * from "./voice-tasks";
+export * from "./service-chat";

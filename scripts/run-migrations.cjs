@@ -86,6 +86,8 @@ const scripts = [
   "scripts/migrate-profile-pins.cjs",
   "scripts/migrate-chat-member-prefs.cjs",
   "scripts/migrate-user-block-restrictions.cjs",
+  "scripts/migrate-user-reminders-voice-tasks.cjs",
+  "scripts/migrate-service-chat.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

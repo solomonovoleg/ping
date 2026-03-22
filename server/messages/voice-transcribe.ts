@@ -1,5 +1,6 @@
 /**
- * Фоновая расшифровка голосовых и видеокружков (Vosk / тот же HTTP ASR, что групповые звонки).
+ * Расшифровка голосовых и видеокружков (Vosk / тот же HTTP ASR, что групповые звонки).
+ * Вызывается по запросу пользователя: POST …/messages/:id/transcribe (не при отправке).
  * Требует CALL_TRANSCRIPTS_ASR_URL (полный URL, например http://127.0.0.1:8099/transcribe).
  */
 import fs from "fs";
@@ -141,6 +142,7 @@ function messageToPayload(msg: Message): Parameters<typeof notifyVoiceOrVideoNot
   };
 }
 
+/** Скачивает медиа, гоняет через ASR, пишет `transcript` и шлёт WS (`notifyVoiceOrVideoNoteTranscript`). */
 export async function runVoiceOrVideoNoteTranscription(chatId: string, messageId: string): Promise<void> {
   if (!process.env.CALL_TRANSCRIPTS_ASR_URL?.trim()) return;
 
@@ -169,12 +171,4 @@ export async function runVoiceOrVideoNoteTranscription(chatId: string, messageId
   if (!updated) return;
 
   notifyVoiceOrVideoNoteTranscript(chatId, messageToPayload(updated));
-}
-
-export function scheduleVoiceOrVideoNoteTranscription(chatId: string, messageId: string): void {
-  if (!process.env.DATABASE_URL) return;
-  if (!process.env.CALL_TRANSCRIPTS_ASR_URL?.trim()) return;
-  void runVoiceOrVideoNoteTranscription(chatId, messageId).catch((e) => {
-    console.warn("[voice-transcribe]", messageId, e instanceof Error ? e.message : e);
-  });
 }

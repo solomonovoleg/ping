@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Code } from "lucide-react";
+import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Code, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
@@ -629,6 +629,9 @@ function ChatDetailView({
   useEffect(() => {
     if (!showChatThemeMenu) return;
     const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest('[data-chat-detail-keep-menu-open="1"]')) return;
+      if (target?.closest('[role="dialog"]')) return;
       if (chatThemeMenuRef.current?.contains(e.target as Node)) return;
       setShowChatThemeMenu(false);
     };
@@ -639,6 +642,9 @@ function ChatDetailView({
   useEffect(() => {
     if (!showGroupMenu) return;
     const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest('[data-chat-detail-keep-menu-open="1"]')) return;
+      if (target?.closest('[role="dialog"]')) return;
       if (groupMenuRef.current?.contains(e.target as Node)) return;
       setShowGroupMenu(false);
     };
@@ -1140,6 +1146,8 @@ function ChatDetailView({
               chatId={chatId}
               chatType="group"
               isGroupAdmin={chat.myRole === "admin"}
+              targetUserId={null}
+              targetDisplayName={null}
               onDone={() => setShowGroupMenu(false)}
               onNavigateAway={() => setLocation("/chats")}
             />
@@ -1180,6 +1188,8 @@ function ChatDetailView({
               chatId={chatId}
               chatType="dm"
               isGroupAdmin={false}
+              targetUserId={chat.otherMember?.id ?? null}
+              targetDisplayName={displayName}
               onDone={() => setShowChatThemeMenu(false)}
               onNavigateAway={() => setLocation("/chats")}
             />
@@ -1521,6 +1531,22 @@ function ChatDetailView({
                 <Copy className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 Скопировать
               </button>
+              {(menu.msg.type === "voice" || menu.msg.type === "video_note") &&
+                !(typeof menu.msg.transcript === "string" && menu.msg.transcript.trim()) && (
+                  <button
+                    type="button"
+                    disabled={actions.transcriptRequestingIds.has(menu.msg.id)}
+                    onClick={() => void actions.handleRequestTranscript(menu.msg)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors rounded-none disabled:opacity-60"
+                  >
+                    {actions.transcriptRequestingIds.has(menu.msg.id) ? (
+                      <Loader2 className="w-4 h-4 text-muted-foreground flex-shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden />
+                    )}
+                    Расшифровать
+                  </button>
+                )}
               <button
                 type="button"
                 onClick={() => actions.handleForward(menu.msg)}

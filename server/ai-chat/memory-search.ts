@@ -165,10 +165,9 @@ function titleByChatId(catalog: ChatCatalogItem[], chatId: string): string {
   return catalog.find((c) => c.chatId === chatId)?.title ?? "Чат";
 }
 
-function hitToAlt(
-  hit: TagSearchHit,
-  catalog: ChatCatalogItem[],
-): AiMemorySearchPayloadV1["bestMatch"] {
+type AiMemoryMatchRow = NonNullable<AiMemorySearchPayloadV1["bestMatch"]>;
+
+function hitToAlt(hit: TagSearchHit, catalog: ChatCatalogItem[]): AiMemoryMatchRow {
   return {
     messageId: hit.messageId,
     chatId: hit.chatId,

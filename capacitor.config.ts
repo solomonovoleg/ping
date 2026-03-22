@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
     // Для отладки с живым сервером: androidScheme: "https", url: "http://10.0.2.2:3080" (эмулятор) или url: "http://YOUR_IP:3080"
   },
   android: {
-    allowMixedContent: true,
+    allowMixedContent: false,
   },
   ios: {
     allowsLinkPreview: false,
