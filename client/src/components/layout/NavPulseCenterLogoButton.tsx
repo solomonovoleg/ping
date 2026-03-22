@@ -8,7 +8,8 @@ export type NavPulseCenterLogoButtonProps = {
 };
 
 /**
- * Центральная кнопка PULSE в нижней навигации: логотип, приподнята над полосой (как в макете).
+ * Центральная кнопка PULSE в нижней навигации: логотип → профиль.
+ * Лежит в client/src, чтобы сборка не зависела от внешней папки «ПИНГОК МИКРО».
  */
 export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: NavPulseCenterLogoButtonProps) {
   return (
