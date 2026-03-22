@@ -97,14 +97,22 @@ const FEED_POST_ESTIMATED_HEIGHT_PX = 560;
 
 function MeasuredFeedItem({
   postId,
+  viewerUserId,
   onHeightChange,
   children,
 }: {
   postId: string;
+  /** При авторизации один раз фиксируем просмотр поста при появлении в зоне видимости (как на экране поста). */
+  viewerUserId?: string | null;
   onHeightChange: (postId: string, height: number) => void;
   children: ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const viewRecordedRef = useRef(false);
+
+  useEffect(() => {
+    viewRecordedRef.current = false;
+  }, [postId]);
 
   useEffect(() => {
     const node = rootRef.current;
@@ -119,6 +127,22 @@ function MeasuredFeedItem({
     observer.observe(node);
     return () => observer.disconnect();
   }, [postId, onHeightChange]);
+
+  useEffect(() => {
+    if (!viewerUserId || viewRecordedRef.current) return;
+    const node = rootRef.current;
+    if (!node) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting || viewRecordedRef.current) return;
+        viewRecordedRef.current = true;
+        void recordPostView(postId).catch(() => {});
+      },
+      { threshold: 0.35, rootMargin: "0px" },
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [postId, viewerUserId]);
 
   return (
     <div ref={rootRef} data-post-id={postId}>
@@ -1136,13 +1160,6 @@ export default function Posts() {
             </div>
           </div>
 
-          {user?.id ? (
-            <EdgeCompanionFeedCard
-              userId={user.id}
-              onOpen={() => setLocation("/edge/companion")}
-            />
-          ) : null}
-
           {hashtagFilter && (
             <div className="uix-content-x-tight py-2 flex items-center gap-2 border-b border-border/50 bg-secondary/20">
               <span className="text-sm text-muted-foreground">Хештег:</span>
@@ -1381,6 +1398,27 @@ export default function Posts() {
                   </div>
                 )}
 
+                {post.edgeId ? (
+                  <div className="relative w-full">
+                    <EdgeCompanionFeedCard
+                      variant="feed"
+                      userId={user?.id ?? "guest"}
+                      edgeId={post.edgeId}
+                      onOpen={() => {
+                        if (!user?.id) {
+                          toast({
+                            title: "Войдите в аккаунт",
+                            description: "Чтобы участвовать в кампании EDGE",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
+                        setLocation(`/edge/companion?edgeId=${encodeURIComponent(post.edgeId!)}`);
+                      }}
+                    />
+                  </div>
+                ) : null}
+
                 <div className="min-w-0 border-t border-border/25 uix-content-x py-[var(--uix-space-3)]">
                   <FeedPostCaption
                     postId={post.id}
@@ -1556,7 +1594,12 @@ export default function Posts() {
                 );
                 if (isShattering) {
                   return (
-                    <MeasuredFeedItem key={post.id} postId={post.id} onHeightChange={updateFeedPostHeight}>
+                    <MeasuredFeedItem
+                      key={post.id}
+                      postId={post.id}
+                      viewerUserId={user?.id}
+                      onHeightChange={updateFeedPostHeight}
+                    >
                     <ShatterEffect
                       onComplete={() => {
                         setShatteringPostIds((s) => { const n = new Set(s); n.delete(post.id); return n; });
@@ -1572,7 +1615,12 @@ export default function Posts() {
                   );
                 }
                 return (
-                  <MeasuredFeedItem key={post.id} postId={post.id} onHeightChange={updateFeedPostHeight}>
+                  <MeasuredFeedItem
+                    key={post.id}
+                    postId={post.id}
+                    viewerUserId={user?.id}
+                    onHeightChange={updateFeedPostHeight}
+                  >
                     {article}
                   </MeasuredFeedItem>
                 );

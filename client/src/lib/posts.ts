@@ -14,6 +14,8 @@ export type FeedPost = {
   mediaLayout?: PostMediaLayout | null;
   /** Хештеги из текста поста */
   hashtags?: string[];
+  /** Кампания EDGE (интерактив в теле поста) */
+  edgeId?: string | null;
   reactions: { emoji: string; count: number }[];
   reactionUsers?: Record<string, ReactionUser[]>;
   myReaction: string | null;
@@ -123,6 +125,7 @@ export function normalizeFeedPost(raw: unknown): FeedPost | null {
     mediaUrls: Array.isArray(o.mediaUrls) ? (o.mediaUrls as string[]) : null,
     mediaLayout: o.mediaLayout && typeof o.mediaLayout === "object" ? (o.mediaLayout as PostMediaLayout) : null,
     hashtags: Array.isArray(o.hashtags) ? (o.hashtags as string[]) : undefined,
+    edgeId: typeof o.edgeId === "string" && o.edgeId.trim() ? o.edgeId.trim() : null,
     reactions: Array.isArray(o.reactions) ? (o.reactions as FeedPost["reactions"]) : [],
     reactionUsers: o.reactionUsers && typeof o.reactionUsers === "object" ? (o.reactionUsers as FeedPost["reactionUsers"]) : undefined,
     myReaction: typeof o.myReaction === "string" ? o.myReaction : null,

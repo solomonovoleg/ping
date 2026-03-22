@@ -52,6 +52,8 @@ export const posts = pgTable("posts", {
   isDraft: boolean("is_draft").notNull().default(false),
   /** Кто видит пост: public | followers */
   visibility: varchar("visibility", { length: 20 }).notNull().default("public"),
+  /** Кампания EDGE (интерактив в ленте). FK в SQL не задаём — кампания может быть вне этой БД. */
+  edgeId: varchar("edge_id", { length: 128 }),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

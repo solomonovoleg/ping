@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { UserAvatar } from "@/components/UserAvatar";
 import { PostMedia } from "@/components/PostMedia";
 import { fetchPost, formatPostTime, recordPostView, deletePost } from "@/lib/posts";
+import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
 import { useAuth } from "@/contexts/AuthContext";
 import CommentsModal from "@/components/CommentsModal";
 import { ListEmptyState } from "@/components/ui/empty";
@@ -176,6 +177,25 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
             layout={post.mediaLayout ?? null}
             className={hasCaption ? "!mt-0" : undefined}
           />
+          {post.edgeId ? (
+            <EdgeCompanionFeedCard
+              variant="feed"
+              className="mt-[var(--uix-space-3)]"
+              userId={user?.id ?? "guest"}
+              edgeId={post.edgeId}
+              onOpen={() => {
+                if (!user?.id) {
+                  toast({
+                    title: "Войдите в аккаунт",
+                    description: "Чтобы участвовать в кампании EDGE",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                setLocation(`/edge/companion?edgeId=${encodeURIComponent(post.edgeId!)}`);
+              }}
+            />
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-x-[var(--uix-space-5)] gap-y-[var(--uix-space-2)] border-t border-border/30 pt-[var(--uix-space-4)]">

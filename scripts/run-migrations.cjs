@@ -88,6 +88,7 @@ const scripts = [
   "scripts/migrate-user-block-restrictions.cjs",
   "scripts/migrate-user-reminders-voice-tasks.cjs",
   "scripts/migrate-service-chat.cjs",
+  "scripts/migrate-posts-edge-id.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

@@ -13,6 +13,7 @@ import {
   sharePostToUser,
   unsavePost,
   updateOwnPost,
+  parsePostEdgeId,
 } from "./service";
 import { isPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
 
@@ -33,6 +34,18 @@ export function registerPostsRoutes(app: Express): void {
     const visibility = typeof req.body?.visibility === "string" && (req.body.visibility === "public" || req.body.visibility === "followers")
       ? req.body.visibility
       : "public";
+    let edgeIdForPost: string | undefined;
+    if (req.body?.edgeId !== undefined && req.body?.edgeId !== null) {
+      const s = String(req.body.edgeId).trim();
+      if (s) {
+        const parsed = parsePostEdgeId(req.body.edgeId);
+        if (!parsed) {
+          res.status(400).json({ message: "Некорректный edgeId" });
+          return;
+        }
+        edgeIdForPost = parsed;
+      }
+    }
     const hasMedia = Boolean((mediaUrls && mediaUrls.length > 0) || imageUrl);
     if (!text && !hasMedia) {
       res.status(400).json({ message: "Добавьте текст или медиа в пост" });
@@ -47,6 +60,7 @@ export function registerPostsRoutes(app: Express): void {
         mediaLayout,
         isDraft: !!isDraft,
         visibility,
+        ...(edgeIdForPost ? { edgeId: edgeIdForPost } : {}),
       });
       console.log("[posts] created", {
         id: payload.id,

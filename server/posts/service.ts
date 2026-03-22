@@ -77,10 +77,31 @@ type CreatePostInput = {
   mediaLayout: PostMediaLayout | null;
   isDraft: boolean;
   visibility: "public" | "followers";
+  edgeId?: string | null;
 };
+
+/** Безопасный идентификатор кампании EDGE для posts.edge_id */
+export function parsePostEdgeId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (!t || t.length > 128) return null;
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(t)) return null;
+  return t;
+}
 
 export async function createPost(input: CreatePostInput) {
   const { userId, text, imageUrl, mediaUrls, mediaLayout, isDraft, visibility } = input;
+  let edgeIdToStore: string | null = null;
+  if (input.edgeId !== undefined && input.edgeId !== null) {
+    const trimmed = typeof input.edgeId === "string" ? input.edgeId.trim() : "";
+    if (trimmed) {
+      const parsed = parsePostEdgeId(input.edgeId);
+      if (!parsed) {
+        throw new PostsServiceError(400, "Некорректный edgeId");
+      }
+      edgeIdToStore = parsed;
+    }
+  }
   const mentionTokens = extractMentions(text);
   if (mentionTokens.length > MAX_POST_MENTIONS) {
     throw new PostsServiceError(400, `Не больше ${MAX_POST_MENTIONS} упоминаний (@) в посте`);
@@ -99,6 +120,7 @@ export async function createPost(input: CreatePostInput) {
       hashtags: hashtags.length > 0 ? hashtags : null,
       isDraft: !!isDraft,
       visibility,
+      edgeId: edgeIdToStore,
     })
     .returning();
   if (!row) {
@@ -117,6 +139,7 @@ export async function createPost(input: CreatePostInput) {
     mediaLayout: (row.mediaLayout as PostMediaLayout | null) ?? null,
     isDraft: row.isDraft ?? false,
     visibility: row.visibility ?? "public",
+    edgeId: row.edgeId ?? null,
     createdAt: row.createdAt?.toISOString?.() ?? new Date().toISOString(),
   };
 }
@@ -294,6 +317,7 @@ type FeedRow = {
   hashtags: string[] | null;
   isDraft: boolean;
   visibility: string;
+  edgeId: string | null;
   createdAt: Date;
   authorDisplayName: string | null;
   authorSurname: string | null;
@@ -321,6 +345,7 @@ export async function listPostsForViewer(params: {
     hashtags: posts.hashtags,
     isDraft: posts.isDraft,
     visibility: posts.visibility,
+    edgeId: posts.edgeId,
     createdAt: posts.createdAt,
     authorDisplayName: users.displayName,
     authorSurname: users.surname,
@@ -567,6 +592,7 @@ export async function listPostsForViewer(params: {
       mediaUrls: urls,
       mediaLayout: (r.mediaLayout as PostMediaLayout | null) ?? null,
       hashtags: (r.hashtags && Array.isArray(r.hashtags)) ? r.hashtags : [],
+      edgeId: r.edgeId ?? null,
       reactions: reactionsByPost[r.id] ?? [],
       reactionUsers: reactionUsersByPost[r.id] ?? {},
       myReaction: myReactions[r.id] ?? null,
@@ -602,6 +628,7 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
       createdAt: posts.createdAt,
       visibility: posts.visibility,
       isDraft: posts.isDraft,
+      edgeId: posts.edgeId,
       authorDisplayName: users.displayName,
       authorSurname: users.surname,
       authorAvatarUrl: users.avatarUrl,
@@ -681,6 +708,7 @@ export async function getPostByIdDetailed(postId: string, viewerId: string | nul
     mediaUrls,
     mediaLayout: (row.mediaLayout as PostMediaLayout | null) ?? null,
     hashtags: (row.hashtags && Array.isArray(row.hashtags)) ? row.hashtags : [],
+    edgeId: row.edgeId ?? null,
     reactions: reactionRows.map((r) => ({ emoji: r.emoji, count: r.count })),
     reactionUsers: reactionUsersByPost,
     myReaction,
@@ -721,6 +749,7 @@ export async function listSavedPostsDetailed(userId: string, limit: number, offs
       mediaUrls: posts.mediaUrls,
       mediaLayout: posts.mediaLayout,
       hashtags: posts.hashtags,
+      edgeId: posts.edgeId,
       createdAt: posts.createdAt,
       authorDisplayName: users.displayName,
       authorSurname: users.surname,
@@ -780,6 +809,7 @@ export async function listSavedPostsDetailed(userId: string, limit: number, offs
       mediaUrls: urls,
       mediaLayout: (r.mediaLayout as PostMediaLayout | null) ?? null,
       hashtags: (r.hashtags && Array.isArray(r.hashtags)) ? r.hashtags : [],
+      edgeId: r.edgeId ?? null,
       reactions: reactionsByPost[r.id] ?? [],
       reactionUsers: {},
       myReaction: myReactions[r.id] ?? null,
