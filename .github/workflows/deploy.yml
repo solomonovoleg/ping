@@ -1,4 +1,5 @@
 name: Deploy
+# Manual redeploy trigger marker (safe no-op change).
 
 on:
   push:
