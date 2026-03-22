@@ -9,6 +9,7 @@
     "dev:edge": "tsx EDGE/src/index.ts",
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
+    "backup": "bash scripts/backup-project.sh",
     "deploy": "bash scripts/deploy.sh",
     "deploy:migrate": "bash scripts/migrate-on-server.sh",
     "deploy:seed-social": "bash scripts/seed-social-on-server.sh",

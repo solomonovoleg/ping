@@ -110,7 +110,7 @@ android/    Capacitor / Gradle
 | Сохранённые сообщения | `saved-messages/` | Избранное в мессенджере |
 | AI-чат | `ai-chat/` | Диалог с AI |
 | AI Search | `ai-search/` | Поиск, индексация — см. `docs/AI_SEARCH_ALGORITHM.md` |
-| ПИНГОК МИКРО (API) | `pingok-micro/` | `routes.ts`: parse, memory-search, **execute**, send-dm; `time-parse.ts`, `execute-service.ts` |
+| ПИНГОК МИКРО (API) | `pingok-micro/` | `routes.ts`: parse, memory-search, **execute**, send-dm, **start-call**; `time-parse.ts`, `execute-service.ts` |
 | Напоминания (Пингок) | `reminders/` | `GET /api/reminders/due`, `POST /api/reminders/:id/dismiss` |
 | Service Chat | `service-chat/` | Хост-сообщения: шаблоны цепочек after-read, рассылки, локальная/глобальная обратная связь |
 | EDGE adapter | `edge/` | Лёгкая интеграция отдельного EDGE-сервиса: прокси `/api/edge/*` без нагрузки на core-модули |
@@ -168,10 +168,10 @@ android/    Capacitor / Gradle
 | Путь | Назначение |
 |------|------------|
 | `docs/` | Все `.md` гайды; **карта проекта — этот файл** |
-| `scripts/` | `deploy.sh`, `run-migrations.cjs`, сиды, миграции данных |
+| `scripts/` | `deploy.sh`, `backup-project.sh` (`npm run backup` → `backups/*.tar.gz`), `run-migrations.cjs`, сиды, миграции данных |
 | `ios/`, `android/` | Нативные оболочки Capacitor |
 | `uploads/` | Локальные файлы (не коммитить медиа) |
-| `ПИНГОК МИКРО/` | Микросервис голосовых команд **в репозитории**: `server/` (Express, NLU), `client/` (оверлей + long-press логотипа), `shared/` типы; `npm run dev:pingok-micro`; секреты только в `.env` (см. `.gitignore` внутри каталога) |
+| `ПИНГОК МИКРО/` | Микросервис голосовых команд **в репозитории**: `server/` (Express, NLU), `client/` (`PingokMicroOverlay`: STT, parse, поиск в памяти, лента, remind/plan/task, сообщение, звонок; `NavPulseCenterLogoButton` — long-press в `AppLayout`, реэкспорт из `@pingok-micro`, **не заглушать**), `shared/` типы; `npm run dev:pingok-micro`; секреты только в `.env` (см. `.gitignore` внутри каталога) |
 | `EDGE/` | Отдельный микросервис геймификации: модульные `rules/service/routes`, свой запуск `npm run dev:edge`, UIX-подбор `EDGE/docs/GAMIFICATION_UIX_GITHUB.md`, **спека движка кампаний** `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` |
 
 База данных (смысл таблиц, слой storage): `docs/DB.md`.

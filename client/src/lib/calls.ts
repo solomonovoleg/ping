@@ -30,18 +30,27 @@ export async function getCallToken(): Promise<string> {
   return data.token;
 }
 
-const WS_BASE = (() => {
+function trimHttpBase(raw: string): string {
+  return raw.trim().replace(/\/+$/, "");
+}
+
+/**
+ * HTTP(S) origin for WebSocket paths `/calls` and `/group-calls` (always at site root on nginx).
+ * REST uses `/api/*`; if `VITE_API_URL` is `https://host/api`, we must not build `wss://host/api/calls`.
+ */
+export function getRealtimeWebSocketHttpBase(): string | null {
   if (typeof import.meta !== "undefined" && import.meta.env?.VITE_WS_URL) {
-    return String(import.meta.env.VITE_WS_URL).replace(/\/$/, "");
+    return trimHttpBase(String(import.meta.env.VITE_WS_URL)).replace(/\/api$/i, "");
   }
-  if (API_BASE) return String(API_BASE).replace(/\/$/, "");
+  if (API_BASE) return trimHttpBase(String(API_BASE)).replace(/\/api$/i, "");
   return null;
-})();
+}
 
 /** Base `wss://…/calls` URL without secrets (token via Sec-WebSocket-Protocol). */
 export function getCallWsUrl(): string {
-  if (WS_BASE) {
-    const wsOrigin = WS_BASE.replace(/^https:\/\//i, "wss://");
+  const wsBase = getRealtimeWebSocketHttpBase();
+  if (wsBase) {
+    const wsOrigin = wsBase.replace(/^https:\/\//i, "wss://");
     return `${wsOrigin}/calls`;
   }
   const base = typeof window !== "undefined" ? window.location : { protocol: "http:", host: "localhost" };

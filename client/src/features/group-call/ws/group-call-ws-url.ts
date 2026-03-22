@@ -1,22 +1,14 @@
-import { getCallToken } from "@/lib/calls";
-import { API_BASE } from "@/lib/api-base";
+import { getCallToken, getRealtimeWebSocketHttpBase } from "@/lib/calls";
 import { CALL_WS_SUBPROTOCOL } from "@shared/ws-call-handshake";
 
 /** Ждём открытия сокета: иначе пользователь «висит» в connecting при ошибке nginx/токена. */
 const GROUP_CALL_WS_OPEN_MS = 25_000;
 
-const WS_BASE = (() => {
-  if (typeof import.meta !== "undefined" && import.meta.env?.VITE_WS_URL) {
-    return String(import.meta.env.VITE_WS_URL).replace(/\/$/, "");
-  }
-  if (API_BASE) return String(API_BASE).replace(/\/$/, "");
-  return null;
-})();
-
 /** Base `wss://…/group-calls` without token (auth via Sec-WebSocket-Protocol). */
 export function buildGroupCallWsUrl(): string {
-  if (WS_BASE) {
-    const wsOrigin = WS_BASE.replace(/^https:\/\//i, "wss://");
+  const wsBase = getRealtimeWebSocketHttpBase();
+  if (wsBase) {
+    const wsOrigin = wsBase.replace(/^https:\/\//i, "wss://");
     return `${wsOrigin}/group-calls`;
   }
   const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
