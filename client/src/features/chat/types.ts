@@ -22,6 +22,8 @@ export type ApiChat = {
   /** Полка: general | friends | work | promo | invitations */
   listSection?: string;
   lastMessage?: { type: string; content: string; createdAt: string } | null;
+  /** Метка прочитанности текущего пользователя (для скролла к первому непрочитанному). */
+  myLastReadAt?: string | null;
   hasUnread?: boolean;
   unreadCount?: number;
   otherMemberAvatarUrl?: string | null;

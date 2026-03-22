@@ -99,11 +99,19 @@ async function buildDmChatPayload(
   const otherId = memberIds.find((id) => id !== viewerId);
   const other = otherId ? await storage.getUser(otherId) : undefined;
   const otherName = other ? [other.displayName, other.surname].filter(Boolean).join(" ") || null : null;
-  const otherLastReadAt = otherId ? await storage.getChatMemberLastReadAt(chatId, otherId) : null;
+  const [otherLastReadAt, myLastReadAt, unreadCount] = await Promise.all([
+    otherId ? storage.getChatMemberLastReadAt(chatId, otherId) : Promise.resolve(null),
+    storage.getChatMemberLastReadAt(chatId, viewerId),
+    storage.getUnreadCount(chatId, viewerId),
+  ]);
   const lastSeenAt = await getOtherLastSeenAt(viewerId, otherId, other);
+  const hasUnread = unreadCount > 0;
   return {
     ...baseChat,
     name: otherName,
+    myLastReadAt: myLastReadAt?.toISOString() ?? null,
+    hasUnread,
+    unreadCount: hasUnread ? unreadCount : 0,
     otherMember: other
       ? {
           id: other.id,
@@ -321,7 +329,11 @@ export async function getDmByPublicId(userId: string, publicIdNum: number, messa
   const chatPayload = await buildDmChatPayload(chat.id, userId, chat as unknown as Record<string, unknown>);
 
   if (messagesLimit > 0) {
-    const raw = await storage.getMessagesByChatId(chat.id, messagesLimit);
+    const p = chatPayload as { unreadCount?: number; hasUnread?: boolean };
+    const uc = typeof p.unreadCount === "number" ? p.unreadCount : 0;
+    const hasUn = p.hasUnread === true || uc > 0;
+    const effectiveLimit = Math.min(200, Math.max(messagesLimit, hasUn ? uc + 40 : messagesLimit));
+    const raw = await storage.getMessagesByChatId(chat.id, effectiveLimit);
     const withReply = await enrichMessagesWithReply(raw, (c, m) => storage.getMessage(c, m));
     const msgIds = withReply.map((m) => m.id);
     const reactionMap = process.env.DATABASE_URL
@@ -358,7 +370,20 @@ async function buildGroupChatPayload(
     if (id === viewerId) myRole = m?.role ?? "member";
   }
   const chat = baseChat as { avatarUrl?: string | null };
-  return { ...baseChat, members, avatarUrl: chat.avatarUrl ?? null, myRole };
+  const [myLastReadAt, unreadCount] = await Promise.all([
+    storage.getChatMemberLastReadAt(chatId, viewerId),
+    storage.getUnreadCount(chatId, viewerId),
+  ]);
+  const hasUnread = unreadCount > 0;
+  return {
+    ...baseChat,
+    members,
+    avatarUrl: chat.avatarUrl ?? null,
+    myRole,
+    myLastReadAt: myLastReadAt?.toISOString() ?? null,
+    hasUnread,
+    unreadCount: hasUnread ? unreadCount : 0,
+  };
 }
 
 export async function getChatByIdForUser(userId: string, chatId: string) {

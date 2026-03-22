@@ -691,7 +691,6 @@ export default function Chats() {
       const aTs = Date.parse(a.lastMessage?.createdAt ?? a.createdAt) || 0;
       const bTs = Date.parse(b.lastMessage?.createdAt ?? b.createdAt) || 0;
       if (aTs !== bTs) return bTs - aTs;
-      if (a.hasUnread !== b.hasUnread) return a.hasUnread ? -1 : 1;
       return 0;
     });
   }, [filteredBySection]);

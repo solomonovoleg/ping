@@ -198,7 +198,10 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           setResolvedChatId(cId);
           setChat(chatData);
           const list: ApiMessage[] = "messages" in data && Array.isArray(data.messages) ? data.messages : [];
-          setHasMoreMessages(list.length >= MESSAGES_PAGE);
+          const unreadNn = chatData.unreadCount ?? 0;
+          const hasUnDm = chatData.hasUnread === true || unreadNn > 0;
+          const dmLimit = hasUnDm ? Math.min(200, Math.max(MESSAGES_PAGE, unreadNn + 40)) : MESSAGES_PAGE;
+          setHasMoreMessages(list.length >= dmLimit);
           if (user?.id) {
             void mergeOutboxIntoServerList(cId, user.id, list, null).then((merged) => {
               if (currentChatIdRef.current === cId) setMessages(merged);
@@ -284,12 +287,15 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
             })
             .catch(() => {});
         }
-        const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+        const unreadN = chatData.unreadCount ?? 0;
+        const hasUn = chatData.hasUnread === true || unreadN > 0;
+        const msgLimit = hasUn ? Math.min(200, Math.max(MESSAGES_PAGE, unreadN + 40)) : MESSAGES_PAGE;
+        const msgParams = new URLSearchParams({ limit: String(msgLimit) });
         if (folderId) msgParams.set("folderId", folderId);
         const messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
         const list: ApiMessage[] = messagesRes.ok ? await messagesRes.json() : [];
         if (currentChatIdRef.current === id) {
-          setHasMoreMessages(list.length >= MESSAGES_PAGE);
+          setHasMoreMessages(list.length >= msgLimit);
           const arr = Array.isArray(list) ? list : [];
           if (user?.id) {
             void mergeOutboxIntoServerList(id, user.id, arr, folderId).then((merged) => {
@@ -467,9 +473,8 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   if (prevChatIdRef.current !== chatId) { prevChatIdRef.current = chatId; didInitialScrollRef.current = false; }
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) return;
-    const isInitial = !didInitialScrollRef.current;
-    if (isInitial) didInitialScrollRef.current = true;
+    if (!container || loading) return;
+
     const scrollToBottom = (smooth: boolean) => {
       const target = container.scrollHeight - container.clientHeight;
       if (target <= 0) return;
@@ -479,15 +484,49 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         container.scrollTop = target;
       }
     };
+
+    const isInitial = !didInitialScrollRef.current;
     const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+
     if (isInitial) {
-      requestAnimationFrame(() => scrollToBottom(false));
-    } else if (nearBottom) {
+      if (messages.length > 0 && messages.some((m) => m.chatId !== chatId)) return;
+      didInitialScrollRef.current = true;
+      const uid = user?.id;
+      const unreadN = chat?.unreadCount ?? 0;
+      const hasUn = chat?.hasUnread === true || unreadN > 0;
+      const myReadIso = chat?.myLastReadAt ?? null;
+      let anchorId: string | null = null;
+      if (hasUn && uid) {
+        const myReadMs = myReadIso ? parseMessageDate(myReadIso).getTime() : null;
+        for (const m of messages) {
+          if (m.chatId !== chatId) continue;
+          if (m.senderId === uid || m.id.startsWith("temp-") || m.id.startsWith("obq-")) continue;
+          const t = parseMessageDate(m.createdAt).getTime();
+          if (myReadMs == null || t > myReadMs) {
+            anchorId = m.id;
+            break;
+          }
+        }
+      }
+      requestAnimationFrame(() => {
+        if (anchorId) {
+          const el = container.querySelector(`[data-message-id="${anchorId}"]`);
+          if (el instanceof HTMLElement) {
+            el.scrollIntoView({ block: "center", inline: "nearest" });
+            return;
+          }
+        }
+        scrollToBottom(false);
+      });
+      return;
+    }
+
+    if (nearBottom) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => scrollToBottom(true));
       });
     }
-  }, [messages, chatId]);
+  }, [messages, chatId, loading, chat?.myLastReadAt, chat?.hasUnread, chat?.unreadCount, user?.id]);
 
   const currentFolderIdRef = useRef(currentFolderId);
   currentFolderIdRef.current = currentFolderId;
