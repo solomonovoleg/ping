@@ -260,9 +260,11 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | 2026-03 | `EDGE/`, `server/edge/`, `client/src/lib/edge-gamification.ts` | Новый изолированный EDGE микросервис (gamification/game logic) + тонкий адаптер `/api/edge/*` в основной платформе; модуль `companion` с состоянием персонажа, заданиями и лидербордом |
 | 2026-03 | `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` | Архитектура движка: кампании, surfaces, задания (EDGE + platform), лидерборд, призы/итоги, Board создателя, эволюция под новые UI (каталог) |
 | 2026-03 | `client/src/features/edge-companion/`, `client/src/pages/EdgeCompanion.tsx`, `client/src/pages/Posts.tsx` | EDGE в ленте: блок кампании в теле поста (`posts.edge_id`), те же метрики что у обычного поста; `MeasuredFeedItem` + `recordPostView` при скролле; экран `/edge/companion` |
+| 2026-03 | `GET /api/edge/companion/campaign-config`, `client/src/lib/edge-gamification.ts` | Клиент `fetchEdgeCompanionCampaignConfig`; пока без внешнего EDGE — ответ-заглушка с `isStub: true` и честным текстом на экране Companion |
 | 2026-03 | `migrations/0023_posts_edge_id.sql`, `scripts/migrate-posts-edge-id.cjs`, `server/posts/service.ts` + `routes.ts` | Колонка `edge_id`, `parsePostEdgeId`, выдача в ленте/деталке/сохранённых; `POST /api/posts` принимает `edgeId` |
 | 2026-03 | `useChatMessages.ts`, `Chats.tsx`, `ChatMessageRow.tsx`, `message-delivery-status.ts`, `lib/external-video.ts`, `ExternalVideoEmbedCard.tsx`, `server/chats/service.ts` | Чат: стартовый скролл к первому непрочитанному (`myLastReadAt`), единые галочки доставки/прочтения для текста/аудио/кружка; превью YouTube/RuTube/Яндекс по тапу; список чатов: бейдж непрочитанных и сортировка по последнему сообщению |
 | 2026-03 | `ПИНГОК МИКРО/` (включён в git), `ПИНГОК МИКРО/.gitignore`, корневой `.gitignore` | Микросервис голоса/оверлея версионируется в репо; `.env` в каталоге не коммитится |
+| 2026-03 | `script/build.ts` → `dist/pingok-micro.cjs`, `ecosystem.config.cjs`, `scripts/deploy.sh`, `docs/DEPLOY.md` | Деплой: второй процесс PM2 `pingok-micro` (порт 3091), переменные `PINGOK_MICRO_*` из deploy.env; nginx-префикс для SPA |
 
 ---
 

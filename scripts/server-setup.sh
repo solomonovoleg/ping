@@ -158,4 +158,8 @@ pm2 startup 2>/dev/null || true
 
 echo ""
 echo "Приложение запущено на порту $PORT (PM2, имя процесса: $PM2_APP_NAME). Проверка: http://$(hostname -I | awk '{print $1}'):$PORT"
+PN="${PINGOK_PM2_NAME:-pingok-micro}"
+if pm2 describe "$PN" >/dev/null 2>&1; then
+  echo "ПИНГОК МИКРО: pm2 describe $PN | pm2 logs $PN (порт PINGOK_MICRO_PORT в .env, по умолчанию 3091)"
+fi
 echo "Команды: pm2 status | pm2 logs $PM2_APP_NAME | pm2 restart $PM2_APP_NAME"

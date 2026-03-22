@@ -78,6 +78,31 @@ cp deploy.env.example deploy.env
 | Порт            | **3080** (только этот проект) |
 | База данных     | отдельная БД, например **ping_moot** |
 | Домен           | свой (в nginx указываешь свой server_name) |
+| **ПИНГОК МИКРО** | отдельный PM2-процесс `pingok-micro`, порт **3091** (`dist/pingok-micro.cjs`); в `deploy.env` — `PINGOK_MICRO_CORS_ORIGIN` под домен SPA |
+
+После `npm run deploy` в **pm2 list** два процесса: основное приложение (`ping-moot` или `PM2_APP_NAME`) и **`pingok-micro`**. Логи: `pm2 logs pingok-micro`.
+
+**Nginx** (чтобы браузер ходил на тот же HTTPS-домен, без открытия 3091 наружу):
+
+```nginx
+# префикс снимается — на Node уходит /health, /v1/parse
+location /pingok-micro-standalone/ {
+  proxy_pass http://127.0.0.1:3091/;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+В **`deploy.env`** для сборки клиента (fallback, если основной `/api/pingok-micro` недоступен):
+
+```env
+PINGOK_MICRO_CORS_ORIGIN=https://твой-домен.ru
+VITE_PINGOK_MICRO_URL=https://твой-домен.ru/pingok-micro-standalone
+```
+
+Отключить отдельный процесс: `PINGOK_MICRO_PM2_ENABLED=0` в `deploy.env` (на сервере после деплоя в `.env`). Старый процесс при необходимости: `pm2 delete pingok-micro`.
 
 ---
 

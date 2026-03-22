@@ -132,6 +132,12 @@ if [ -f deploy.env ] && [ -n "${DATABASE_URL:-}" ]; then
     put "$S3_ACCESS_KEY" "S3_ACCESS_KEY"
     put "$S3_SECRET_KEY" "S3_SECRET_KEY"
     put "$S3_PUBLIC_ACL" "S3_PUBLIC_ACL"
+    # ПИНГОК МИКРО — отдельный PM2-процесс (dist/pingok-micro.cjs). CORS: домен SPA, через запятую.
+    put "${PINGOK_MICRO_PORT:-3091}" "PINGOK_MICRO_PORT"
+    put "$PINGOK_MICRO_CORS_ORIGIN" "PINGOK_MICRO_CORS_ORIGIN"
+    put "$PINGOK_MICRO_PARSE_PER_MIN" "PINGOK_MICRO_PARSE_PER_MIN"
+    put "$PINGOK_MICRO_PM2_ENABLED" "PINGOK_MICRO_PM2_ENABLED"
+    put "$PINGOK_PM2_NAME" "PINGOK_PM2_NAME"
   }
   ENV_TMP="/tmp/ping-moot-deploy-$$.env"
   trap "rm -f $ENV_TMP" EXIT

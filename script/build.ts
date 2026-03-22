@@ -82,6 +82,21 @@ async function buildAll() {
     },
   });
 
+  console.log("building pingok-micro (standalone)...");
+  await esbuild({
+    entryPoints: [path.join(root, "ПИНГОК МИКРО", "server", "index.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/pingok-micro.cjs"),
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+  });
+
   console.log("building seed-admin...");
   const seedExternals = externals.filter((d) => d !== "dotenv");
   await esbuild({

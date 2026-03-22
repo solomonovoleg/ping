@@ -46,4 +46,4 @@ VITE_PINGOK_MICRO_URL=http://localhost:3091
 
 - Прокси с основного домена (`/pingok-micro/`) + авторизация.
 - Реальный NLU (LLM или правила) в `POST /v1/parse`.
-- Отдельный PM2-процесс на VPS (см. `ecosystem.config.cjs` — добавить при выкате).
+- Отдельный PM2-процесс на VPS: в корне `ecosystem.config.cjs` (второй app `pingok-micro`), сборка `dist/pingok-micro.cjs` в `npm run build` / `npm run deploy`. См. `docs/DEPLOY.md`.
