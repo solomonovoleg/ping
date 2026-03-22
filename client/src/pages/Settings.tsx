@@ -914,6 +914,41 @@ export default function Settings() {
             </button>
           </div>
 
+          {/* Профиль участника id 5 (тот же паттерн, что и карточка создателя) */}
+          {user?.publicId === 5 ? (
+            <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm mt-2">
+              <button
+                type="button"
+                onClick={() => setLocation("/profile/me")}
+                className="w-full flex items-center justify-between gap-3 p-3.5 hover:bg-secondary/50 transition-colors duration-75 active:scale-[0.99]"
+                aria-label="Открыть мой профиль, публичный id 5"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <UserAvatar
+                    avatarUrl={user.avatarUrl ?? undefined}
+                    displayName={[user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль"}
+                    seed={user.id}
+                    size={40}
+                    className="h-10 w-10 shrink-0 rounded-xl"
+                  />
+                  <div className="min-w-0 text-left">
+                    <p className="text-sm font-medium text-foreground truncate">
+                      {[user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль id 5"}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      ID {user.publicId}
+                      {user.city ? ` · ${user.city}` : ""}
+                    </p>
+                    <p className="text-xs text-muted-foreground/90 truncate mt-0.5">
+                      {user.bio?.trim() || "я дамб"}
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
+              </button>
+            </div>
+          ) : null}
+
           {/* Logout Button */}
           <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm mt-2">
             <button
