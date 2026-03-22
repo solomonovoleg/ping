@@ -20,6 +20,7 @@ export { RecordingStrip } from "./RecordingStrip";
 export { AiChatView } from "./AiChatView";
 export { ChatDetailAppearancePanel } from "./ChatDetailAppearancePanel";
 export type { ChatAppearanceBgLayout, ChatDetailAppearancePanelProps } from "./ChatDetailAppearancePanel";
+export { ChatDetailLifecycleSection } from "./ChatDetailLifecycleSection";
 export { ChatDetailOverflowMenuShell, ChatDetailGroupMenuBody } from "./ChatDetailOverflowMenus";
 export type { ChatDetailGroupMenuBodyProps } from "./ChatDetailOverflowMenus";
 export { ChatDetailGroupFolderStrip, ChatDetailGroupCallLobbyBanner } from "./ChatDetailGroupChrome";

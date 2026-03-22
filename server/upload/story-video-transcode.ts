@@ -13,6 +13,8 @@ const OUTPUT_CONTENT_TYPE = "video/mp4";
 const OUTPUT_EXT = ".mp4";
 const STORY_VIDEO_FILTER =
   "scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease,hqdn3d=1.1:1.0:2.5:2.2,eq=brightness=0.03:contrast=1.05:saturation=1.08,unsharp=3:3:0.25:3:3:0.12";
+/** Минимальный фильтр: работает на «урезанных» сборках ffmpeg без hqdn3d и т.п. */
+const STORY_VIDEO_FILTER_SIMPLE = "scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease";
 const STORY_AUDIO_FILTER =
   "highpass=f=80,lowpass=f=14000,acompressor=threshold=-18dB:ratio=2.5:attack=12:release=160,alimiter=limit=0.92,loudnorm=I=-16:LRA=11:TP=-1.5";
 
@@ -60,21 +62,27 @@ export function validateStoryVideoUpload(file: UploadFileLike): string | null {
   return null;
 }
 
-export type VideoTranscodeTrim = { startSec: number; durationSec: number };
+export type VideoTranscodeTrim = {
+  startSec: number;
+  durationSec: number;
+  /** Верхняя граница длины клипа (пост 14 с, аватар 4 с). По умолчанию POST_VIDEO_MAX_SECONDS. */
+  maxSegmentSec?: number;
+};
 
-async function transcodeToStreamableMp4(
+function buildFfmpegTranscodeArgs(
   inputPath: string,
   outputPath: string,
-  trim?: VideoTranscodeTrim,
-): Promise<void> {
-  await ensureFfmpegReady();
-  const startSec = trim != null ? Math.max(0, trim.startSec) : 0;
-  const durationSec =
-    trim != null
-      ? Math.min(POST_VIDEO_MAX_SECONDS, Math.max(0.1, trim.durationSec))
-      : POST_VIDEO_MAX_SECONDS;
-  const args = [
+  startSec: number,
+  durationSec: number,
+  vf: string,
+  withAudioFilter: boolean,
+  opts: { forceR30: boolean; profileMain: boolean; includeAudio: boolean },
+): string[] {
+  const args: string[] = [
     "-y",
+    "-hide_banner",
+    "-loglevel",
+    "error",
     "-i",
     inputPath,
     "-ss",
@@ -83,32 +91,36 @@ async function transcodeToStreamableMp4(
     String(durationSec),
     "-map",
     "0:v:0",
-    "-map",
-    "0:a:0?",
+  ];
+  if (opts.includeAudio) {
+    args.push("-map", "0:a:0?");
+  }
+  args.push(
     "-c:v",
     "libx264",
     "-preset",
     "veryfast",
-    "-profile:v",
-    "main",
-    "-level",
-    "4.0",
     "-pix_fmt",
     "yuv420p",
     "-vf",
-    STORY_VIDEO_FILTER,
-    "-r",
-    "30",
-    "-c:a",
-    "aac",
-    "-af",
-    STORY_AUDIO_FILTER,
-    "-b:a",
-    "128k",
-    "-ac",
-    "2",
-    "-ar",
-    "48000",
+    vf,
+  );
+  if (opts.profileMain) {
+    args.push("-profile:v", "main", "-level", "4.0");
+  }
+  if (opts.forceR30) {
+    args.push("-r", "30");
+  }
+  if (opts.includeAudio) {
+    args.push("-c:a", "aac");
+    if (withAudioFilter) {
+      args.push("-af", STORY_AUDIO_FILTER);
+    }
+    args.push("-b:a", "128k", "-ac", "2", "-ar", "48000");
+  } else {
+    args.push("-an");
+  }
+  args.push(
     "-b:v",
     "2500k",
     "-maxrate",
@@ -118,8 +130,103 @@ async function transcodeToStreamableMp4(
     "-movflags",
     "+faststart",
     outputPath,
+  );
+  return args;
+}
+
+/** Чётные размеры + yuv420p (iPhone HDR/нечётные кадры без libx264-ошибок). */
+const STORY_VIDEO_FILTER_SAFE =
+  "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease";
+
+async function transcodeToStreamableMp4(
+  inputPath: string,
+  outputPath: string,
+  trim?: VideoTranscodeTrim,
+): Promise<void> {
+  await ensureFfmpegReady();
+  const cap = trim?.maxSegmentSec ?? POST_VIDEO_MAX_SECONDS;
+  const startSec = trim != null ? Math.max(0, trim.startSec) : 0;
+  const durationSec =
+    trim != null ? Math.min(cap, Math.max(0.1, trim.durationSec)) : cap;
+
+  const attempts: { label: string; args: string[] }[] = [
+    {
+      label: "premium",
+      args: buildFfmpegTranscodeArgs(
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        STORY_VIDEO_FILTER,
+        true,
+        { forceR30: true, profileMain: true, includeAudio: true },
+      ),
+    },
+    {
+      label: "simple",
+      args: buildFfmpegTranscodeArgs(
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        STORY_VIDEO_FILTER_SIMPLE,
+        false,
+        { forceR30: true, profileMain: true, includeAudio: true },
+      ),
+    },
+    {
+      label: "relaxed_no_r30",
+      args: buildFfmpegTranscodeArgs(
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        STORY_VIDEO_FILTER_SIMPLE,
+        false,
+        { forceR30: false, profileMain: false, includeAudio: true },
+      ),
+    },
+    {
+      label: "video_only",
+      args: buildFfmpegTranscodeArgs(
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        STORY_VIDEO_FILTER_SIMPLE,
+        false,
+        { forceR30: false, profileMain: false, includeAudio: false },
+      ),
+    },
+    {
+      label: "safe_pixel_scale",
+      args: buildFfmpegTranscodeArgs(
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        STORY_VIDEO_FILTER_SAFE,
+        false,
+        { forceR30: false, profileMain: false, includeAudio: false },
+      ),
+    },
   ];
-  await runCommand("ffmpeg", args);
+
+  let lastErr: unknown;
+  for (const { label, args } of attempts) {
+    try {
+      await runCommand("ffmpeg", args);
+      if (label !== "premium") {
+        console.warn(`[story-video-transcode] used fallback pipeline: ${label}`);
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message.slice(0, 500) : String(err);
+      console.warn(`[story-video-transcode] pipeline "${label}" failed:`, msg);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 export async function transcodeStoryVideoBuffer(

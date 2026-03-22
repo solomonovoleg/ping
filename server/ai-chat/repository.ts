@@ -9,6 +9,7 @@ export type AiMessageRow = {
   role: string;
   content: string;
   created_at: Date;
+  payload: unknown | null;
 };
 
 type ChatCatalogRow = {
@@ -41,6 +42,8 @@ export type ScopedSearchHit = {
   snippet: string;
   createdAt: string;
 };
+
+export type TagSearchHit = ScopedSearchHit & { tagHits: number };
 
 export async function fetchUserChatCatalog(userId: string): Promise<ChatCatalogItem[]> {
   const p = getPool();
@@ -123,6 +126,61 @@ export async function searchMessagesInChats(
   });
 }
 
+function escapeIlikeFragment(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+/** Поиск текстовых сообщений по OR ILIKE тегов; счёт совпадений — для ранжирования. */
+export async function searchMessagesAcrossChatsByTags(
+  userId: string,
+  chatIds: string[],
+  tags: string[],
+  opts?: { dateFromIso?: string | null; dateToIso?: string | null; limit?: number },
+): Promise<TagSearchHit[]> {
+  const cleaned = tags
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && t.length <= 64);
+  if (!chatIds.length || !cleaned.length) return [];
+  const patterns = cleaned.map((t) => `%${escapeIlikeFragment(t)}%`);
+  const lim = Math.min(Math.max(opts?.limit ?? 60, 1), 120);
+  const p = getPool();
+  const dateFrom = opts?.dateFromIso?.trim() || null;
+  const dateTo = opts?.dateToIso?.trim() || null;
+  const r = await p.query<ScopedSearchMessageRow & { tag_hits: string; transcript: string | null }>(
+    `WITH pat AS (SELECT unnest($3::text[]) AS p)
+     SELECT m.id, m.chat_id, m.content, m.transcript, m.created_at,
+            (
+              SELECT COUNT(*)::int FROM pat
+              WHERE COALESCE(NULLIF(trim(m.transcript), ''), m.content) ILIKE pat.p ESCAPE '\\'
+            ) AS tag_hits
+     FROM messages m
+     INNER JOIN chat_members cm
+       ON cm.chat_id = m.chat_id AND cm.user_id = $1
+     WHERE m.chat_id = ANY($2::varchar[])
+       AND EXISTS (
+         SELECT 1 FROM pat
+         WHERE COALESCE(NULLIF(trim(m.transcript), ''), m.content) ILIKE pat.p ESCAPE '\\'
+       )
+       AND ($4::timestamptz IS NULL OR m.created_at >= $4::timestamptz)
+       AND ($5::timestamptz IS NULL OR m.created_at < ($5::timestamptz + interval '1 day'))
+     ORDER BY tag_hits DESC, m.created_at DESC
+     LIMIT $6`,
+    [userId, chatIds, patterns, dateFrom, dateTo, lim],
+  );
+  return r.rows.map((row) => {
+    const raw = row.transcript;
+    const text = String(raw ?? "").trim() || row.content.replace(/\s+/g, " ").trim();
+    const compact = text.replace(/\s+/g, " ").trim();
+    return {
+      messageId: row.id,
+      chatId: row.chat_id,
+      snippet: compact.length > 220 ? `${compact.slice(0, 217)}...` : compact,
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      tagHits: parseInt(String(row.tag_hits), 10) || 0,
+    };
+  });
+}
+
 export async function fetchAiMessages(
   userId: string,
   limit: number,
@@ -131,7 +189,7 @@ export async function fetchAiMessages(
   const p = getPool();
   if (beforeId) {
     const r = await p.query<AiMessageRow>(
-      `SELECT id, user_id, role, content, created_at FROM ai_chat_messages
+      `SELECT id, user_id, role, content, created_at, payload FROM ai_chat_messages
        WHERE user_id = $1 AND created_at < (SELECT created_at FROM ai_chat_messages WHERE id = $2)
        ORDER BY created_at DESC LIMIT $3`,
       [userId, beforeId, Math.min(limit, MAX_MESSAGES_PAGE)],
@@ -139,7 +197,7 @@ export async function fetchAiMessages(
     return r.rows.reverse();
   }
   const r = await p.query<AiMessageRow>(
-    `SELECT id, user_id, role, content, created_at FROM ai_chat_messages
+    `SELECT id, user_id, role, content, created_at, payload FROM ai_chat_messages
      WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [userId, Math.min(limit, MAX_MESSAGES_PAGE)],
   );
@@ -150,12 +208,13 @@ export async function createAiMessage(
   userId: string,
   role: "user" | "assistant",
   content: string,
+  payload?: unknown | null,
 ): Promise<{ id: string; createdAt: string }> {
   const p = getPool();
   const id = randomUUID();
   await p.query(
-    `INSERT INTO ai_chat_messages (id, user_id, role, content) VALUES ($1, $2, $3, $4)`,
-    [id, userId, role, content],
+    `INSERT INTO ai_chat_messages (id, user_id, role, content, payload) VALUES ($1, $2, $3, $4, $5)`,
+    [id, userId, role, content, payload ?? null],
   );
   const [row] = (await p.query<{ created_at: Date }>(`SELECT created_at FROM ai_chat_messages WHERE id = $1`, [id])).rows;
   return { id, createdAt: row.created_at.toISOString() };

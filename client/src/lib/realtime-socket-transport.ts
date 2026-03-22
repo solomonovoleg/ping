@@ -4,6 +4,7 @@ import {
   emitChatListUpdate,
   emitChatRead,
   emitIncomingChatMessageHint,
+  emitGroupCallInvite,
   emitMessageEdited,
   emitMessageReaction,
   emitChatVibeUpdate,
@@ -17,6 +18,7 @@ export type ChatMessagePayload = {
   content: string;
   createdAt: string;
   folderId?: string | null;
+  transcript?: string | null;
   translatedText?: string;
   detectedLang?: string;
 };
@@ -248,6 +250,23 @@ export class RealtimeSocketTransport {
           const inc = raw.incomingMessage as { chatId?: string; senderId?: string } | undefined;
           if (typeof inc?.chatId === "string" && typeof inc?.senderId === "string") {
             emitIncomingChatMessageHint({ chatId: inc.chatId, senderId: inc.senderId });
+          }
+          const gci = raw.groupCallInvite as
+            | { chatId?: string; roomId?: string; mediaType?: string; hostUserId?: string; chatTitle?: string | null }
+            | undefined;
+          if (
+            typeof gci?.chatId === "string" &&
+            typeof gci?.roomId === "string" &&
+            typeof gci?.hostUserId === "string" &&
+            (gci.mediaType === "audio" || gci.mediaType === "video")
+          ) {
+            emitGroupCallInvite({
+              chatId: gci.chatId,
+              roomId: gci.roomId,
+              mediaType: gci.mediaType,
+              hostUserId: gci.hostUserId,
+              chatTitle: typeof gci.chatTitle === "string" || gci.chatTitle === null ? gci.chatTitle : undefined,
+            });
           }
           return;
         }

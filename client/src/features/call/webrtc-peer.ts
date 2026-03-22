@@ -29,12 +29,14 @@ export class WebRtcCallPeer {
     }
 
     const wantVideo = mediaType === "video";
+    /** Две попытки с одинаковой «семьёй» настроек: лишние варианты заставляли часть браузеров снова показывать диалог. */
     const attempts: MediaStreamConstraints[] = [
       getMediaConstraints(wantVideo, { highQuality: wantVideo }),
       getMediaConstraints(wantVideo),
-      { audio: true, video: wantVideo ? { facingMode: "user" } : false },
-      { audio: true, video: wantVideo },
     ];
+    if (wantVideo) {
+      attempts.push({ audio: true, video: { facingMode: "user" } });
+    }
 
     let lastErr: unknown = null;
     for (const constraints of attempts) {

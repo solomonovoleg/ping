@@ -1,5 +1,7 @@
 import { isNative } from "@/lib/capacitor-native";
 
+/** Схема авторизации и публичных ручек: `docs/API_AUTH_AND_PUBLIC.md`. */
+
 /**
  * Базовый URL для API. В вебе пусто (относительные запросы).
  * В нативном приложении (Capacitor) задаётся через VITE_API_URL при сборке (например https://pingos.ru).

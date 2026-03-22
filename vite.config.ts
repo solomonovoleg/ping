@@ -29,6 +29,7 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+      "@pingok-micro": path.resolve(import.meta.dirname, "ПИНГОК МИКРО", "client"),
     },
   },
   css: {
@@ -67,6 +68,11 @@ export default defineConfig({
     fs: {
       strict: true,
       deny: ["**/.*"],
+      allow: [
+        path.resolve(import.meta.dirname, "client"),
+        path.resolve(import.meta.dirname, "shared"),
+        path.resolve(import.meta.dirname, "ПИНГОК МИКРО"),
+      ],
     },
   },
 });

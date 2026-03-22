@@ -1,6 +1,7 @@
 import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
 import { storage } from "../storage";
 import { notifyNewMessage, notifyMessageDeleted, notifyMessageEdited } from "../realtime/chat";
+import { scheduleVoiceOrVideoNoteTranscription } from "./voice-transcribe";
 import { notifyChatListUpdate } from "../calls/ws";
 import { sendPushToUser } from "../push/send";
 import { enrichMessagesWithReply } from "./reply";
@@ -96,6 +97,15 @@ export async function sendChatMessage(input: SendMessageInput) {
 
   let resolvedFolderId: string | undefined;
   const chat = await storage.getChatById(chatId);
+  if (chat?.type === "dm" && memberIds.length === 2) {
+    const recipientId = memberIds.find((id) => id !== userId);
+    if (recipientId) {
+      const recipientBlocksSender = await storage.getBlockFlags(recipientId, userId);
+      if (recipientBlocksSender?.restrictChat) {
+        throw new MessagesServiceError(403, "Пользователь не принимает сообщения");
+      }
+    }
+  }
   if (chat?.type === "group") {
     const mainFolder = await storage.getOrCreateMainFolder(chatId);
     resolvedFolderId = folderId ?? mainFolder.id;
@@ -203,7 +213,7 @@ export async function sendChatMessage(input: SendMessageInput) {
 
 export async function createScheduledMessage(input: CreateScheduledInput) {
   const { userId, chatId, content, folderId, type, replyToId, scheduledAt } = input;
-  await ensureChatAccess(userId, chatId);
+  const memberIds = await ensureChatAccess(userId, chatId);
   const rawType = normalizeMessageType(type);
   const scheduledDate = typeof scheduledAt === "string" ? new Date(scheduledAt) : scheduledAt;
   if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate <= new Date()) {
@@ -211,6 +221,15 @@ export async function createScheduledMessage(input: CreateScheduledInput) {
   }
   let resolvedFolderId: string | undefined;
   const chat = await storage.getChatById(chatId);
+  if (chat?.type === "dm" && memberIds.length === 2) {
+    const recipientId = memberIds.find((id) => id !== userId);
+    if (recipientId) {
+      const recipientBlocksSender = await storage.getBlockFlags(recipientId, userId);
+      if (recipientBlocksSender?.restrictChat) {
+        throw new MessagesServiceError(403, "Пользователь не принимает сообщения");
+      }
+    }
+  }
   if (chat?.type === "group") {
     const mainFolder = await storage.getOrCreateMainFolder(chatId);
     resolvedFolderId = folderId ?? mainFolder.id;
@@ -296,6 +315,9 @@ export async function processScheduledMessages(): Promise<number> {
         createdAt: (message.createdAt as Date)?.toISOString?.() ?? new Date().toISOString(),
       };
       notifyNewMessage(sm.chatId, payload);
+      if ((sm.type === "voice" || sm.type === "video_note") && process.env.DATABASE_URL) {
+        scheduleVoiceOrVideoNoteTranscription(sm.chatId, message.id);
+      }
       const memberIds = await storage.getChatMemberIds(sm.chatId);
       for (const mid of memberIds) {
         notifyChatListUpdate(mid);

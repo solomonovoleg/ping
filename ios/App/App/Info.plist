@@ -55,6 +55,10 @@
 	<string>PING сохраняет фото и видео в галерею по вашему запросу.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>PING сопоставляет номера из вашей телефонной книги с пользователями мессенджера — чтобы показать, кто уже в Ping.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>PING использует локальную сеть для аудио- и видеозвонков (в т.ч. в вашей Wi‑Fi сети).</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

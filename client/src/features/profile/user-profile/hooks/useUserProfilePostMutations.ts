@@ -35,6 +35,7 @@ export function useUserProfilePostMutations(toast: ProfileToast) {
     },
     onSuccess: (_data, { save }) => {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
+      queryClient.invalidateQueries({ queryKey: ["posts", "saved"] });
       toast({ title: save ? t.postSaved : t.postUnsaved });
     },
     onError: (e) =>

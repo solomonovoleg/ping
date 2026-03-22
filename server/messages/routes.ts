@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { requireAuth, getUserId } from "../auth/session";
+import { noStorePrivateJson } from "../middleware/no-store-private-json";
 import {
   registerMessageReactionsRoutes,
 } from "./reactions";
@@ -19,7 +20,7 @@ function param(p: Record<string, string | string[] | undefined>, key: string): s
 }
 
 export function registerMessagesRoutes(app: Express): void {
-  app.get("/api/chats/:chatId/messages", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats/:chatId/messages", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const limit = req.query.limit ? Math.min(Number(req.query.limit), 200) : 100;
     const beforeMessageId = typeof req.query.before === "string" && req.query.before ? req.query.before : undefined;
@@ -42,7 +43,7 @@ export function registerMessagesRoutes(app: Express): void {
     registerMessageReactionsRoutes(app, (c, m) => storage.getMessage(c, m), (c) => storage.getChatMemberIds(c));
   }
 
-  app.post("/api/chats/:chatId/messages", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/chats/:chatId/messages", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const { content, type = "text", folderId, replyToId, forwardedFromMessageId, originalChatId, scheduledAt } = req.body ?? {};
     if (!content || typeof content !== "string") {
@@ -83,7 +84,7 @@ export function registerMessagesRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/chats/:chatId/messages/:messageId", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/chats/:chatId/messages/:messageId", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "chatId");
     const messageId = param(req.params, "messageId");
@@ -101,7 +102,7 @@ export function registerMessagesRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/chats/:chatId/messages/:messageId", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/chats/:chatId/messages/:messageId", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "chatId");
     const messageId = param(req.params, "messageId");

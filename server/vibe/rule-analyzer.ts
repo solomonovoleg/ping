@@ -7,9 +7,10 @@ import type { VibeBatchResult, VibeThemeCode, VibeAxes } from "@shared/chat-vibe
 // ── Lexical dictionaries ─────────────────────────────────────
 
 const ROMANTIC_MARKERS = [
-  "люблю", "скучаю", "малыш", "малышка", "солнышко", "зайка", "зай",
-  "котик", "котенок", "милый", "милая", "нежн", "целую", "обнимаю",
-  "сердц", "love", "miss you", "babe", "darling", "honey", "sweet",
+  "люблю", "любим", "любов", "влюбл", "скучаю", "соскуч", "малыш", "малышка", "солнышко", "зайка", "зай",
+  "котик", "котенок", "милый", "милая", "миленьк", "нежн", "целую", "обнимаю", "поцелу",
+  "сердц", "родн", "единственн", "встречаемся", "отношен", "пара ", "вместе навсегда",
+  "love", "miss you", "babe", "darling", "honey", "sweet",
   "❤️", "💕", "💗", "💖", "💘", "😘", "😍", "🥰", "💋", "❤",
 ];
 
@@ -146,14 +147,17 @@ export function analyzeMessageBatch(texts: string[]): VibeBatchResult {
   const top = scores[0];
   const second = scores[1];
 
-  const maxPossible = Math.max(msgCount * 4, 1);
-  const rawConfidence = Math.min(top.score / maxPossible, 1);
+  // Раньше делили на msgCount*4 — в окне 8+ сообщений даже явная романтика давала rawConfidence < 0.1
+  // и итог < порога переключения на сервере.
+  const denom = Math.max(8, top.score * 2, 1);
+  const rawConfidence = Math.min(top.score / denom, 1);
 
   let dominant: VibeThemeCode = top.score >= 3 ? top.theme : "casual";
   let confidence = top.score >= 3 ? 0.4 + rawConfidence * 0.5 : 0.3;
 
   if (top.score > 0 && second.score > 0 && top.score - second.score <= 2) {
-    confidence *= 0.8;
+    // При ничьей по очкам (часто romantic vs relax на коротких репликах) не душим уверенность так сильно.
+    confidence *= top.score === second.score ? 0.95 : 0.8;
   }
 
   confidence = Math.round(confidence * 100) / 100;

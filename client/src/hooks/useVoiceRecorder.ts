@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { getMediaConstraints } from "@/features/call/call-ice-config";
 
 export type VoiceRecorderState = "idle" | "recording" | "error";
 
@@ -49,7 +50,7 @@ export function useVoiceRecorder() {
   const start = useCallback(async () => {
     setError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(false));
       streamRef.current = stream;
       const mimeType = MediaRecorder.isTypeSupported("audio/mp4;codecs=mp4a.40.2")
         ? "audio/mp4;codecs=mp4a.40.2"

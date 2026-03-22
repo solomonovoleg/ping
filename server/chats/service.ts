@@ -11,6 +11,7 @@ import {
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { stories, storyViews } from "@shared/schema";
+import { CHAT_LIST_SECTIONS, type ChatListSection } from "@shared/schema";
 
 export class ChatsServiceError extends Error {
   status: number;
@@ -117,8 +118,15 @@ async function buildDmChatPayload(
   };
 }
 
-export async function listChatsForUser(userId: string) {
-  const chats = await storage.getChatsForUser(userId);
+export async function listChatsForUser(userId: string, opts?: { hiddenOnly?: boolean }) {
+  const prefsMap = await storage.getChatMemberPrefsForUser(userId);
+  const hiddenOnly = opts?.hiddenOnly === true;
+  let chats = await storage.getChatsForUser(userId);
+  chats = chats.filter((c) => {
+    const p = prefsMap.get(c.id);
+    const isHidden = p?.hiddenAt != null;
+    return hiddenOnly ? isHidden : !isHidden;
+  });
   const result: Array<
     Awaited<ReturnType<typeof storage.getChatsForUser>>[number] & {
       lastMessage: { type: string; content: string; createdAt: string } | null;
@@ -130,6 +138,9 @@ export async function listChatsForUser(userId: string) {
       otherMemberLastSeenAt?: string | null;
       otherMemberHasActiveStory?: boolean;
       otherMemberHasUnseenStory?: boolean;
+      pinnedAt?: string | null;
+      listSection?: string;
+      myRole?: "admin" | "member";
     }
   > = [];
   const dmOtherMemberByChatId = new Map<string, string>();
@@ -153,6 +164,7 @@ export async function listChatsForUser(userId: string) {
       const otherUser = otherId ? await storage.getUser(otherId) : undefined;
       const lastSeenAt = await getOtherLastSeenAt(userId, otherId, otherUser);
       if (otherId) dmOtherMemberByChatId.set(chat.id, otherId);
+      const pr = prefsMap.get(chat.id);
       result.push({
         ...chat,
         name: otherUser ? [otherUser.displayName, otherUser.surname].filter(Boolean).join(" ") || null : null,
@@ -165,14 +177,21 @@ export async function listChatsForUser(userId: string) {
         myLastReadAt: myLastReadAt?.toISOString() ?? null,
         hasUnread,
         unreadCount: hasUnread ? unreadCount : 0,
+        pinnedAt: pr?.pinnedAt ? pr.pinnedAt.toISOString() : null,
+        listSection: pr?.listSection ?? "general",
       });
     } else {
+      const pr = prefsMap.get(chat.id);
+      const myMember = await storage.getChatMember(chat.id, userId);
       result.push({
         ...chat,
+        myRole: myMember?.role === "admin" ? "admin" : "member",
         lastMessage,
         myLastReadAt: myLastReadAt?.toISOString() ?? null,
         hasUnread,
         unreadCount: hasUnread ? unreadCount : 0,
+        pinnedAt: pr?.pinnedAt ? pr.pinnedAt.toISOString() : null,
+        listSection: pr?.listSection ?? "general",
       });
     }
   }
@@ -189,6 +208,9 @@ export async function listChatsForUser(userId: string) {
     chat.otherMemberHasUnseenStory = status.hasUnseenStory;
   }
   result.sort((a, b) => {
+    const ap = a.pinnedAt ? Date.parse(a.pinnedAt) : 0;
+    const bp = b.pinnedAt ? Date.parse(b.pinnedAt) : 0;
+    if (ap !== bp) return bp - ap;
     const aCreatedAt = a.createdAt instanceof Date ? a.createdAt.toISOString() : String(a.createdAt);
     const bCreatedAt = b.createdAt instanceof Date ? b.createdAt.toISOString() : String(b.createdAt);
     const at = Date.parse(a.lastMessage?.createdAt ?? aCreatedAt);
@@ -196,6 +218,81 @@ export async function listChatsForUser(userId: string) {
     return bt - at;
   });
   return result;
+}
+
+function parseListSection(raw: unknown): ChatListSection {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  return (CHAT_LIST_SECTIONS as readonly string[]).includes(s) ? (s as ChatListSection) : "general";
+}
+
+export async function updateChatMemberPrefsForUser(
+  userId: string,
+  chatId: string,
+  body: { pinned?: boolean; hidden?: boolean; listSection?: string }
+) {
+  const chat = await storage.getChatById(chatId);
+  if (!chat) throw new ChatsServiceError(404, "Чат не найден");
+  const memberIds = await storage.getChatMemberIds(chatId);
+  if (!memberIds.includes(userId)) throw new ChatsServiceError(403, "Нет доступа к чату");
+
+  const patch: { pinnedAt?: Date | null; hiddenAt?: Date | null; listSection?: string } = {};
+  if (body.pinned === true) patch.pinnedAt = new Date();
+  if (body.pinned === false) patch.pinnedAt = null;
+  if (body.hidden === true) patch.hiddenAt = new Date();
+  if (body.hidden === false) patch.hiddenAt = null;
+  if (body.listSection !== undefined) patch.listSection = parseListSection(body.listSection);
+
+  if (Object.keys(patch).length === 0) throw new ChatsServiceError(400, "Нет полей для обновления");
+  await storage.upsertChatMemberPrefs(userId, chatId, patch);
+  notifyChatListUpdate(userId);
+  return { ok: true };
+}
+
+export async function leaveChatForUser(userId: string, chatId: string) {
+  const chat = await storage.getChatById(chatId);
+  if (!chat) throw new ChatsServiceError(404, "Чат не найден");
+  const memberIds = await storage.getChatMemberIds(chatId);
+  if (!memberIds.includes(userId)) throw new ChatsServiceError(403, "Нет доступа к чату");
+  await storage.removeChatMember(chatId, userId);
+  await storage.deleteChatMemberPrefs(userId, chatId);
+  for (const mid of memberIds) {
+    notifyChatListUpdate(mid);
+  }
+  return { ok: true };
+}
+
+export async function deleteChatForEveryoneForUser(userId: string, chatId: string) {
+  const chat = await storage.getChatById(chatId);
+  if (!chat) throw new ChatsServiceError(404, "Чат не найден");
+  const memberIds = await storage.getChatMemberIds(chatId);
+  if (!memberIds.includes(userId)) throw new ChatsServiceError(403, "Нет доступа к чату");
+
+  if (chat.type === "dm") {
+    if (memberIds.length !== 2) {
+      throw new ChatsServiceError(400, "Некорректный личный чат");
+    }
+    const otherId = memberIds.find((id) => id !== userId);
+    const ok = await storage.deleteChatCascade(chatId);
+    if (!ok) throw new ChatsServiceError(500, "Не удалось удалить чат");
+    notifyChatListUpdate(userId);
+    if (otherId) notifyChatListUpdate(otherId);
+    return { ok: true };
+  }
+
+  if (chat.type === "group") {
+    const m = await storage.getChatMember(chatId, userId);
+    if (!m || m.role !== "admin") {
+      throw new ChatsServiceError(403, "Только администратор может удалить группу для всех");
+    }
+    const ok = await storage.deleteChatCascade(chatId);
+    if (!ok) throw new ChatsServiceError(500, "Не удалось удалить чат");
+    for (const mid of memberIds) {
+      notifyChatListUpdate(mid);
+    }
+    return { ok: true };
+  }
+
+  throw new ChatsServiceError(400, "Неподдерживаемый тип чата");
 }
 
 export async function getDmByPublicId(userId: string, publicIdNum: number, messagesLimit: number) {
@@ -207,9 +304,19 @@ export async function getDmByPublicId(userId: string, publicIdNum: number, messa
     throw new ChatsServiceError(404, "Пользователь не найден");
   }
   if (otherUser.id === userId) {
-    throw new ChatsServiceError(400, "Нельзя открыть чат с собой");
+    // 409 — не «битый ID»; клиент показывает текст из message (не путать с 404 «пользователь не найден»).
+    throw new ChatsServiceError(409, "Это ваш ID в Ping. Откройте диалог из списка чатов или выберите другого человека.");
   }
   const chat = await storage.getOrCreateDmChat(userId, otherUser.id);
+  const memberIds = await storage.getChatMemberIds(chat.id);
+  const memberSet = new Set(memberIds);
+  if (
+    memberSet.size !== 2 ||
+    !memberSet.has(userId) ||
+    !memberSet.has(otherUser.id)
+  ) {
+    throw new ChatsServiceError(403, "Нет доступа к чату");
+  }
   const chatPayload = await buildDmChatPayload(chat.id, userId, chat as unknown as Record<string, unknown>);
 
   if (messagesLimit > 0) {
@@ -275,6 +382,10 @@ export async function markChatRead(chatId: string, userId: string, messageId?: s
   const chat = await storage.getChatById(chatId);
   if (!chat) {
     throw new ChatsServiceError(404, "Chat not found");
+  }
+  const memberIds = await storage.getChatMemberIds(chatId);
+  if (!memberIds.includes(userId)) {
+    throw new ChatsServiceError(403, "Нет доступа к чату");
   }
   if (!messageId) return;
   await storage.updateLastReadByMessageId(chatId, userId, messageId);
@@ -364,6 +475,7 @@ export async function listChatFoldersForUser(userId: string, chatId: string) {
     folders.map(async (f) => {
       const folderIdForUnread = f.isMain ? null : f.id;
       const unreadCount = await storage.getUnreadCountByFolder(chatId, folderIdForUnread, userId);
+      const messageCount = await storage.getMessageCountByFolder(chatId, f.id);
       return {
         id: f.id,
         chatId: f.chatId,
@@ -372,6 +484,7 @@ export async function listChatFoldersForUser(userId: string, chatId: string) {
         orderIndex: f.orderIndex,
         createdAt: f.createdAt instanceof Date ? f.createdAt.toISOString() : String(f.createdAt),
         unreadCount,
+        messageCount,
       };
     })
   );

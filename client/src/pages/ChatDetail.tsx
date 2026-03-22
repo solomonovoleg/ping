@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Languages, Code } from "lucide-react";
+import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Code } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
@@ -11,19 +11,35 @@ import { useGroupCallContext } from "@/contexts/GroupCallContext";
 import { isGroupCallModuleEnabled } from "@/features/group-call/flags";
 import { fetchActiveGroupCall, type GroupCallMedia } from "@/lib/group-calls-api";
 import { UserAvatar } from "@/components/UserAvatar";
-import { getMessages, uploadVoice, uploadChatMedia, sendMessage, addMessageReaction, REACTION_EMOJIS, saveMessage, unsaveMessage, isMessageSaved, updateChat, createChatFolder, listChatFolders } from "@/lib/chat";
+import {
+  getMessages,
+  uploadVoice,
+  uploadChatMedia,
+  sendMessage,
+  addMessageReaction,
+  REACTION_EMOJIS,
+  saveMessage,
+  unsaveMessage,
+  isMessageSaved,
+  updateChat,
+  createChatFolder,
+  listChatFolders,
+  updateChatFolder,
+  deleteChatFolder,
+} from "@/lib/chat";
 import { compressImage } from "@/lib/compress-image";
 import { setDraft, clearDraft } from "@/lib/chat-drafts";
 import { useToast } from "@/hooks/use-toast";
 
 import { isNative, takePhotoFromCamera, pickPhotoFromGallery, triggerLightHaptic } from "@/lib/capacitor-native";
+import { didWebSocketRecentlyStartGroupCallRing } from "@/lib/group-call-invite-dedupe";
 import { playSendSound, playIncomingChatMessageSound } from "@/lib/send-sound";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { NAME_MAX_LENGTH } from "@shared/schema";
 import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
 import type { ApiChat, ApiMessage, MessageListItem } from "@/features/chat";
-import { EMOJIS, formatLastSeen, buildMessageListItems } from "@/features/chat";
+import { EMOJIS, formatLastSeen, buildMessageListItems, isUuid } from "@/features/chat";
 import { ChatMessageRow } from "@/features/chat/components/ChatMessageRow";
 import { useChatMessages } from "@/features/chat/hooks/useChatMessages";
 import { useMessageReadOnVisible } from "@/features/chat/hooks/useMessageReadOnVisible";
@@ -43,6 +59,7 @@ import { resolveUrl } from "@/lib/api-base";
 import { GroupChatParticipantsSheet } from "@/features/chat/components/GroupChatParticipantsSheet";
 import { ChatMediaLinksSheet } from "@/features/chat/components/ChatMediaLinksSheet";
 import { MentionPicker } from "@/features/chat/components/MentionPicker";
+import { buildMentionList } from "@/features/chat/components/mention-list";
 import { MediaViewer } from "@/components/MediaViewer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AddToTrackModal } from "@/features/board/tracks";
@@ -74,6 +91,7 @@ import {
   ChatDetailMessagesEmptyState,
   ChatDetailOlderMessagesLoadingRow,
   ChatDetailOverflowMenuShell,
+  ChatDetailLifecycleSection,
   useChatSpacingPreset,
   CHAT_BG_PRESETS,
   isChatBackgroundPreset,
@@ -138,6 +156,96 @@ function ChatDetailView({
     },
   });
 
+  const mainFolder = useMemo(() => folders.find((f) => f.isMain), [folders]);
+  const visibleFolders = useMemo(() => {
+    return folders
+      .filter((f) => f.isMain || (f.messageCount ?? 0) > 0 || f.id === currentFolderId)
+      .slice()
+      .sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, "ru"));
+  }, [folders, currentFolderId]);
+
+  useEffect(() => {
+    if (chat?.type !== "group" || !mainFolder?.id || !currentFolderId) return;
+    const visible = folders.filter(
+      (f) => f.isMain || (f.messageCount ?? 0) > 0 || f.id === currentFolderId,
+    );
+    if (!visible.some((f) => f.id === currentFolderId)) {
+      void loadMessagesForFolder(mainFolder.id);
+    }
+  }, [chat?.type, folders, currentFolderId, mainFolder?.id, loadMessagesForFolder]);
+
+  const handleCreateChatFolder = useCallback(() => {
+    void (async () => {
+      const name = window.prompt("Название папки");
+      if (!name?.trim() || !chatId) return;
+      try {
+        const created = await createChatFolder(chatId, name.trim());
+        await refreshFolders();
+        if (created?.id) loadMessagesForFolder(created.id);
+        toast({ title: "Папка создана" });
+      } catch (err) {
+        toast({
+          title: err instanceof Error ? err.message : "Не удалось создать папку",
+          variant: "destructive",
+        });
+      }
+    })();
+  }, [chatId, refreshFolders, loadMessagesForFolder, toast]);
+
+  const handleRenameChatFolder = useCallback(
+    (f: { id: string; name: string }) => {
+      void (async () => {
+        const name = window.prompt("Новое название", f.name);
+        if (!name?.trim() || !chatId) return;
+        try {
+          await updateChatFolder(chatId, f.id, name.trim());
+          await refreshFolders();
+          toast({ title: "Папка переименована" });
+        } catch (err) {
+          toast({
+            title: err instanceof Error ? err.message : "Не удалось переименовать",
+            variant: "destructive",
+          });
+        }
+      })();
+    },
+    [chatId, refreshFolders, toast],
+  );
+
+  const handleDeleteChatFolder = useCallback(
+    (f: { id: string; name: string }) => {
+      void (async () => {
+        if (!window.confirm(`Удалить папку «${f.name}»? Сообщения останутся в «Общем» чате.`)) return;
+        if (!chatId) return;
+        try {
+          await deleteChatFolder(chatId, f.id);
+          await refreshFolders();
+          if (currentFolderId === f.id && mainFolder?.id) void loadMessagesForFolder(mainFolder.id);
+          toast({ title: "Папка удалена" });
+        } catch (err) {
+          toast({
+            title: err instanceof Error ? err.message : "Не удалось удалить папку",
+            variant: "destructive",
+          });
+        }
+      })();
+    },
+    [chatId, refreshFolders, loadMessagesForFolder, currentFolderId, mainFolder?.id, toast],
+  );
+
+  /** Открыли по /chat/123 (public id) — канонизируем в /chat/<uuid>, чтобы все запросы шли на тот же id, что и членство/переводы/WS. */
+  const replacedNumericChatUrlRef = useRef(false);
+  useEffect(() => {
+    replacedNumericChatUrlRef.current = false;
+  }, [chatIdParam]);
+  useEffect(() => {
+    if (!chatId || !/^\d+$/.test(chatIdParam)) return;
+    if (!isUuid(chatId)) return;
+    if (replacedNumericChatUrlRef.current) return;
+    replacedNumericChatUrlRef.current = true;
+    setLocation(`/chat/${encodeURIComponent(chatId)}`, { replace: true } as { replace?: boolean });
+  }, [chatId, chatIdParam, setLocation]);
+
   useMessageReadOnVisible(scrollContainerRef, chatId, messages, user?.id ?? null);
 
   const send = useSendMessage({ chatId, folderId: currentFolderId, setMessages, user });
@@ -173,7 +281,7 @@ function ChatDetailView({
     return () => window.removeEventListener("ping:translate-change", handler);
   }, [chatId]);
 
-  const { translations, showOriginalIds, toggleOriginal } = useMessageTranslation(
+  const { translations } = useMessageTranslation(
     messages,
     chatTranslateEnabled,
     translateLang,
@@ -341,7 +449,7 @@ function ChatDetailView({
     participantCount: number;
     hostUserId: string;
   } | null>(null);
-  const lastGroupCallNotifyRoomRef = useRef<string | null>(null);
+  const lastGroupCallLobbyRoomRef = useRef<string | null>(null);
 
   const startCallUnlessInGroup = useCallback(
     (
@@ -458,13 +566,15 @@ function ChatDetailView({
     };
   }, [chatId, chat?.type, groupCallCtx.active]);
 
+  /** Если /calls WS не доставил приглашение — короткий сигнал по поллингу (без дубля с рингтоном из AppLayout). */
   useEffect(() => {
     if (!groupCallLobby) {
-      lastGroupCallNotifyRoomRef.current = null;
+      lastGroupCallLobbyRoomRef.current = null;
       return;
     }
-    if (lastGroupCallNotifyRoomRef.current === groupCallLobby.roomId) return;
-    lastGroupCallNotifyRoomRef.current = groupCallLobby.roomId;
+    if (lastGroupCallLobbyRoomRef.current === groupCallLobby.roomId) return;
+    lastGroupCallLobbyRoomRef.current = groupCallLobby.roomId;
+    if (didWebSocketRecentlyStartGroupCallRing(groupCallLobby.roomId)) return;
     playIncomingChatMessageSound();
   }, [groupCallLobby]);
 
@@ -652,7 +762,7 @@ function ChatDetailView({
   const pulseDmLightMobileChrome = isDmChat && isMobile && !isDarkTheme;
   const dmPulseAccent = vibe.isActive ? PULSE_THEME_ACCENTS[vibe.theme] : "#818cf8";
   const headerPulseMobileDm = pulseDmMobileChrome || pulseDmLightMobileChrome;
-  /** DOM как в pulse-template: скрепка | капсула (поле + !) | круг видео | микрофон */
+  /** DOM как в pulse-template: скрепка | капсула (поле + смайл) | круг видео | голос→текст | микрофон */
   const pulseDmComposerLikeTemplate = headerPulseMobileDm && isDmChat;
   const messageListPaddingBottom = useMemo(() => {
     if (composerBarHeightPx > 0) {
@@ -990,21 +1100,8 @@ function ChatDetailView({
                 void groupCallCtx.startGroupCall(chatId, displayName, video);
               }}
               onCreateFolderClick={() => {
-                void (async () => {
-                  setShowGroupMenu(false);
-                  const name = window.prompt("Название папки");
-                  if (!name?.trim()) return;
-                  try {
-                    await createChatFolder(chatId, name.trim());
-                    await refreshFolders();
-                    toast({ title: "Папка создана" });
-                  } catch (err) {
-                    toast({
-                      title: err instanceof Error ? err.message : "Не удалось создать папку",
-                      variant: "destructive",
-                    });
-                  }
-                })();
+                setShowGroupMenu(false);
+                handleCreateChatFolder();
               }}
               onPickGroupAvatar={() => {
                 setShowGroupMenu(false);
@@ -1039,6 +1136,13 @@ function ChatDetailView({
                 </div>
               }
             />
+            <ChatDetailLifecycleSection
+              chatId={chatId}
+              chatType="group"
+              isGroupAdmin={chat.myRole === "admin"}
+              onDone={() => setShowGroupMenu(false)}
+              onNavigateAway={() => setLocation("/chats")}
+            />
           </ChatDetailOverflowMenuShell>
         )}
         {showChatThemeMenu && chat.type !== "group" && (
@@ -1072,15 +1176,26 @@ function ChatDetailView({
                 setTranslateEnabled(chatId, true);
               }}
             />
+            <ChatDetailLifecycleSection
+              chatId={chatId}
+              chatType="dm"
+              isGroupAdmin={false}
+              onDone={() => setShowChatThemeMenu(false)}
+              onNavigateAway={() => setLocation("/chats")}
+            />
           </ChatDetailOverflowMenuShell>
         )}
       </div>
 
-      {chat.type === "group" && (
+      {chat.type === "group" && folders.length > 0 && (
         <ChatDetailGroupFolderStrip
-          folders={folders}
+          folders={visibleFolders}
           currentFolderId={currentFolderId}
           onFolderSelect={loadMessagesForFolder}
+          canManageFolders={chat.myRole === "admin"}
+          onCreateFolder={handleCreateChatFolder}
+          onRenameFolder={handleRenameChatFolder}
+          onDeleteFolder={handleDeleteChatFolder}
         />
       )}
 
@@ -1295,13 +1410,13 @@ function ChatDetailView({
               activeVoiceId={activeVoiceId}
               onVoiceEnded={(nextId) => setActiveVoiceId(nextId)}
               onOpenMedia={(src, type) => setMediaViewer({ src, type })}
-              translatedText={translations.has(msg.id) && !showOriginalIds.has(msg.id) ? translations.get(msg.id)!.translatedText : undefined}
-              translatedFromLang={
-                translations.has(msg.id) && translations.get(msg.id)!.detectedLang !== "auto"
-                  ? translations.get(msg.id)!.detectedLang
+              translatedText={
+                chatTranslateEnabled &&
+                msg.senderId !== user?.id &&
+                (msg.type === "text" || msg.type === "voice" || msg.type === "video_note")
+                  ? translations.get(msg.id)?.translatedText ?? msg.translatedText ?? undefined
                   : undefined
               }
-              onToggleOriginal={() => toggleOriginal(msg.id)}
             />
             </div>
           );
@@ -1406,19 +1521,6 @@ function ChatDetailView({
                 <Copy className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 Скопировать
               </button>
-              {translations.has(menu.msg.id) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleOriginal(menu.msg.id);
-                    actions.closeMenu();
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors rounded-none"
-                >
-                  <Languages className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                  {showOriginalIds.has(menu.msg.id) ? "Показать перевод" : "Показать оригинал"}
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => actions.handleForward(menu.msg)}
@@ -1679,7 +1781,7 @@ onClick={() => actions.setForwardingMessage(null)}
           >
             <Paperclip className="h-[22px] w-[22px] pointer-events-none stroke-[1.85]" aria-hidden />
           </TapScaleButton>
-          <div className="chat-composer-pill relative flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 items-end overflow-x-hidden overflow-y-clip">
+          <div className="chat-composer-pill relative flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 items-end overflow-x-hidden overflow-y-visible">
             {showCanvasCommandOption && (
               <div className="absolute bottom-full left-0 right-0 mb-1 z-[121]">
                 <button
@@ -1700,11 +1802,21 @@ onClick={() => actions.setForwardingMessage(null)}
                 </button>
               </div>
             )}
-            {mentionOpen && chat?.type === "group" && chat.members && chat.members.length > 0 && (
+            {mentionOpen && chat?.type === "group" && (
               <div ref={mentionPickerRef} className="absolute bottom-full left-0 right-0 mb-1 z-[120]">
                 <MentionPicker
-                  members={chat.members}
+                  members={chat.members ?? []}
                   query={mentionQuery}
+                  includeEveryone
+                  onPickEveryone={() => {
+                    const mentionText = `@all `;
+                    const cursorPos = messageInputRef.current?.selectionStart ?? send.message.length;
+                    const newCursor = send.insertMentionAtPosition(mentionStartPos, cursorPos, mentionText);
+                    setMentionOpen(false);
+                    pendingCursorRef.current = newCursor;
+                    triggerLightHaptic();
+                    requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
+                  }}
                   selectedIndex={mentionSelectedIndex}
                   onSelectedIndexChange={setMentionSelectedIndex}
                   onSelect={(m) => {
@@ -1730,7 +1842,7 @@ onClick={() => actions.setForwardingMessage(null)}
                 setDraftRestoredHint(false);
                 if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
                 requestAnimationFrame(syncComposerHeight);
-                if (chat?.type === "group" && chat.members?.length) {
+                if (chat?.type === "group") {
                   const beforeCursor = value.slice(0, pos);
                   const lastAt = beforeCursor.lastIndexOf("@");
                   if (lastAt >= 0) {
@@ -1764,10 +1876,8 @@ onClick={() => actions.setForwardingMessage(null)}
                   }
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
-                    const members = chat?.members ?? [];
-                    const q = mentionQuery.trim().toLowerCase();
-                    const filtered = q ? members.filter((m) => [m.displayName, m.surname].filter(Boolean).join(" ").toLowerCase().includes(q)) : members;
-                    const maxIdx = Math.max(0, filtered.length - 1);
+                    const rows = buildMentionList(chat?.members ?? [], mentionQuery, { includeEveryone: true });
+                    const maxIdx = Math.max(0, rows.length - 1);
                     setMentionSelectedIndex((i) => Math.min(i + 1, maxIdx));
                     return;
                   }
@@ -1777,15 +1887,19 @@ onClick={() => actions.setForwardingMessage(null)}
                     return;
                   }
                   if (e.key === "Enter" && mentionQuery !== undefined) {
-                    const members = chat?.members ?? [];
-                    const q = mentionQuery.trim().toLowerCase();
-                    const filtered = q ? members.filter((m) => [m.displayName, m.surname].filter(Boolean).join(" ").toLowerCase().includes(q)) : members;
-                    const selected = filtered[Math.max(0, Math.min(mentionSelectedIndex, filtered.length - 1))];
+                    const rows = buildMentionList(chat?.members ?? [], mentionQuery, { includeEveryone: true });
+                    const selected = rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))];
                     if (selected) {
                       e.preventDefault();
-                      const name = [selected.displayName, selected.surname].filter(Boolean).join(" ") || `ID ${selected.publicId ?? ""}`;
-                      const mentionText = `@[${name}](${selected.publicId ?? selected.id}) `;
                       const cursorPos = messageInputRef.current?.selectionStart ?? send.message.length;
+                      let mentionText: string;
+                      if (selected.kind === "everyone") {
+                        mentionText = `@all `;
+                      } else {
+                        const m = selected.member;
+                        const name = [m.displayName, m.surname].filter(Boolean).join(" ") || `ID ${m.publicId ?? ""}`;
+                        mentionText = `@[${name}](${m.publicId ?? m.id}) `;
+                      }
                       const newCursor = send.insertMentionAtPosition(mentionStartPos, cursorPos, mentionText);
                       setMentionOpen(false);
                       pendingCursorRef.current = newCursor;
@@ -1799,43 +1913,11 @@ onClick={() => actions.setForwardingMessage(null)}
                 send?.editingId ? "Измените текст и нажмите отправить" : "Сообщение..."
               }
               className={cn(
-                "max-h-28 min-h-[36px] min-w-0 w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
-                isDmChat ? "pr-2" : "pr-1",
+                "max-h-28 min-h-[36px] min-w-0 w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 pr-1 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
                 !send.message.trim() && "overflow-hidden whitespace-nowrap placeholder:whitespace-nowrap text-ellipsis"
               )}
               rows={1}
             />
-            {isDmChat && (
-              <ChatComposerSttButton
-                embedded
-                disabled={
-                  Boolean(send.editingId) ||
-                  send.sending ||
-                  send.sendingMedia ||
-                  send.voiceState === "recording" ||
-                  Boolean(send.voicePreviewUrl)
-                }
-                allowSound={!reducedMotion}
-                onUiChange={setComposerSttUi}
-                onEmptyResult={() => {
-                  toast({
-                    title: "Не удалось распознать речь",
-                    description: "Повторите попытку или проверьте доступ к микрофону.",
-                  });
-                }}
-                onTranscript={(text) => {
-                  send.setMessage((prev) => {
-                    const t = prev.trim();
-                    return t ? `${t} ${text}` : text;
-                  });
-                  setDraftRestoredHint(false);
-                  requestAnimationFrame(() => {
-                    messageInputRef.current?.focus({ preventScroll: true });
-                    syncComposerHeight();
-                  });
-                }}
-              />
-            )}
             {!pulseDmComposerLikeTemplate && !send.message.trim() && !send?.editingId && (
               <TapScaleButton
                 type="button"
@@ -1854,21 +1936,19 @@ onClick={() => actions.setForwardingMessage(null)}
                 {send.sendingMedia ? <span className="text-[10px]">…</span> : <Video className="h-[20px] w-[20px]" strokeWidth={1.75} />}
               </TapScaleButton>
             )}
-            {!pulseDmComposerLikeTemplate && (
-              <TapScaleButton
-                type="button"
-                haptic
-                data-active={showEmojiPicker ? "true" : undefined}
-                className={cn(
-                  "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
-                  showEmojiPicker && "bg-primary/12 text-primary"
-                )}
-                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                aria-label="Эмодзи"
-              >
-                <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
-              </TapScaleButton>
-            )}
+            <TapScaleButton
+              type="button"
+              haptic
+              data-active={showEmojiPicker ? "true" : undefined}
+              className={cn(
+                "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
+                showEmojiPicker && "bg-primary/12 text-primary"
+              )}
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              aria-label="Эмодзи"
+            >
+              <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
+            </TapScaleButton>
           </div>
           {pulseDmComposerLikeTemplate && !send.message.trim() && !send?.editingId && (
             <TapScaleButton
@@ -1888,36 +1968,34 @@ onClick={() => actions.setForwardingMessage(null)}
               {send.sendingMedia ? <span className="text-[10px]">…</span> : <Camera className="h-[18px] w-[18px]" strokeWidth={1.75} />}
             </TapScaleButton>
           )}
-          {!isDmChat && (
-            <ChatComposerSttButton
-              disabled={
-                Boolean(send.editingId) ||
-                send.sending ||
-                send.sendingMedia ||
-                send.voiceState === "recording" ||
-                Boolean(send.voicePreviewUrl)
-              }
-              allowSound={!reducedMotion}
-              onUiChange={setComposerSttUi}
-              onEmptyResult={() => {
-                toast({
-                  title: "Не удалось распознать речь",
-                  description: "Повторите попытку или проверьте доступ к микрофону.",
-                });
-              }}
-              onTranscript={(text) => {
-                send.setMessage((prev) => {
-                  const t = prev.trim();
-                  return t ? `${t} ${text}` : text;
-                });
-                setDraftRestoredHint(false);
-                requestAnimationFrame(() => {
-                  messageInputRef.current?.focus({ preventScroll: true });
-                  syncComposerHeight();
-                });
-              }}
-            />
-          )}
+          <ChatComposerSttButton
+            disabled={
+              Boolean(send.editingId) ||
+              send.sending ||
+              send.sendingMedia ||
+              send.voiceState === "recording" ||
+              Boolean(send.voicePreviewUrl)
+            }
+            allowSound={!reducedMotion}
+            onUiChange={setComposerSttUi}
+            onEmptyResult={() => {
+              toast({
+                title: "Не удалось распознать речь",
+                description: "Повторите попытку или проверьте доступ к микрофону.",
+              });
+            }}
+            onTranscript={(text) => {
+              send.setMessage((prev) => {
+                const t = prev.trim();
+                return t ? `${t} ${text}` : text;
+              });
+              setDraftRestoredHint(false);
+              requestAnimationFrame(() => {
+                messageInputRef.current?.focus({ preventScroll: true });
+                syncComposerHeight();
+              });
+            }}
+          />
           {send.message.trim() ? (
             (() => {
             const handleCanvasSend = () => {

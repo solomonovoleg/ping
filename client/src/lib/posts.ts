@@ -1,5 +1,6 @@
 import { API, apiFetch } from "@/lib/api-base";
 import type { PostMediaLayout } from "@shared/post-media-layout";
+import { AVATAR_VIDEO_MAX_SECONDS } from "@shared/post-video";
 
 export type ReactionUser = { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null };
 
@@ -39,13 +40,24 @@ export type FeedPost = {
 
 export type PostVideoTrimUpload = { trimStartSec: number; trimDurationSec: number };
 
-export async function uploadPostMedia(file: File, trim?: PostVideoTrimUpload): Promise<string> {
+/** Для аватара передать trimMaxSeconds: AVATAR_VIDEO_MAX_SECONDS — сервер обрежет до 4 с. */
+export type UploadPostMediaOptions = { trimMaxSeconds?: number };
+
+export async function uploadPostMedia(
+  file: File,
+  trim?: PostVideoTrimUpload,
+  options?: UploadPostMediaOptions,
+): Promise<string> {
   const form = new FormData();
-  form.append("file", file);
+  // Поля обрезки до файла: Safari/iOS надёжнее парсит multipart, multer заполняет req.body до стрима файла.
   if (trim) {
     form.append("trimStartSec", String(trim.trimStartSec));
     form.append("trimDurationSec", String(trim.trimDurationSec));
   }
+  if (options?.trimMaxSeconds === AVATAR_VIDEO_MAX_SECONDS) {
+    form.append("trimMaxSeconds", String(AVATAR_VIDEO_MAX_SECONDS));
+  }
+  form.append("file", file);
   const res = await apiFetch(`${API}/upload/post-media`, {
     method: "POST",
     body: form,
@@ -277,8 +289,13 @@ export async function fetchSavedPosts(limit?: number, offset?: number): Promise<
   if (limit != null) params.set("limit", String(limit));
   if (offset != null) params.set("offset", String(offset));
   const res = await apiFetch(`${API}/me/saved-posts?${params}`, { credentials: "include", cache: "no-store" });
-  if (!res.ok) return [];
-  const data = await res.json();
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = data && typeof data === "object" && data !== null && "message" in data && typeof (data as { message?: unknown }).message === "string"
+      ? (data as { message: string }).message
+      : "Не удалось загрузить сохранённое";
+    throw new Error(msg);
+  }
   return Array.isArray(data) ? data : [];
 }
 

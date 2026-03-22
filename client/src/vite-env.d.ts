@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_PRIVACY_POLICY_URL?: string;
   /** Email поддержки (для App Store Review и раздела «Поддержка»). */
   readonly VITE_SUPPORT_EMAIL?: string;
+  /** Базовый URL микросервиса ПИНГОК МИКРО (NLU), без завершающего слэша. */
+  readonly VITE_PINGOK_MICRO_URL?: string;
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;

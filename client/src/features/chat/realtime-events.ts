@@ -69,6 +69,24 @@ export function onIncomingChatMessageHint(handler: (detail: IncomingChatMessageH
   return on(EVT_INCOMING_CHAT_MESSAGE_HINT, handler);
 }
 
+const EVT_GROUP_CALL_INVITE = "ping:group-call-invite";
+
+export type GroupCallInviteDetail = {
+  chatId: string;
+  roomId: string;
+  mediaType: "audio" | "video";
+  hostUserId: string;
+  chatTitle?: string | null;
+};
+
+export function emitGroupCallInvite(detail: GroupCallInviteDetail): void {
+  emit(EVT_GROUP_CALL_INVITE, detail);
+}
+
+export function onGroupCallInvite(handler: (detail: GroupCallInviteDetail) => void): () => void {
+  return on(EVT_GROUP_CALL_INVITE, handler);
+}
+
 export function emitChatRead(detail: ChatReadEventDetail): void {
   emit(EVT_CHAT_READ, detail);
 }

@@ -75,14 +75,14 @@ android/    Capacitor / Gradle
 | Доска / треки | `features/board/tracks/` | Треки, модалки |
 | История звонков в борде | `features/board/call-history/` | Список/деталь, связка с треками |
 | Уведомления | `features/notifications/` | Колокол, хуки непрочитанного |
-| Админ ops (клиент) | `features/admin-ops/` | Секции платформы, трафик, отчёты, публичные бары — см. `api.ts`, `i18n.ru.ts` |
+| Админ ops (клиент) | `features/admin-ops/` | Секции платформы, трафик, отчёты, API диска, публичные бары — см. `api.ts`, `i18n.ru.ts` |
 
 ### Прочее на клиенте
 
 | Путь | Назначение |
 |------|------------|
 | `components/story-viewer/` + `StoryViewer.tsx` | Просмотр сториз, портал |
-| `pages/admin/` | Страницы админки |
+| `pages/admin/` | Страницы админки, в т.ч. `Disk.tsx` (статистика диска) |
 
 Подробнее про профиль: `client/src/features/profile/user-profile/README.md`.
 
@@ -122,7 +122,7 @@ android/    Capacitor / Gradle
 | Перевод | `translate/` | Перевод сообщений |
 | Vibe чата | `vibe/` | Темы/вайб чата |
 | Админка | `admin/` | Дашборд, пользователи, аудит, feed, ingest; подпапки `admin/dashboard`, `admin/users`, … |
-| Ops (платформа) | `admin/ops/` | Публичные/админские HTTP для платформы, отчёты, traffic shield — см. `server/admin/ops/README.md` |
+| Ops (платформа) | `admin/ops/` | Публичные/админские HTTP для платформы, отчёты, traffic shield, **диск** (`disk-stats.service.ts`, `disk.admin-http`) — см. `server/admin/ops/README.md` |
 
 ### Загрузки файлов
 
@@ -164,6 +164,7 @@ android/    Capacitor / Gradle
 | `scripts/` | `deploy.sh`, `run-migrations.cjs`, сиды, миграции данных |
 | `ios/`, `android/` | Нативные оболочки Capacitor |
 | `uploads/` | Локальные файлы (не коммитить медиа) |
+| `ПИНГОК МИКРО/` | Отдельный микросервис голосовых команд: `server/` (Express, NLU-заглушка), `client/` (оверлей + long-press логотипа), `shared/` типы; `npm run dev:pingok-micro` |
 
 База данных (смысл таблиц, слой storage): `docs/DB.md`.
 
@@ -233,11 +234,18 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 |-----------|---------------|------------|
 | (начало карты) | `docs/PROJECT_MAP.md` | Единая карта проекта; правило — обновлять при новых модулях |
 | | `client/src/features/chat/chat-detail/` | UI без логики хуков; композер и превью медиа: полосы, вложения, орфография, **`ChatDetailVoicePreviewModal`**, **`ChatDetailVideoNoteModal`** (+ список, меню, AI) |
-| | `client/src/features/admin-ops/` | Клиентские секции ops-платформы |
-| | `server/admin/ops/` | HTTP ops: платформа, отчёты, traffic shield |
+| | `client/src/features/admin-ops/` | Клиентские секции ops-платформы, `fetchOpsDisk` |
+| | `server/admin/ops/` | HTTP ops: платформа, отчёты, traffic shield, диск (`GET /api/admin/ops/disk`) |
+| 2026-03 | `server/admin/ops/disk-stats.service.ts`, `host-snapshot.ts`, `disk.admin-http.ts`, `client/src/pages/admin/Disk.tsx` | Админка: объём медиа по типам, БД, statfs; RAM/CPU и размер папки проекта относительно тома и проекта |
+| 2026-03 | `migrations/0019_chat_member_prefs.sql`, `shared/schema/chat-member-prefs.ts`, `server/chats/*`, `client/src/pages/Chats.tsx`, `ChatDetailLifecycleSection.tsx` | Список чатов: закрепить/скрыть/полки, долгое нажатие, скрытые (pull-hold), удалить у себя/у всех; API `PATCH/DELETE .../me`, `DELETE .../for-all` |
 | | `server/ai-search/` | AI Search бэкенд |
 | | `shared/schema/platform-settings.ts`, `content-reports.ts` | Платформа и репорты контента |
 | | `server/profile-pins/`, `shared/schema/profile-pins.ts`, `client/src/lib/profile-pins.ts`, `client/.../profile-pins/` | Закреплённое на профиле: папки, посты/сториз, обложки; миграция `migrations/0016_profile_pins.sql` |
+| | `client/src/lib/profile-cover-editor.ts`, `client/src/components/ProfileCoverAdjustModal.tsx` | Редактор обложки профиля: сетка, pan/zoom, экспорт JPEG; экран «Редактировать профиль» |
+| | `client/src/lib/avatar-square-crop.ts` | Утилиты квадратного кропа аватара (профиль сквиркл / чаты круг); `AvatarCropModal` |
+| 2026-03 | `server/security/ssrf-guard.ts` | Базовая защита от SSRF для исходящих fetch по пользовательскому URL (сейчас — link-preview) |
+| 2026-03 | `client/src/lib/reels-video/` | Бесшовный цикл видео (`useSeamlessVideoLoop`), жесты ленты: двойной тап, удержание ×2 / сдвиг вверх ×3 (`useReelsFeedVideoGestures`); `FeedInlineVideo`, аватар-видео |
+| 2026-03 | `ПИНГОК МИКРО/` | Голосовой ассистент: отдельный HTTP-процесс (`POST /v1/parse`), клиентский оверлей, удержание центрального логотипа ~2.8 с в `AppLayout`; алиас Vite `@pingok-micro/*` |
 
 ---
 
@@ -246,6 +254,7 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | Документ | Зачем |
 |----------|--------|
 | `docs/ARCHITECTURE.md` | Короткий индекс ссылок |
+| `docs/API_AUTH_AND_PUBLIC.md` | Авторизация (cookie + Bearer), публичные API, PATCH/PUT |
 | `docs/DEV_HANDOFF_CURSOR.md` | Handoff для разработчиков |
 | `docs/AI_HANDOFF_ARCHITECTURE.md` | Handoff для ИИ-агента |
 | `docs/QUALITY_CHECKLIST.md`, `docs/UIX_SPECIALIST_GUIDE.md` | Качество UI |

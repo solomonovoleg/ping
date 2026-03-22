@@ -5,12 +5,24 @@ import { platformGetPublic } from "../admin/ops/platform.repo";
 
 const WINDOW_MS = 60_000;
 
-/** Неавторизованные: по IP. В строгом режиме — ниже порог (боты). */
-const LIMIT_ANON_NORMAL = 240;
-const LIMIT_ANON_STRICT = 100;
-/** Авторизованные: по userId, высокий потолок — обычные пользователи не страдают при флуде снаружи. */
-const LIMIT_AUTH_NORMAL = 900;
-const LIMIT_AUTH_STRICT = 360;
+/**
+ * Два независимых счётчика на ключ (IP / userId):
+ * - **read** — только GET: высокий потолок (чат, уведомления, нервные обновления страницы).
+ * - **mutation** — POST/PUT/PATCH/DELETE: умеренный потолок (спам действий).
+ */
+/** Неавторизованные GET: по IP. */
+const LIMIT_ANON_READ_NORMAL = 480;
+const LIMIT_ANON_READ_STRICT = 200;
+/** Авторизованные GET: по userId — десятки параллельных запросов при одном F5 не упираются в 429. */
+const LIMIT_AUTH_READ_NORMAL = 5000;
+const LIMIT_AUTH_READ_STRICT = 2200;
+
+/** Неавторизованные мутации: по IP. */
+const LIMIT_ANON_MUTATION_NORMAL = 240;
+const LIMIT_ANON_MUTATION_STRICT = 100;
+/** Авторизованные мутации: по userId. */
+const LIMIT_AUTH_MUTATION_NORMAL = 900;
+const LIMIT_AUTH_MUTATION_STRICT = 360;
 
 const HISTORY_MINUTES = 90;
 const buckets = new Map<
@@ -96,31 +108,69 @@ function shieldSkipPath(path: string): boolean {
   return false;
 }
 
-export function createApiShieldLimiter() {
+const SHIELD_MSG = { message: "Слишком много запросов. Подождите минуту и попробуйте снова." };
+
+function createShieldHandler() {
+  return (req: Request, res: Response, _next: NextFunction, options: { statusCode: number; message: unknown }) => {
+    recordApiTraffic429();
+    res.status(options.statusCode).json(options.message);
+  };
+}
+
+/** Лимит только на GET (чтение API). */
+export function createApiShieldReadLimiter() {
   return rateLimit({
     windowMs: WINDOW_MS,
     limit: async (req: Request) => {
       const strict = await isStrictShieldEnabled();
       const uid = getUserId(req);
-      if (uid) return strict ? LIMIT_AUTH_STRICT : LIMIT_AUTH_NORMAL;
-      return strict ? LIMIT_ANON_STRICT : LIMIT_ANON_NORMAL;
+      if (uid) return strict ? LIMIT_AUTH_READ_STRICT : LIMIT_AUTH_READ_NORMAL;
+      return strict ? LIMIT_ANON_READ_STRICT : LIMIT_ANON_READ_NORMAL;
     },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: Request) => {
       const uid = getUserId(req);
-      if (uid) return `u:${uid}`;
-      return `ip:${req.ip ?? "unknown"}`;
+      if (uid) return `shield-read:u:${uid}`;
+      return `shield-read:ip:${req.ip ?? "unknown"}`;
     },
     skip: (req: Request) => {
       const path = req.originalUrl.split("?")[0] || "";
-      return shieldSkipPath(path);
+      if (shieldSkipPath(path)) return true;
+      if (req.method !== "GET") return true;
+      return false;
     },
-    message: { message: "Слишком много запросов. Подождите минуту и попробуйте снова." },
-    handler: (req, res, _next, options) => {
-      recordApiTraffic429();
-      res.status(options.statusCode).json(options.message);
+    message: SHIELD_MSG,
+    handler: createShieldHandler(),
+  });
+}
+
+/** Лимит на POST / PUT / PATCH / DELETE. */
+export function createApiShieldMutationLimiter() {
+  return rateLimit({
+    windowMs: WINDOW_MS,
+    limit: async (req: Request) => {
+      const strict = await isStrictShieldEnabled();
+      const uid = getUserId(req);
+      if (uid) return strict ? LIMIT_AUTH_MUTATION_STRICT : LIMIT_AUTH_MUTATION_NORMAL;
+      return strict ? LIMIT_ANON_MUTATION_STRICT : LIMIT_ANON_MUTATION_NORMAL;
     },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => {
+      const uid = getUserId(req);
+      if (uid) return `shield-mut:u:${uid}`;
+      return `shield-mut:ip:${req.ip ?? "unknown"}`;
+    },
+    skip: (req: Request) => {
+      const path = req.originalUrl.split("?")[0] || "";
+      if (shieldSkipPath(path)) return true;
+      const m = req.method;
+      if (m === "GET" || m === "HEAD" || m === "OPTIONS") return true;
+      return false;
+    },
+    message: SHIELD_MSG,
+    handler: createShieldHandler(),
   });
 }
 
@@ -137,10 +187,18 @@ export function getTrafficShieldAdminPayload(): {
   strictApiShield: boolean;
   windowMs: number;
   limits: {
-    anonymousNormal: number;
-    anonymousStrict: number;
-    authenticatedNormal: number;
-    authenticatedStrict: number;
+    read: {
+      anonymousNormal: number;
+      anonymousStrict: number;
+      authenticatedNormal: number;
+      authenticatedStrict: number;
+    };
+    mutation: {
+      anonymousNormal: number;
+      anonymousStrict: number;
+      authenticatedNormal: number;
+      authenticatedStrict: number;
+    };
   };
   currentMinute: TrafficShieldMinute | null;
   history: TrafficShieldMinute[];
@@ -159,10 +217,18 @@ export function getTrafficShieldAdminPayload(): {
     strictApiShield: strictCache,
     windowMs: WINDOW_MS,
     limits: {
-      anonymousNormal: LIMIT_ANON_NORMAL,
-      anonymousStrict: LIMIT_ANON_STRICT,
-      authenticatedNormal: LIMIT_AUTH_NORMAL,
-      authenticatedStrict: LIMIT_AUTH_STRICT,
+      read: {
+        anonymousNormal: LIMIT_ANON_READ_NORMAL,
+        anonymousStrict: LIMIT_ANON_READ_STRICT,
+        authenticatedNormal: LIMIT_AUTH_READ_NORMAL,
+        authenticatedStrict: LIMIT_AUTH_READ_STRICT,
+      },
+      mutation: {
+        anonymousNormal: LIMIT_ANON_MUTATION_NORMAL,
+        anonymousStrict: LIMIT_ANON_MUTATION_STRICT,
+        authenticatedNormal: LIMIT_AUTH_MUTATION_NORMAL,
+        authenticatedStrict: LIMIT_AUTH_MUTATION_STRICT,
+      },
     },
     currentMinute: cur
       ? { minute: nowKey, total: cur.total, anonymous: cur.anonymous, authenticated: cur.authenticated, limited429: cur.limited429 }
@@ -170,6 +236,6 @@ export function getTrafficShieldAdminPayload(): {
     history,
     uptimeSec: Math.round(process.uptime()),
     note:
-      "Счётчики — в памяти процесса Node (сброс при рестарте), без запросов к /api/admin. Лимиты мягче для авторизованных. При атаке с множества IP нужен лимит на периметре (nginx / CDN).",
+      "Два лимита в минуту на IP или userId: отдельно GET (чтение) и отдельно POST/PUT/PATCH/DELETE. Счётчики в памяти процесса (сброс при рестарте). При атаке с множества IP — nginx / CDN.",
   };
 }

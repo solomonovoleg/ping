@@ -31,6 +31,7 @@ import {
   tracks,
   trackItems,
   chatFolders,
+  chatMemberPrefs,
   scheduledMessages,
   chatVibeState,
   chatVibeBatches,
@@ -42,8 +43,21 @@ import {
   callTrackItems,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
-import { getDb, ensureUserColumns } from "../db";
+import { getDb, getPool, ensureUserColumns } from "../db";
 import { normalizePhone } from "../auth/phone";
+
+/** Таблица/колонки user_blocks ещё не накатили — не роняем ленту и профиль. */
+function isUserBlocksSchemaUnavailable(err: unknown): boolean {
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code?: string }).code) : "";
+  const msg =
+    err && typeof err === "object" && "message" in err && typeof (err as { message?: unknown }).message === "string"
+      ? String((err as { message: string }).message)
+      : "";
+  const aboutBlocks = /user_blocks/i.test(msg) || /restrict_profile/i.test(msg) || /restrict_chat/i.test(msg);
+  if (code === "42P01" && aboutBlocks) return true;
+  if (code === "42703" && aboutBlocks) return true;
+  return /user_blocks/i.test(msg) && /does not exist/i.test(msg);
+}
 
 export class DbStorage implements IStorage {
   private db = getDb();
@@ -412,25 +426,139 @@ export class DbStorage implements IStorage {
     return rows.map((r) => r.chat);
   }
 
-  async getOrCreateDmChat(userId: string, otherUserId: string): Promise<Chat> {
-    const myChats = await this.db
-      .select({ chatId: chatMembers.chatId })
-      .from(chatMembers)
-      .where(eq(chatMembers.userId, userId));
-    for (const { chatId } of myChats) {
-      const [chat] = await this.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-      if (!chat || chat.type !== "dm") continue;
-      const members = await this.db.select().from(chatMembers).where(eq(chatMembers.chatId, chatId));
-      const ids = new Set(members.map((m) => m.userId));
-      if (ids.has(userId) && ids.has(otherUserId) && ids.size === 2) return chat;
+  async getChatMemberPrefsForUser(
+    userId: string
+  ): Promise<Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>> {
+    try {
+      const rows = await this.db.select().from(chatMemberPrefs).where(eq(chatMemberPrefs.userId, userId));
+      const m = new Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>();
+      for (const r of rows) {
+        m.set(r.chatId, {
+          pinnedAt: r.pinnedAt ?? null,
+          hiddenAt: r.hiddenAt ?? null,
+          listSection: r.listSection ?? "general",
+        });
+      }
+      return m;
+    } catch (err: unknown) {
+      const code =
+        err && typeof err === "object" && "code" in err ? String((err as { code?: string }).code) : "";
+      if (code === "42P01") {
+        console.warn(
+          "[db] Таблица chat_member_prefs отсутствует — выполните миграции (scripts/migrate-chat-member-prefs.cjs / деплой). Список чатов без закреплений/скрытых.",
+        );
+        return new Map();
+      }
+      throw err;
     }
-    const [chat] = await this.db.insert(chats).values({ type: "dm", name: null }).returning();
-    if (!chat) throw new Error("Create chat failed");
-    await this.db.insert(chatMembers).values([
-      { chatId: chat.id, userId, role: "admin" },
-      { chatId: chat.id, userId: otherUserId, role: "member" },
-    ]);
-    return chat;
+  }
+
+  async upsertChatMemberPrefs(
+    userId: string,
+    chatId: string,
+    patch: { pinnedAt?: Date | null; hiddenAt?: Date | null; listSection?: string }
+  ): Promise<void> {
+    const [row] = await this.db
+      .select()
+      .from(chatMemberPrefs)
+      .where(and(eq(chatMemberPrefs.chatId, chatId), eq(chatMemberPrefs.userId, userId)))
+      .limit(1);
+    const merged = {
+      chatId,
+      userId,
+      pinnedAt: patch.pinnedAt !== undefined ? patch.pinnedAt : row?.pinnedAt ?? null,
+      hiddenAt: patch.hiddenAt !== undefined ? patch.hiddenAt : row?.hiddenAt ?? null,
+      listSection: patch.listSection !== undefined ? patch.listSection : row?.listSection ?? "general",
+      updatedAt: new Date(),
+    };
+    await this.db
+      .insert(chatMemberPrefs)
+      .values(merged)
+      .onConflictDoUpdate({
+        target: [chatMemberPrefs.chatId, chatMemberPrefs.userId],
+        set: {
+          pinnedAt: merged.pinnedAt,
+          hiddenAt: merged.hiddenAt,
+          listSection: merged.listSection,
+          updatedAt: merged.updatedAt,
+        },
+      });
+  }
+
+  async deleteChatCascade(chatId: string): Promise<boolean> {
+    const del = await this.db.delete(chats).where(eq(chats.id, chatId)).returning({ id: chats.id });
+    return del.length > 0;
+  }
+
+  async deleteChatMemberPrefs(userId: string, chatId: string): Promise<void> {
+    await this.db
+      .delete(chatMemberPrefs)
+      .where(and(eq(chatMemberPrefs.chatId, chatId), eq(chatMemberPrefs.userId, userId)));
+  }
+
+  async getOrCreateDmChat(userId: string, otherUserId: string): Promise<Chat> {
+    const findStrictSql = `
+      SELECT c.id
+      FROM chats c
+      INNER JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = $1
+      INNER JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = $2
+      WHERE c.type = 'dm'
+        AND (SELECT COUNT(*)::int FROM chat_members cm WHERE cm.chat_id = c.id) = 2
+      LIMIT 1
+    `;
+    const findLooseSql = `
+      SELECT c.id, (SELECT COUNT(*)::int FROM chat_members cm WHERE cm.chat_id = c.id) AS mc
+      FROM chats c
+      INNER JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = $1
+      INNER JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = $2
+      WHERE c.type = 'dm'
+      ORDER BY mc ASC, c.created_at DESC
+      LIMIT 1
+    `;
+
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      let existingId: string | undefined;
+      const strict = await client.query<{ id: string }>(findStrictSql, [userId, otherUserId]);
+      existingId = strict.rows[0]?.id;
+      if (!existingId) {
+        const loose = await client.query<{ id: string; mc: string | number }>(findLooseSql, [userId, otherUserId]);
+        const row = loose.rows[0];
+        const mc = row ? Number(row.mc) : 0;
+        if (row && mc === 2) {
+          existingId = row.id;
+        }
+      }
+      if (existingId) {
+        await client.query("COMMIT");
+        const chat = await this.getChatById(existingId);
+        if (chat) return chat;
+      }
+
+      const ins = await client.query<Chat>(
+        `INSERT INTO chats (type, name) VALUES ('dm', NULL)
+         RETURNING id, type, name, avatar_url, created_at`,
+      );
+      const chat = ins.rows[0];
+      if (!chat) throw new Error("Create chat failed");
+      await client.query(
+        `INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'member')`,
+        [chat.id, userId, otherUserId],
+      );
+      await client.query("COMMIT");
+      return chat;
+    } catch (e) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async createChat(data: InsertChat): Promise<Chat> {
@@ -542,6 +670,14 @@ export class DbStorage implements IStorage {
       .select({ count: sql<number>`count(*)::int` })
       .from(messages)
       .where(and(eq(messages.chatId, chatId), folderCond, gt(messages.createdAt, since), fromOthers));
+    return r?.count ?? 0;
+  }
+
+  async getMessageCountByFolder(chatId: string, folderId: string): Promise<number> {
+    const [r] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.folderId, folderId)));
     return r?.count ?? 0;
   }
 
@@ -707,6 +843,16 @@ export class DbStorage implements IStorage {
     const [row] = await this.db
       .update(messages)
       .set({ content: content.trim() })
+      .where(and(eq(messages.chatId, chatId), eq(messages.id, messageId)))
+      .returning();
+    return row as Message | undefined;
+  }
+
+  async updateMessageTranscript(chatId: string, messageId: string, transcript: string): Promise<Message | undefined> {
+    const t = transcript.trim();
+    const [row] = await this.db
+      .update(messages)
+      .set({ transcript: t || null })
       .where(and(eq(messages.chatId, chatId), eq(messages.id, messageId)))
       .returning();
     return row as Message | undefined;
@@ -1608,15 +1754,22 @@ export class DbStorage implements IStorage {
     return row;
   }
 
-  async addBlock(blockerId: string, blockedId: string): Promise<void> {
+  async addBlock(
+    blockerId: string,
+    blockedId: string,
+    flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+  ): Promise<void> {
     if (blockerId === blockedId) return;
-    const [existing] = await this.db
-      .select({ id: userBlocks.id })
-      .from(userBlocks)
-      .where(and(eq(userBlocks.blockerId, blockerId), eq(userBlocks.blockedId, blockedId)))
-      .limit(1);
-    if (existing) return;
-    await this.db.insert(userBlocks).values({ blockerId, blockedId });
+    const restrictProfile = flags?.restrictProfile !== false;
+    const restrictChat = flags?.restrictChat !== false;
+    const restrictSocial = flags?.restrictSocial !== false;
+    await this.db
+      .insert(userBlocks)
+      .values({ blockerId, blockedId, restrictProfile, restrictChat, restrictSocial })
+      .onConflictDoUpdate({
+        target: [userBlocks.blockerId, userBlocks.blockedId],
+        set: { restrictProfile, restrictChat, restrictSocial },
+      });
   }
 
   async removeBlock(blockerId: string, blockedId: string): Promise<void> {
@@ -1634,19 +1787,55 @@ export class DbStorage implements IStorage {
     return !!row;
   }
 
+  async getBlockFlags(
+    blockerId: string,
+    blockedId: string,
+  ): Promise<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean } | null> {
+    const [row] = await this.db
+      .select({
+        restrictProfile: userBlocks.restrictProfile,
+        restrictChat: userBlocks.restrictChat,
+        restrictSocial: userBlocks.restrictSocial,
+      })
+      .from(userBlocks)
+      .where(and(eq(userBlocks.blockerId, blockerId), eq(userBlocks.blockedId, blockedId)))
+      .limit(1);
+    if (!row) return null;
+    return {
+      restrictProfile: row.restrictProfile === true,
+      restrictChat: row.restrictChat === true,
+      restrictSocial: row.restrictSocial === true,
+    };
+  }
+
   async getBlockedRelationIds(viewerId: string): Promise<string[]> {
-    const asBlocker = await this.db
-      .select({ blockedId: userBlocks.blockedId })
-      .from(userBlocks)
-      .where(eq(userBlocks.blockerId, viewerId));
-    const asBlocked = await this.db
-      .select({ blockerId: userBlocks.blockerId })
-      .from(userBlocks)
-      .where(eq(userBlocks.blockedId, viewerId));
-    const set = new Set<string>();
-    asBlocker.forEach((r) => set.add(r.blockedId));
-    asBlocked.forEach((r) => set.add(r.blockerId));
-    return Array.from(set);
+    try {
+      const fullBlock = and(
+        eq(userBlocks.restrictProfile, true),
+        eq(userBlocks.restrictChat, true),
+        eq(userBlocks.restrictSocial, true),
+      );
+      const asBlocker = await this.db
+        .select({ blockedId: userBlocks.blockedId })
+        .from(userBlocks)
+        .where(and(eq(userBlocks.blockerId, viewerId), fullBlock));
+      const asBlocked = await this.db
+        .select({ blockerId: userBlocks.blockerId })
+        .from(userBlocks)
+        .where(and(eq(userBlocks.blockedId, viewerId), fullBlock));
+      const set = new Set<string>();
+      asBlocker.forEach((r) => set.add(r.blockedId));
+      asBlocked.forEach((r) => set.add(r.blockerId));
+      return Array.from(set);
+    } catch (err: unknown) {
+      if (isUserBlocksSchemaUnavailable(err)) {
+        console.warn(
+          "[db] user_blocks недоступна — лента без фильтра полных блокировок до миграции user_block_restrictions.",
+        );
+        return [];
+      }
+      throw err;
+    }
   }
 
   // ── Chat Vibe ──────────────────────────────────────────────

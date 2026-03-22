@@ -174,6 +174,48 @@ export async function unfollowUser(userId: string): Promise<void> {
   }
 }
 
+/** Ограничения при блокировке (false = не ограничивать в этой области). По умолчанию на сервере все true. */
+export type UserBlockFlags = {
+  restrictProfile: boolean;
+  restrictChat: boolean;
+  restrictSocial: boolean;
+};
+
+/** Готовые наборы для UI «как в Телеграме» */
+export const USER_BLOCK_PRESETS = {
+  full: { restrictProfile: true, restrictChat: true, restrictSocial: true } satisfies UserBlockFlags,
+  /** Только личка: не может писать вам */
+  chatOnly: { restrictProfile: false, restrictChat: true, restrictSocial: false } satisfies UserBlockFlags,
+  /** Только лента/посты: не может комментировать и ставить реакции */
+  socialOnly: { restrictProfile: false, restrictChat: false, restrictSocial: true } satisfies UserBlockFlags,
+} as const;
+
+/** Заблокировать пользователя с выбранными ограничениями */
+export async function setUserBlock(targetUserId: string, flags: UserBlockFlags): Promise<void> {
+  const res = await apiFetch(`${API}/users/${encodeURIComponent(targetUserId)}/block`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(flags),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось заблокировать");
+  }
+}
+
+/** Снять блокировку */
+export async function removeUserBlock(targetUserId: string): Promise<void> {
+  const res = await apiFetch(`${API}/users/${encodeURIComponent(targetUserId)}/block`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось снять блокировку");
+  }
+}
+
 export type FollowUser = ContactUser;
 
 /** Подписчики пользователя */

@@ -18,6 +18,26 @@ fi
 node -v
 npm -v
 
+# Видео в постах/сториз: сервер перекодирует через ffmpeg (libx264). Без пакета загрузка видео падает.
+if ! command -v ffmpeg &>/dev/null; then
+  if command -v apt-get &>/dev/null; then
+    echo "Установка ffmpeg (нужен для загрузки видео)..."
+    apt-get update -qq && apt-get install -y -qq ffmpeg || echo "Предупреждение: apt не смог установить ffmpeg — поставь вручную: apt-get install -y ffmpeg"
+  else
+    echo "Предупреждение: ffmpeg не найден и apt-get недоступен — установи ffmpeg вручную для видео."
+  fi
+fi
+if command -v ffmpeg &>/dev/null; then
+  echo "ffmpeg: $(ffmpeg -version 2>/dev/null | head -n1)"
+  if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264; then
+    echo "Кодер libx264: есть"
+  else
+    echo "ВНИМАНИЕ: в сборке ffmpeg нет libx264 — перекодирование постов может ломаться. Нужен полный пакет ffmpeg (Debian/Ubuntu: apt install ffmpeg)."
+  fi
+else
+  echo "ОШИБКА: ffmpeg отсутствует — загрузка видео в ленту/сториз не будет работать."
+fi
+
 # Зависимости
 if [ -f dist/index.cjs ]; then
   npm ci --omit=dev 2>/dev/null || npm install --omit=dev

@@ -128,54 +128,6 @@ function AudienceChip({ th }: { th: PulseThemeTokens }) {
   );
 }
 
-function UploadRing({
-  progress,
-  accent,
-  initials,
-  holeBg,
-}: {
-  progress: number;
-  accent: string;
-  initials: string;
-  holeBg: string;
-}) {
-  const s = 72;
-  const r = 27;
-  return (
-    <div className="relative flex items-center justify-center" style={{ width: s, height: s }}>
-      <div
-        className="absolute rounded-[18px]"
-        style={{ inset: -3, background: IG_GRAD, boxShadow: "0 0 16px rgba(214,41,118,0.4)" }}
-      />
-      <div className="absolute rounded-[16px]" style={{ inset: -0.5, background: holeBg }} />
-      <div
-        className="absolute flex items-center justify-center rounded-[14px] font-black text-base"
-        style={{
-          inset: 0,
-          background: "linear-gradient(145deg,#1a1040,#0c0820)",
-          color: accent,
-        }}
-      >
-        {initials}
-      </div>
-      <svg width={s + 8} height={s + 8} className="absolute" style={{ top: -4, left: -4, transform: "rotate(-90deg)", zIndex: 10 }}>
-        <circle cx={(s + 8) / 2} cy={(s + 8) / 2} r={r + 4} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={2.5} />
-        <circle
-          cx={(s + 8) / 2}
-          cy={(s + 8) / 2}
-          r={r + 4}
-          fill="none"
-          stroke={accent}
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeDasharray={`${(progress / 100) * 2 * Math.PI * (r + 4)} ${2 * Math.PI * (r + 4)}`}
-          style={{ filter: `drop-shadow(0 0 4px ${accent}bb)`, transition: "stroke-dasharray 0.08s linear" }}
-        />
-      </svg>
-    </div>
-  );
-}
-
 export type CreatePostPulseMobileProps = {
   onBack: () => void;
   displayName: string;
@@ -250,32 +202,8 @@ export function CreatePostPulseMobile({
   const initials = initialsFromDisplayName(displayName || "?");
   const resolvedAvatar = avatarUrl?.trim() ? resolveUrl(avatarUrl.trim()) : "";
 
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const uploadTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const mediaEmpty = mediaItems.length === 0;
   const allDone = mediaItems.length > 0 && mediaItems.every((s) => s.type === "done");
-  const allUploading = mediaItems.length > 0 && mediaItems.every((s) => s.type === "uploading");
-
-  useEffect(() => {
-    if (!allUploading) {
-      if (uploadTickRef.current) clearInterval(uploadTickRef.current);
-      uploadTickRef.current = null;
-      setUploadProgress(0);
-      return;
-    }
-    setUploadProgress(0);
-    if (uploadTickRef.current) clearInterval(uploadTickRef.current);
-    uploadTickRef.current = setInterval(() => {
-      setUploadProgress((p) => {
-        const n = p + Math.random() * 9 + 4;
-        return n >= 99 ? 99 : Math.round(n);
-      });
-    }, 120);
-    return () => {
-      if (uploadTickRef.current) clearInterval(uploadTickRef.current);
-    };
-  }, [allUploading]);
 
   const [aiFlash, setAiFlash] = useState(false);
   const aiFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -513,28 +441,6 @@ export function CreatePostPulseMobile({
             </div>
           )}
 
-          {allUploading && (
-            <div
-              className="mx-3 flex flex-col items-center justify-center gap-5 rounded-3xl"
-              style={{
-                height: 210,
-                background: isDark ? "rgba(129,140,248,0.07)" : "rgba(99,102,241,0.06)",
-                border: `1px solid ${th.accentBrd}`,
-              }}
-            >
-              <UploadRing progress={uploadProgress} accent={th.accent} initials={initials} holeBg={th.bg} />
-              <div className="mt-2 flex flex-col items-center gap-1">
-                <div className="flex items-center gap-1.5">
-                  <span style={{ fontSize: 13, fontWeight: 700, color: th.textSub }}>Загрузка медиа</span>
-                  <span className="thinking-dot-pulse" style={{ fontSize: 13, color: th.accent }}>
-                    …
-                  </span>
-                </div>
-                <span style={{ fontSize: 10, color: th.textFaint }}>Не закрывайте приложение</span>
-              </div>
-            </div>
-          )}
-
           {mediaItems.length > 0 && allDone && (
             <div className="mx-3">
               <div className="mb-2 flex items-center gap-1.5 px-0.5">
@@ -596,7 +502,21 @@ export function CreatePostPulseMobile({
                             style={{ background: th.surface }}
                           >
                             {slot.kind === "video" ? (
-                              <video src={src} className="h-full w-full object-cover" muted playsInline />
+                              <video
+                                src={src}
+                                className="h-full w-full object-cover"
+                                muted
+                                playsInline
+                                preload="auto"
+                                onLoadedMetadata={(e) => {
+                                  const v = e.currentTarget;
+                                  try {
+                                    if (v.readyState >= 1) v.currentTime = 0.001;
+                                  } catch {
+                                    /* ignore */
+                                  }
+                                }}
+                              />
                             ) : slot.kind === "audio" ? (
                               <div className="flex h-full items-center justify-center text-[10px]" style={{ color: th.textFaint }}>
                                 A
@@ -622,7 +542,7 @@ export function CreatePostPulseMobile({
             </div>
           )}
 
-          {mediaItems.length > 0 && !allDone && !allUploading && (
+          {mediaItems.length > 0 && !allDone && (
             <div className="mx-3 grid grid-cols-2 gap-2">
               {mediaItems.map((slot, i) => {
                 const src = slot.type === "done" ? resolveUrl(slot.url) : slot.preview;
@@ -640,7 +560,21 @@ export function CreatePostPulseMobile({
                         <audio src={src} controls preload="metadata" className="w-full" />
                       </div>
                     ) : isVideo ? (
-                      <video src={src} className="h-full w-full object-cover" playsInline muted controls preload="metadata" />
+                      <video
+                        src={src}
+                        className="h-full w-full object-cover"
+                        playsInline
+                        muted
+                        preload="auto"
+                        onLoadedMetadata={(e) => {
+                          const v = e.currentTarget;
+                          try {
+                            if (v.readyState >= 1) v.currentTime = 0.001;
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                      />
                     ) : (
                       <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
                     )}

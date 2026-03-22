@@ -5,7 +5,7 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
 import { s3Configured, uploadToS3 } from "./s3";
-import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { AVATAR_VIDEO_MAX_SECONDS, POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 import {
   transcodeStoryVideoBuffer,
   transcodeStoryVideoFileToPath,
@@ -13,8 +13,17 @@ import {
   type VideoTranscodeTrim,
 } from "./story-video-transcode";
 
+function parseTrimCapSec(body: Record<string, unknown> | undefined): number {
+  if (!body) return POST_VIDEO_MAX_SECONDS;
+  const raw = body.trimMaxSeconds;
+  const n = Number.parseInt(String(raw ?? ""), 10);
+  if (n === AVATAR_VIDEO_MAX_SECONDS) return AVATAR_VIDEO_MAX_SECONDS;
+  return POST_VIDEO_MAX_SECONDS;
+}
+
 function parsePostVideoTrim(body: Record<string, unknown> | undefined): VideoTranscodeTrim | undefined {
   if (!body) return undefined;
+  const cap = parseTrimCapSec(body);
   const s = body.trimStartSec;
   const d = body.trimDurationSec;
   const hasS = s !== undefined && s !== null && String(s).trim() !== "";
@@ -22,9 +31,9 @@ function parsePostVideoTrim(body: Record<string, unknown> | undefined): VideoTra
   if (!hasS || !hasD) return undefined;
   const startSec = Math.max(0, Number.parseFloat(String(s)) || 0);
   let durationSec = Number.parseFloat(String(d));
-  if (!Number.isFinite(durationSec)) durationSec = POST_VIDEO_MAX_SECONDS;
-  durationSec = Math.min(POST_VIDEO_MAX_SECONDS, Math.max(0.1, durationSec));
-  return { startSec, durationSec };
+  if (!Number.isFinite(durationSec)) durationSec = cap;
+  durationSec = Math.min(cap, Math.max(0.1, durationSec));
+  return { startSec, durationSec, maxSegmentSec: cap };
 }
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "posts");
@@ -41,6 +50,10 @@ const ALLOWED_MIMES = [
   "video/mp4",
   "video/webm",
   "video/quicktime", // mov (iPhone и др.)
+  "video/x-m4v",
+  "video/m4v",
+  "video/3gpp",
+  "video/3gp",
   "audio/mpeg",
   "audio/mp3",
   "audio/mp4",
@@ -51,7 +64,8 @@ const ALLOWED_MIMES = [
   "audio/webm",
   "audio/ogg",
 ];
-const ALLOWED_EXT_RE = /\.(jpe?g|png|gif|webp|heic|heif|mp4|webm|mov|mp3|m4a|aac|wav|ogg)$/i;
+const ALLOWED_EXT_RE =
+  /\.(jpe?g|png|gif|webp|heic|heif|mp4|webm|mov|m4v|3gp|3gpp|mp3|m4a|aac|wav|ogg)$/i;
 
 function detectPostMediaKind(file: Pick<Express.Multer.File, "mimetype" | "originalname">): "image" | "video" | "audio" | "unknown" {
   const mime = (file.mimetype || "").toLowerCase().trim();
@@ -60,7 +74,7 @@ function detectPostMediaKind(file: Pick<Express.Multer.File, "mimetype" | "origi
   if (mime.startsWith("audio/")) return "audio";
   const ext = path.extname(file.originalname || "").toLowerCase();
   if (/\.(jpe?g|png|gif|webp|heic|heif)$/i.test(ext)) return "image";
-  if (/\.(mp4|webm|mov)$/i.test(ext)) return "video";
+  if (/\.(mp4|webm|mov|m4v|3gp|3gpp)$/i.test(ext)) return "video";
   if (/\.(mp3|m4a|aac|wav|ogg)$/i.test(ext)) return "audio";
   return "unknown";
 }
@@ -92,7 +106,11 @@ const upload = multer({
     const byMime = !!mime && ALLOWED_MIMES.includes(mime);
     const byExt = ALLOWED_EXT_RE.test(file.originalname || "");
     if (!byMime && !byExt) {
-      cb(new Error("Разрешены только фото, видео и аудио (JPEG/PNG/WEBP/HEIC, MP4/MOV/WebM, MP3/M4A/WAV/OGG) до 500 МБ"));
+      cb(
+        new Error(
+          "Разрешены только фото, видео и аудио (JPEG/PNG/WEBP/HEIC, MP4/MOV/WebM/M4V/3GP, MP3/M4A/WAV/OGG) до 500 МБ",
+        ),
+      );
       return;
     }
     cb(null, true);
@@ -147,7 +165,16 @@ export function registerPostMediaUploadRoutes(app: Express): void {
         res.status(201).json({ url: `/uploads/posts/${filename}` });
       } catch (err) {
         console.error("Post media upload error:", err);
-        res.status(500).json({ message: "Не удалось обработать файл поста" });
+        const ffmpegLike =
+          err instanceof Error &&
+          /ffmpeg|libx264|hqdn3d|loudnorm|unsharp|filter|codec|invalid|encoder|decoder|hevc|h\.?265|scale|exited with code|ENOENT|spawn/i.test(
+            err.message,
+          );
+        res.status(500).json({
+          message: ffmpegLike
+            ? "Не удалось перекодировать видео. Попробуйте экспорт «Совместимость» / MP4 H.264 или проверьте ffmpeg (libx264) на сервере."
+            : "Не удалось обработать файл поста",
+        });
       }
     }
   );

@@ -1,8 +1,31 @@
-import { useState, useEffect, useRef, memo, useCallback } from "react";
+import { useState, useEffect, useRef, memo, useCallback, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { useLocation } from "wouter";
-import { Search, Edit, MessageCircle, Phone, Video, X, UserPlus, ChevronLeft, Mic, Pin, Users, BookUser, Loader2 } from "lucide-react";
-import { motion } from "framer-motion";
+import {
+  Search,
+  Edit,
+  MessageCircle,
+  Phone,
+  Video,
+  X,
+  UserPlus,
+  ChevronLeft,
+  ChevronUp,
+  Mic,
+  Pin,
+  PinOff,
+  Users,
+  BookUser,
+  Loader2,
+  EyeOff,
+  Trash2,
+  Briefcase,
+  Megaphone,
+  Heart,
+  LayoutList,
+  Sparkles,
+} from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { GlobalSearch } from "@/components/GlobalSearch";
@@ -19,7 +42,7 @@ import {
   type ContactUser,
 } from "@/lib/users";
 import { gatherPhoneStringsFromDevice, isWebContactPickerSupported } from "@/lib/contact-book-match";
-import { isNative } from "@/lib/capacitor-native";
+import { isNative, triggerContextMenuOpenFeedback } from "@/lib/capacitor-native";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { PageTitle } from "@/components/PageTitle";
@@ -40,27 +63,35 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { startDm, createGroupChat } from "@/lib/search";
-import { searchMessages, type SearchMessageHit } from "@/lib/chat";
+import {
+  searchMessages,
+  patchChatMemberMe,
+  deleteChatForMe,
+  deleteChatForEveryone,
+  type SearchMessageHit,
+} from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
+import type { ApiChat } from "@/features/chat";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { playDeleteSound } from "@/lib/send-sound";
 import { usePrefersReducedMotion } from "@/lib/motion";
-import { DURATION_NORMAL_S, EASING_OUT_BEZIER } from "@/lib/motion";
+import {
+  DURATION_NORMAL_S,
+  DURATION_FAST_MS,
+  DURATION_EMPHASIS_MS,
+  EASING_OUT_BEZIER,
+} from "@/lib/motion";
 import { formatTimeLocal, formatDateShortLocal, parseServerTimestamp } from "@/lib/timezone";
-
-type ApiChat = {
-  id: string;
-  type: string;
-  name: string | null;
-  avatarUrl?: string | null;
-  createdAt: string;
-  otherMember?: { id: string; publicId: number } | null;
-  otherMemberAvatarUrl?: string | null;
-  otherMemberLastSeenAt?: string | null;
-  otherMemberHasActiveStory?: boolean;
-  otherMemberHasUnseenStory?: boolean;
-  lastMessage?: { type: string; content: string; createdAt: string } | null;
-  hasUnread?: boolean;
-  unreadCount?: number;
-};
 
 /** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM» (локальное время). */
 function formatLastSeen(iso: string | null | undefined): string | null {
@@ -82,6 +113,39 @@ async function fetchChats(): Promise<ApiChat[]> {
   if (!res.ok) throw new Error("Не удалось загрузить чаты");
   return res.json();
 }
+
+async function fetchHiddenChats(): Promise<ApiChat[]> {
+  const res = await apiFetch(`${API}/chats?hidden=1`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Не удалось загрузить скрытые чаты");
+  return res.json();
+}
+
+/** Согласованно с бейджем в списке: число и/или флаг с сервера. */
+function effectiveUnreadCount(chat: ApiChat): number {
+  const rawUnc = (chat as { unread_count?: unknown }).unread_count;
+  return Math.max(
+    0,
+    Number(
+      chat.unreadCount ??
+        (typeof rawUnc === "number" ? rawUnc : typeof rawUnc === "string" ? parseInt(rawUnc, 10) : 0),
+    ) || 0,
+  );
+}
+
+function chatHasUnread(chat: ApiChat): boolean {
+  return effectiveUnreadCount(chat) > 0 || chat.hasUnread === true;
+}
+
+/** Удержание для сервисного меню (~0,7 с). Сильный сдвиг пальца отменяет, чтобы не мешать скроллу. */
+const CHAT_SERVICE_MENU_LONG_PRESS_MS = 720;
+const CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX = 14;
+
+const LIST_SECTION_TABS = [
+  { id: "all" as const, label: "Все", icon: LayoutList },
+  { id: "friends" as const, label: "Друзья", icon: Heart },
+  { id: "work" as const, label: "Работа", icon: Briefcase },
+  { id: "promo" as const, label: "Реклама", icon: Megaphone },
+];
 
 function formatChatTime(createdAt: string): string {
   const d = parseServerTimestamp(createdAt);
@@ -169,15 +233,76 @@ const ChatRow = memo(function ChatRow({
   typingLabel,
   voiceLabel,
   onSelect,
+  onLongPressMenu,
   isAiChat,
+  /** Скрытые / архив: без бейджа непрочитанного и яркого акцента (как «без уведомлений» в списке). */
+  suppressUnreadVisual,
 }: {
   chat: ApiChat;
   typingLabel: string | null;
   voiceLabel: string | null;
   onSelect: () => void;
+  /** Удержание ~3 с — сервисное меню (не для AI-чата). */
+  onLongPressMenu?: () => void;
   isAiChat?: boolean;
+  suppressUnreadVisual?: boolean;
 }) {
+  const rawUnc = (chat as { unread_count?: unknown }).unread_count;
+  const unreadCount = Math.max(
+    0,
+    Number(
+      chat.unreadCount ??
+        (typeof rawUnc === "number" ? rawUnc : typeof rawUnc === "string" ? parseInt(rawUnc, 10) : 0),
+    ) || 0,
+  );
+  const hasUnreadVisual =
+    !isAiChat && !suppressUnreadVisual && (unreadCount > 0 || chat.hasUnread === true);
+
   const reducedMotion = usePrefersReducedMotion();
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const blockClickRef = useRef(false);
+  const [pressing, setPressing] = useState(false);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    setPressing(false);
+    longPressOriginRef.current = null;
+  }, []);
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!onLongPressMenu || isAiChat) return;
+      if (e.button !== 0) return;
+      longPressOriginRef.current = { x: e.clientX, y: e.clientY };
+      setPressing(true);
+      longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null;
+        setPressing(false);
+        longPressOriginRef.current = null;
+        blockClickRef.current = true;
+        window.setTimeout(() => {
+          blockClickRef.current = false;
+        }, 500);
+        triggerContextMenuOpenFeedback();
+        onLongPressMenu();
+      }, CHAT_SERVICE_MENU_LONG_PRESS_MS);
+    },
+    [onLongPressMenu, isAiChat],
+  );
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const origin = longPressOriginRef.current;
+    if (!origin || !longPressTimerRef.current) return;
+    const dx = e.clientX - origin.x;
+    const dy = e.clientY - origin.y;
+    if (dx * dx + dy * dy > CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX * CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX) {
+      clearLongPress();
+    }
+  }, [clearLongPress]);
   const preview =
     voiceLabel != null ? (
       <span className="text-primary/90 flex items-center gap-1">
@@ -215,12 +340,15 @@ const ChatRow = memo(function ChatRow({
         <div className="flex justify-between items-baseline gap-1.5">
           <h3
             className={cn(
-              "truncate text-[15px] font-semibold leading-5 sm:text-[16px]",
+              "flex min-w-0 items-center gap-1 text-[15px] font-semibold leading-5 sm:text-[16px]",
               isAiChat && "text-indigo-700 dark:text-indigo-200",
-              chat.hasUnread && !isAiChat && "text-foreground"
+              hasUnreadVisual && "text-foreground"
             )}
           >
-            {chat.name ?? (chat.type === "dm" ? "Диалог" : "Чат")}
+            {chat.pinnedAt ? (
+              <Pin className="h-3.5 w-3.5 shrink-0 text-primary/70" aria-hidden />
+            ) : null}
+            <span className="truncate">{chat.name ?? (chat.type === "dm" ? "Диалог" : "Чат")}</span>
           </h3>
           <span className="flex-shrink-0 text-[11px] text-muted-foreground/90 sm:text-xs">
             {formatChatTime(chat.lastMessage?.createdAt ?? chat.createdAt)}
@@ -229,7 +357,7 @@ const ChatRow = memo(function ChatRow({
         <p
           className={cn(
             "mt-0.5 truncate text-[13px] leading-[1.25rem] sm:text-[13.5px]",
-            isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : chat.hasUnread ? "text-foreground/80 font-medium" : "text-muted-foreground"
+            isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : hasUnreadVisual ? "text-foreground/80 font-medium" : "text-muted-foreground"
           )}
         >
           {preview}
@@ -256,31 +384,62 @@ const ChatRow = memo(function ChatRow({
     );
   }
 
-  const hasUnread = chat.hasUnread === true;
-  const unreadCount = Math.max(0, chat.unreadCount ?? 0);
-  const badgeLabel = unreadCount <= 0 ? "" : unreadCount > 99 ? "99+" : String(unreadCount);
+  const hasUnread = hasUnreadVisual;
+  const badgeLabel = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
+  const showUnreadDot = hasUnread && !badgeLabel;
 
   return (
-    <TapScaleDiv
-      onClick={onSelect}
-      className={cn(
-        "uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors duration-75 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5",
-        "border-border/20 hover:bg-secondary/40",
-        hasUnread
-          ? "bg-secondary/60 hover:bg-secondary/70 dark:bg-secondary/45 dark:hover:bg-secondary/55"
-          : "bg-card/60 hover:bg-secondary/50"
-      )}
+    <motion.div
+      className="rounded-xl sm:rounded-2xl"
+      animate={
+        reducedMotion
+          ? undefined
+          : {
+              scale: pressing ? 0.985 : 1,
+              opacity: pressing ? 0.92 : 1,
+            }
+      }
+      transition={
+        reducedMotion ? undefined : { duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }
+      }
     >
-      {content}
-      {hasUnread && badgeLabel && (
-        <span
-          className="flex-shrink-0 inline-flex min-h-[20px] min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground"
-          aria-label={`${unreadCount} непрочитанных`}
-        >
-          {badgeLabel}
-        </span>
-      )}
-    </TapScaleDiv>
+      <TapScaleDiv
+        onClick={() => {
+          if (blockClickRef.current) return;
+          onSelect();
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={clearLongPress}
+        onPointerLeave={clearLongPress}
+        onPointerCancel={clearLongPress}
+        className={cn(
+          "uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors duration-75 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5",
+          "border-border/20 hover:bg-secondary/40 touch-pan-y",
+          suppressUnreadVisual
+            ? "border-dashed border-border/35 bg-card/45 opacity-[0.92] hover:bg-secondary/35 dark:bg-card/40"
+            : hasUnread
+              ? "bg-secondary/60 hover:bg-secondary/70 dark:bg-secondary/45 dark:hover:bg-secondary/55"
+              : "bg-card/60 hover:bg-secondary/50"
+        )}
+      >
+        {content}
+        {badgeLabel ? (
+          <span
+            className="flex-shrink-0 inline-flex min-h-[20px] min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground"
+            aria-label={`${unreadCount} непрочитанных`}
+          >
+            {badgeLabel}
+          </span>
+        ) : showUnreadDot ? (
+          <span
+            className="flex h-2.5 w-2.5 flex-shrink-0 rounded-full bg-primary"
+            aria-label="Есть непрочитанные сообщения"
+            title="Непрочитанные"
+          />
+        ) : null}
+      </TapScaleDiv>
+    </motion.div>
   );
 });
 
@@ -315,6 +474,28 @@ export default function Chats() {
     refetchOnMount: "always",
   });
 
+  const [listSectionTab, setListSectionTab] = useState<"all" | "friends" | "work" | "promo">("all");
+  /** Полоса скрытых чатов вверху списка после pull-to-refresh (если есть скрытые). */
+  const [hiddenPeekOpen, setHiddenPeekOpen] = useState(false);
+  const [serviceMenuChat, setServiceMenuChat] = useState<ApiChat | null>(null);
+  const [confirmDeleteAllChat, setConfirmDeleteAllChat] = useState<ApiChat | null>(null);
+  const [confirmLeaveChat, setConfirmLeaveChat] = useState<ApiChat | null>(null);
+  /** Удаление из диалога — кнопка без авто-закрытия Radix Action, чтобы дождаться API. */
+  const [deleteInProgress, setDeleteInProgress] = useState<null | "leave" | "forAll">(null);
+  const chatListReducedMotion = usePrefersReducedMotion();
+
+  const { data: hiddenChats = [], isLoading: hiddenLoading, refetch: refetchHidden } = useQuery({
+    queryKey: ["chats", "hidden"],
+    queryFn: fetchHiddenChats,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (hiddenPeekOpen && !hiddenLoading && hiddenChats.length === 0) {
+      setHiddenPeekOpen(false);
+    }
+  }, [hiddenPeekOpen, hiddenLoading, hiddenChats.length]);
+
   // Подписка на все чаты: новые сообщения → обновить список; типинг и запись ГС → показать в превью
   useEffect(() => {
     if (!chats.length) return;
@@ -324,6 +505,7 @@ export default function Chats() {
       unsubs.push(
         subscribeChat(chatId, () => {
           notifyChatListUpdate();
+          void queryClient.invalidateQueries({ queryKey: ["chats"] });
         })
       );
       unsubs.push(
@@ -379,7 +561,7 @@ export default function Chats() {
       Object.values(voiceTimeoutsRef.current).forEach(clearTimeout);
       voiceTimeoutsRef.current = {};
     };
-  }, [chats, user?.id, location, subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate]);
+  }, [chats, user?.id, location, queryClient, subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate]);
 
   const { data: contactsList = [] } = useQuery({
     queryKey: ["contacts", "list"],
@@ -451,11 +633,111 @@ export default function Chats() {
           (c) =>
             (c.name ?? "").toLowerCase().includes(searchLower)
         );
-  const chatsSortedByLastMessage = [...filteredChats].sort((a, b) => {
-    const aTs = Date.parse(a.lastMessage?.createdAt ?? a.createdAt);
-    const bTs = Date.parse(b.lastMessage?.createdAt ?? b.createdAt);
-    return bTs - aTs;
-  });
+
+  /** Вкладки «Друзья / Работа / …» показываем только если пользователь уже вынес хотя бы один чат из «Общих». */
+  const hasCustomListSections = useMemo(
+    () => chats.some((c) => (c.listSection ?? "general") !== "general"),
+    [chats],
+  );
+
+  useEffect(() => {
+    if (!hasCustomListSections && listSectionTab !== "all") {
+      setListSectionTab("all");
+    }
+  }, [hasCustomListSections, listSectionTab]);
+
+  const filteredBySection = useMemo(() => {
+    if (listSectionTab === "all") return filteredChats;
+    return filteredChats.filter((c) => (c.listSection ?? "general") === listSectionTab);
+  }, [filteredChats, listSectionTab]);
+
+  const chatsSortedByLastMessage = useMemo(() => {
+    return [...filteredBySection].sort((a, b) => {
+      const ap = a.pinnedAt ? 1 : 0;
+      const bp = b.pinnedAt ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      const aTs = Date.parse(a.lastMessage?.createdAt ?? a.createdAt) || 0;
+      const bTs = Date.parse(b.lastMessage?.createdAt ?? b.createdAt) || 0;
+      if (aTs !== bTs) return bTs - aTs;
+      if (a.hasUnread !== b.hasUnread) return a.hasUnread ? -1 : 1;
+      return 0;
+    });
+  }, [filteredBySection]);
+
+  const refreshChatQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["chats"] });
+    void queryClient.invalidateQueries({ queryKey: ["chats", "hidden"] });
+    notifyChatListUpdate();
+  }, [queryClient, notifyChatListUpdate]);
+
+  const revealHiddenPeekIfAny = useCallback(() => {
+    void (async () => {
+      try {
+        const list = await queryClient.fetchQuery({
+          queryKey: ["chats", "hidden"],
+          queryFn: fetchHiddenChats,
+        });
+        if (Array.isArray(list) && list.length > 0) {
+          setHiddenPeekOpen(true);
+        }
+      } catch {
+        /* тихо: сеть может быть недоступна */
+      }
+    })();
+  }, [queryClient]);
+
+  const openLeaveChatConfirm = useCallback((c: ApiChat) => {
+    setServiceMenuChat(null);
+    requestAnimationFrame(() => setConfirmLeaveChat(c));
+  }, []);
+
+  const openDeleteForAllConfirm = useCallback((c: ApiChat) => {
+    setServiceMenuChat(null);
+    requestAnimationFrame(() => setConfirmDeleteAllChat(c));
+  }, []);
+
+  const runDeleteLeave = useCallback(async () => {
+    const chat = confirmLeaveChat;
+    if (!chat || deleteInProgress) return;
+    setDeleteInProgress("leave");
+    try {
+      await deleteChatForMe(chat.id);
+      playDeleteSound();
+      setConfirmLeaveChat(null);
+      refreshChatQueries();
+      toast({ title: "Чат убран из списка" });
+    } catch (e) {
+      toast({
+        title: "Не получилось удалить",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteInProgress(null);
+    }
+  }, [confirmLeaveChat, deleteInProgress, refreshChatQueries, toast]);
+
+  const runDeleteForAll = useCallback(async () => {
+    const chat = confirmDeleteAllChat;
+    if (!chat || deleteInProgress) return;
+    setDeleteInProgress("forAll");
+    try {
+      await deleteChatForEveryone(chat.id);
+      playDeleteSound();
+      setConfirmDeleteAllChat(null);
+      refreshChatQueries();
+      toast({ title: "Чат удалён" });
+    } catch (e) {
+      toast({
+        title: "Не получилось удалить",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteInProgress(null);
+    }
+  }, [confirmDeleteAllChat, deleteInProgress, refreshChatQueries, toast]);
+
   const showAiOver = searchLower === "" || "ai over".includes(searchLower);
   const aiOverChat: ApiChat = {
     id: AI_CHAT_ID,
@@ -599,7 +881,7 @@ export default function Chats() {
                               setContactOpeningId(m.id);
                               try {
                                 const chat = await startDm(m.id);
-                                setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                                 setShowContactsPage(false);
                               } finally {
                                 setContactOpeningId(null);
@@ -659,7 +941,7 @@ export default function Chats() {
                                 setContactOpeningId(m.id);
                                 try {
                                   const chat = await startDm(m.id);
-                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
@@ -715,7 +997,7 @@ export default function Chats() {
                             setContactOpeningId(contact.id);
                             try {
                               const chat = await startDm(contact.id);
-                              setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                              setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                               setShowContactsPage(false);
                             } finally {
                               setContactOpeningId(null);
@@ -739,7 +1021,7 @@ export default function Chats() {
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
@@ -757,7 +1039,7 @@ export default function Chats() {
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
@@ -775,7 +1057,7 @@ export default function Chats() {
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
@@ -837,6 +1119,17 @@ export default function Chats() {
                   <Users className="w-4 h-4" />
                   Групповой чат
                 </DropdownMenuItem>
+                {hiddenChats.length > 0 ? (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setHiddenPeekOpen(true);
+                      void refetchHidden();
+                    }}
+                  >
+                    <EyeOff className="w-4 h-4" />
+                    Скрытые чаты ({hiddenChats.length})
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -859,8 +1152,80 @@ export default function Chats() {
         </div>
 
         {/* List Content — чаты в 5px от краёв, как в Telegram */}
-        <PullToRefresh onRefresh={() => refetch()} className="min-h-0">
+        <PullToRefresh
+          onRefresh={async () => {
+            await Promise.all([refetch(), refetchHidden()]);
+          }}
+          onPastThresholdRelease={revealHiddenPeekIfAny}
+          className="min-h-0"
+          enableHoldRefresh={false}
+        >
           <div className="uix-content-x py-2 sm:py-2.5 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))] space-y-1">
+            {hiddenPeekOpen && hiddenChats.length > 0 ? (
+              <motion.div
+                initial={chatListReducedMotion ? false : { opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }}
+                className="mb-3 rounded-2xl border border-border/40 bg-muted/15 p-2.5 shadow-sm shadow-black/[0.05] dark:border-border/30 dark:bg-muted/10 dark:shadow-black/25"
+              >
+                <div className="mb-2 flex items-start justify-between gap-2 px-0.5">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <EyeOff className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold leading-tight text-foreground/95">Скрытые чаты</p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                        В основном списке не показываются и без счётчика непрочитанного. Нажмите — открыть переписку.
+                      </p>
+                    </div>
+                  </div>
+                  <TapScaleButton
+                    type="button"
+                    subtle
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/45 bg-background/70 p-0"
+                    aria-label="Свернуть скрытые чаты"
+                    onClick={() => setHiddenPeekOpen(false)}
+                  >
+                    <ChevronUp className="h-5 w-5 text-muted-foreground" aria-hidden />
+                  </TapScaleButton>
+                </div>
+                <div className="max-h-[min(42dvh,340px)] space-y-1 overflow-y-auto overscroll-contain pr-0.5">
+                  {hiddenChats.map((h) => (
+                    <ChatRow
+                      key={h.id}
+                      chat={h}
+                      typingLabel={null}
+                      voiceLabel={null}
+                      suppressUnreadVisual
+                      onSelect={() => setLocation(`/chat/${encodeURIComponent(h.id)}`)}
+                      onLongPressMenu={() => setServiceMenuChat(h)}
+                    />
+                  ))}
+                </div>
+              </motion.div>
+            ) : null}
+            {searchLower === "" && hasCustomListSections && (
+              <div className="flex gap-1 overflow-x-auto pb-2 -mx-0.5 px-0.5 scrollbar-none">
+                {LIST_SECTION_TABS.map((t) => {
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setListSectionTab(t.id)}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0 transition-colors border min-h-[28px]",
+                        listSectionTab === t.id
+                          ? "bg-primary/12 border-primary/25 text-foreground"
+                          : "bg-muted/25 border-border/30 text-muted-foreground hover:bg-muted/45"
+                      )}
+                    >
+                      <Icon className="w-3 h-3 opacity-80 shrink-0" aria-hidden />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {searchQuery.trim().length >= 2 && (
               <div className="mb-3">
                 <p className="text-xs font-medium text-muted-foreground mb-1.5">В сообщениях</p>
@@ -873,7 +1238,11 @@ export default function Chats() {
                     {messageSearchResults.map((hit) => (
                       <li key={`${hit.chatId}-${hit.messageId}`}>
                         <TapScaleDiv
-                          onClick={() => setLocation(`/chat/${hit.chatId}?messageId=${hit.messageId}`)}
+                          onClick={() =>
+                          setLocation(
+                            `/chat/${encodeURIComponent(hit.chatId)}?messageId=${encodeURIComponent(hit.messageId)}`,
+                          )
+                        }
                           className="flex flex-col gap-0.5 p-2.5 rounded-lg hover:bg-secondary/50 cursor-pointer"
                         >
                           <span className="text-xs text-muted-foreground">{hit.chatName}</span>
@@ -898,66 +1267,370 @@ export default function Chats() {
             ) : chatsSortedByLastMessage.length === 0 ? (
               <ListEmptyState
                 icon={MessageCircle}
-                title={chats.length === 0 ? "У вас пока нет чатов" : "Нет чатов по запросу"}
+                title={
+                  chats.length === 0
+                    ? "У вас пока нет чатов"
+                    : listSectionTab !== "all"
+                      ? "Нет чатов на этой полке"
+                      : "Нет чатов по запросу"
+                }
                 description={
                   chats.length === 0
                     ? "Найдите пользователя через поиск и начните диалог"
-                    : "Измените поиск или выберите другой фильтр"
+                    : listSectionTab !== "all"
+                      ? "Назначьте полку через долгое нажатие на чат (меню) или выберите «Все»."
+                      : "Измените поиск или выберите другой фильтр"
                 }
-                actionLabel={chats.length === 0 ? "Найти человека" : undefined}
-                onAction={chats.length === 0 ? () => setShowContactsPage(true) : undefined}
+                actionLabel={chats.length === 0 ? "Найти человека" : listSectionTab !== "all" ? "Все чаты" : undefined}
+                onAction={
+                  chats.length === 0
+                    ? () => setShowContactsPage(true)
+                    : listSectionTab !== "all"
+                      ? () => setListSectionTab("all")
+                      : undefined
+                }
               />
             ) : (
               (() => {
                 const chatsWithoutAi = chatsSortedByLastMessage.filter((c) => c.id !== AI_CHAT_ID);
                 const bySection = groupChatsByDateSection(chatsWithoutAi);
-                return [
-                  ...(showAiOver
-                    ? [
-                        <motion.p
-                          key="ai-over-label"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ duration: DURATION_NORMAL_S * 0.6, ease: EASING_OUT_BEZIER }}
-                          className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2"
-                        >
-                          <Pin className="w-3 h-3 text-indigo-500/80" aria-hidden />
-                          Закреплён
-                        </motion.p>,
+                const rowExit = chatListReducedMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.94, y: -12, filter: "blur(5px)" };
+                const rowMotionTransition = chatListReducedMotion
+                  ? { duration: DURATION_FAST_MS / 1000 }
+                  : { duration: DURATION_EMPHASIS_MS / 1000, ease: EASING_OUT_BEZIER };
+                return (
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    {showAiOver ? (
+                      <motion.p
+                        key="ai-over-label"
+                        layout
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: DURATION_NORMAL_S * 0.6, ease: EASING_OUT_BEZIER }}
+                        className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2"
+                      >
+                        <Pin className="w-3 h-3 text-indigo-500/80" aria-hidden />
+                        Закреплён
+                      </motion.p>
+                    ) : null}
+                    {showAiOver ? (
+                      <motion.div
+                        key={AI_CHAT_ID}
+                        layout
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={rowExit}
+                        transition={rowMotionTransition}
+                      >
                         <ChatRow
-                          key={AI_CHAT_ID}
                           chat={aiOverChat}
                           typingLabel={null}
                           voiceLabel={null}
                           onSelect={() => setLocation(`/chat/${AI_CHAT_ID}`)}
                           isAiChat
-                        />,
-                      ]
-                    : []),
-                  ...DATE_SECTION_ORDER.flatMap((key) => {
-                    const sectionChats = bySection.get(key) ?? [];
-                    if (sectionChats.length === 0) return [];
-                    return [
-                      <p key={key} className="text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2">
-                        {DATE_SECTION_LABELS[key]}
-                      </p>,
-                      ...sectionChats.map((chat) => (
-                        <ChatRow
-                          key={chat.id}
-                          chat={chat}
-                          typingLabel={typingByChatId[chat.id] ?? null}
-                          voiceLabel={voiceRecordingByChatId[chat.id] ?? null}
-                          onSelect={() => setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`)}
                         />
-                      )),
-                    ];
-                  }),
-                ];
+                      </motion.div>
+                    ) : null}
+                    {DATE_SECTION_ORDER.flatMap((sectionKey) => {
+                      const sectionChats = bySection.get(sectionKey) ?? [];
+                      if (sectionChats.length === 0) return [];
+                      return [
+                        <motion.p
+                          key={`sec-h-${sectionKey}`}
+                          layout
+                          className="text-[11px] font-medium text-muted-foreground px-1 py-1.5 sm:py-2"
+                        >
+                          {DATE_SECTION_LABELS[sectionKey]}
+                        </motion.p>,
+                        ...sectionChats.map((chat) => (
+                          <motion.div
+                            key={chat.id}
+                            layout
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={rowExit}
+                            transition={rowMotionTransition}
+                          >
+                            <ChatRow
+                              chat={chat}
+                              typingLabel={typingByChatId[chat.id] ?? null}
+                              voiceLabel={voiceRecordingByChatId[chat.id] ?? null}
+                              onSelect={() => setLocation(`/chat/${encodeURIComponent(chat.id)}`)}
+                              onLongPressMenu={() => setServiceMenuChat(chat)}
+                            />
+                          </motion.div>
+                        )),
+                      ];
+                    })}
+                  </AnimatePresence>
+                );
               })()
             )}
           </div>
         </PullToRefresh>
       </div>
+
+      <Drawer open={!!serviceMenuChat} onOpenChange={(o) => !o && setServiceMenuChat(null)}>
+        <DrawerContent className="max-h-[min(92dvh,880px)] rounded-t-[1.25rem] border-border/35 pb-[max(0.35rem,env(safe-area-inset-bottom))]">
+          <DrawerHeader className="space-y-2.5 p-5 pb-3 text-left sm:text-left">
+            <DrawerTitle className="pr-8 text-left text-[1.0625rem] font-semibold leading-snug tracking-tight">
+              {serviceMenuChat?.name ?? "Чат"}
+            </DrawerTitle>
+            <p className="text-left text-[13px] font-normal leading-relaxed text-muted-foreground">
+              Чтобы снова открыть меню, удерживайте строку чата в списке около секунды, не сдвигая палец.
+            </p>
+          </DrawerHeader>
+          <div className="space-y-4 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]">
+            {serviceMenuChat ? (
+              <>
+                <div className="space-y-2">
+                <TapScaleButton
+                  type="button"
+                  className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium leading-snug text-foreground shadow-sm shadow-black/[0.04] dark:shadow-black/25"
+                  subtle
+                  onClick={async () => {
+                    const c = serviceMenuChat;
+                    try {
+                      await patchChatMemberMe(c.id, { pinned: !c.pinnedAt });
+                      refreshChatQueries();
+                      setServiceMenuChat(null);
+                      toast({ title: c.pinnedAt ? "Чат откреплён" : "Чат закреплён" });
+                    } catch (e) {
+                      toast({
+                        title: "Не удалось",
+                        description: e instanceof Error ? e.message : "Ошибка",
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                >
+                  {serviceMenuChat.pinnedAt ? (
+                    <PinOff className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  ) : (
+                    <Pin className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  )}
+                  {serviceMenuChat.pinnedAt ? "Открепить" : "Закрепить"}
+                </TapScaleButton>
+                <TapScaleButton
+                  type="button"
+                  className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium leading-snug text-foreground shadow-sm shadow-black/[0.04] dark:shadow-black/25"
+                  subtle
+                  onClick={async () => {
+                    const c = serviceMenuChat;
+                    try {
+                      await patchChatMemberMe(c.id, { hidden: true });
+                      refreshChatQueries();
+                      setServiceMenuChat(null);
+                      toast({
+                        title: "Чат скрыт",
+                        description: "Потяните список вниз для обновления — скрытые чаты появятся вверху списка.",
+                      });
+                    } catch (e) {
+                      toast({
+                        title: "Не удалось",
+                        description: e instanceof Error ? e.message : "Ошибка",
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                >
+                  <EyeOff className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  Скрыть из списка
+                </TapScaleButton>
+                </div>
+
+                <div className="space-y-2.5 rounded-2xl border border-border/45 bg-muted/12 p-3.5">
+                  <div className="space-y-1.5">
+                    <p className="text-[13px] font-semibold leading-tight text-foreground">В папку</p>
+                    {!hasCustomListSections ? (
+                      <p className="text-[12px] leading-relaxed text-muted-foreground">
+                        Вкладки папок вверху списка появятся, когда хотя бы один чат будет не в «Общих». Выберите
+                        папку ниже.
+                      </p>
+                    ) : null}
+                  </div>
+                  <div
+                    className="-mx-0.5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-0.5 pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    role="radiogroup"
+                    aria-label="Папка для чата"
+                  >
+                  {(
+                    [
+                      { id: "general", label: "Общие" },
+                      { id: "friends", label: "Друзья" },
+                      { id: "work", label: "Работа" },
+                      { id: "promo", label: "Реклама" },
+                    ] as const
+                  ).map((s) => {
+                    const selected = (serviceMenuChat.listSection ?? "general") === s.id;
+                    return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={async () => {
+                        const c = serviceMenuChat;
+                        try {
+                          await patchChatMemberMe(c.id, { listSection: s.id });
+                          refreshChatQueries();
+                          setServiceMenuChat(null);
+                          toast({ title: "Сохранено", description: `Полка: ${s.label}` });
+                        } catch (e) {
+                          toast({
+                            title: "Не удалось",
+                            description: e instanceof Error ? e.message : "Ошибка",
+                            variant: "destructive",
+                          });
+                        }
+                      }}
+                      className={cn(
+                        "snap-start shrink-0 rounded-full border px-3.5 py-2.5 text-[13px] font-medium leading-none transition-colors min-h-[var(--uix-touch-min)] sm:min-h-0 inline-flex items-center justify-center",
+                        selected
+                          ? "border-primary/50 bg-primary/14 text-foreground ring-1 ring-primary/25"
+                          : "border-border/50 bg-background/40 text-foreground hover:bg-muted/35 active:bg-muted/45"
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                    );
+                  })}
+                  </div>
+                </div>
+
+                <div className="space-y-2 border-t border-border/40 pt-4">
+                  <TapScaleButton
+                    type="button"
+                    className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium leading-snug text-foreground shadow-sm shadow-black/[0.04] dark:shadow-black/25"
+                    subtle
+                    onClick={() => {
+                      openLeaveChatConfirm(serviceMenuChat);
+                    }}
+                  >
+                    <Trash2 className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                    {serviceMenuChat.type === "group" ? "Покинуть группу" : "Удалить у меня"}
+                  </TapScaleButton>
+                  <TapScaleButton
+                    type="button"
+                    className={cn(
+                      "flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-[15px] font-semibold leading-snug shadow-sm transition-colors",
+                      "border-destructive/45 bg-destructive/20 text-destructive-foreground hover:bg-destructive/28 active:bg-destructive/34",
+                      "disabled:pointer-events-none disabled:opacity-45"
+                    )}
+                    subtle
+                    disabled={
+                      serviceMenuChat.type === "group" && serviceMenuChat.myRole !== "admin"
+                    }
+                    onClick={() => openDeleteForAllConfirm(serviceMenuChat)}
+                  >
+                    <Trash2 className="h-5 w-5 shrink-0 opacity-95" aria-hidden />
+                    {serviceMenuChat.type === "group" ? "Удалить группу у всех" : "Удалить у всех"}
+                  </TapScaleButton>
+                  {serviceMenuChat.type === "group" && serviceMenuChat.myRole !== "admin" ? (
+                    <p className="text-[12px] leading-relaxed text-muted-foreground px-0.5">
+                      Удалить для всех может только админ.
+                    </p>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      <AlertDialog
+        open={!!confirmLeaveChat}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteInProgress(null);
+            setConfirmLeaveChat(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="max-w-[calc(100vw-1.75rem)] gap-0 border-0 bg-transparent p-3 shadow-none duration-300 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98] data-[state=closed]:zoom-out-[0.99] sm:max-w-[22rem] sm:rounded-[1.5rem] sm:p-4">
+          <div className="overflow-hidden rounded-[1.35rem] border border-border/30 bg-gradient-to-b from-card via-card to-secondary/[0.12] shadow-[0_22px_50px_-18px_rgba(0,0,0,0.45)] backdrop-blur-xl dark:shadow-[0_22px_50px_-18px_rgba(0,0,0,0.65)]">
+            <AlertDialogHeader className="space-y-3 px-5 pb-2 pt-6 text-center sm:text-left">
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary sm:mx-0">
+                <Sparkles className="h-5 w-5 opacity-90" aria-hidden />
+              </div>
+              <AlertDialogTitle className="text-[1.05rem] font-semibold leading-snug tracking-tight sm:text-lg">
+                {confirmLeaveChat?.type === "group" ? "Покинуть группу?" : "Убрать чат из списка?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-[13px] leading-relaxed text-muted-foreground">
+                {confirmLeaveChat?.type === "group"
+                  ? "Вы выйдите из группы. Историю можно будет восстановить, если вас снова пригласят."
+                  : "Диалог скроется только у вас. Собеседник по-прежнему увидит переписку."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="flex-col gap-2 border-t border-border/25 bg-muted/5 px-4 py-4 sm:flex-col sm:space-x-0">
+              <AlertDialogCancel className="mt-0 h-11 w-full rounded-xl border-border/50 bg-background/80 sm:mt-0">
+                Отмена
+              </AlertDialogCancel>
+              <Button
+                type="button"
+                className="h-11 w-full rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/15"
+                disabled={deleteInProgress !== null}
+                onClick={() => void runDeleteLeave()}
+              >
+                {deleteInProgress === "leave" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : confirmLeaveChat?.type === "group" ? (
+                  "Покинуть"
+                ) : (
+                  "Убрать"
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!confirmDeleteAllChat}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteInProgress(null);
+            setConfirmDeleteAllChat(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="max-w-[calc(100vw-1.75rem)] gap-0 border-0 bg-transparent p-3 shadow-none duration-300 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98] data-[state=closed]:zoom-out-[0.99] sm:max-w-[22rem] sm:rounded-[1.5rem] sm:p-4">
+          <div className="overflow-hidden rounded-[1.35rem] border border-destructive/20 bg-gradient-to-b from-card via-card to-destructive/[0.06] shadow-[0_22px_50px_-18px_rgba(0,0,0,0.45)] backdrop-blur-xl dark:shadow-[0_22px_50px_-18px_rgba(0,0,0,0.65)]">
+            <AlertDialogHeader className="space-y-3 px-5 pb-2 pt-6 text-center sm:text-left">
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-destructive/10 text-destructive sm:mx-0">
+                <Trash2 className="h-5 w-5 opacity-90" aria-hidden />
+              </div>
+              <AlertDialogTitle className="text-[1.05rem] font-semibold leading-snug tracking-tight sm:text-lg">
+                Удалить для всех?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-[13px] leading-relaxed text-muted-foreground">
+                Переписка исчезнет у каждого участника. Вернуть будет нельзя.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="flex-col gap-2 border-t border-border/25 bg-muted/5 px-4 py-4 sm:flex-col sm:space-x-0">
+              <AlertDialogCancel className="mt-0 h-11 w-full rounded-xl border-border/50 bg-background/80 sm:mt-0">
+                Отмена
+              </AlertDialogCancel>
+              <Button
+                type="button"
+                variant="destructive"
+                className="h-11 w-full rounded-xl shadow-md shadow-destructive/20"
+                disabled={deleteInProgress !== null}
+                onClick={() => void runDeleteForAll()}
+              >
+                {deleteInProgress === "forAll" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  "Удалить навсегда"
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Модальное окно создания группового чата */}
       <Dialog
@@ -1047,7 +1720,7 @@ export default function Chats() {
                   setShowCreateGroupModal(false);
                   setGroupName("");
                   setSelectedMemberIds(new Set());
-                  setLocation(`/chat/${chat.id}`);
+                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
                 } catch (err) {
                   toast({
                     title: "Не удалось создать группу",

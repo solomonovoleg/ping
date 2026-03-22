@@ -15,7 +15,8 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: "500M",
+      // Перекодирование видео (пост/аватар): в RAM весь файл + временные буферы — 500M давало рестарты PM2.
+      max_memory_restart: "1200M",
       env: {
         NODE_ENV: "production",
         PORT: port,

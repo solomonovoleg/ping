@@ -2,8 +2,15 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { MessageCircle, LayoutDashboard, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { onChatListUpdate, onIncomingChatMessageHint } from "@/features/chat/realtime-events";
+import { onChatListUpdate, onIncomingChatMessageHint, onGroupCallInvite } from "@/features/chat/realtime-events";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGroupCallContext } from "@/contexts/GroupCallContext";
+import { isGroupCallModuleEnabled } from "@/features/group-call/flags";
+import {
+  startGroupCallInviteAlert,
+  showNewChatMessageBrowserNotificationIfHidden,
+} from "@/lib/incoming-call-alert";
+import { markGroupCallInviteRingFromWebSocket } from "@/lib/group-call-invite-dedupe";
 import { playIncomingChatMessageSound } from "@/lib/send-sound";
 import { cn } from "@/lib/utils";
 import { usePrefersReducedMotion } from "@/lib/motion";
@@ -13,6 +20,7 @@ import { PlatformAnnouncementBar } from "@/features/admin-ops/PlatformAnnounceme
 import { usePreferPhoneChrome } from "@/hooks/use-prefer-phone-chrome";
 
 import feedIcon from "@/assets/images/feed-icon.png";
+import { NavPulseCenterLogoButton } from "@pingok-micro/NavPulseCenterLogoButton";
 
 /** Логотип в центре полосы — файл `client/public/F-PING.png` (замените PNG при необходимости) */
 const PULSE_NAV_LOGO_SRC = "/F-PING.png?v=6";
@@ -21,39 +29,6 @@ const PULSE_NAV_LOGO_SRC = "/F-PING.png?v=6";
 const SWIPEABLE_PATHS = ["/", "/posts", "/board"] as const;
 const SWIPE_THRESHOLD_PX = 56;
 const SWIPE_ANIMATION_MS = 320;
-
-/** Центр навбара: только логотип, крупно + мягкая анимация (`animate-ping-logo` в index.css). */
-function NavPulseCenterButton({ isActive, onClick }: { isActive: boolean; onClick: () => void }) {
-  return (
-    <TapScaleButton
-      type="button"
-      onClick={onClick}
-      haptic
-      subtle
-      data-testid="mobile-nav-pulse"
-      aria-label="Моя страница"
-      title="Моя страница"
-      className={cn(
-        "relative flex min-h-[var(--uix-touch-min)] min-w-0 max-w-[100px] flex-1 items-end justify-center pb-1 pt-1",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-2xl"
-      )}
-    >
-      <div className="relative flex h-[52px] w-[52px] shrink-0 items-center justify-center">
-        <div
-          className={cn(
-            "absolute inset-0 scale-0 rounded-full bg-primary/12 transition-transform duration-150",
-            isActive && "scale-100"
-          )}
-        />
-        <img
-          src={PULSE_NAV_LOGO_SRC}
-          alt=""
-          className="relative z-10 h-[38px] w-[38px] object-contain select-none pointer-events-none animate-ping-logo"
-        />
-      </div>
-    </TapScaleButton>
-  );
-}
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -80,9 +55,14 @@ const navItemsRight: AppNavItem[] = [
 export default function AppLayout({ children }: AppLayoutProps) {
   const [location, setLocation] = useLocation();
   const { user } = useAuth();
+  const groupCallCtx = useGroupCallContext();
   /** Свежий id для глобальных событий (без опоры на замыкание `user` внутри long-lived listener). */
   const selfUserIdRef = useRef<string | undefined>(undefined);
   selfUserIdRef.current = user?.id ?? undefined;
+  const activeGroupRoomIdRef = useRef<string | null>(null);
+  activeGroupRoomIdRef.current = groupCallCtx.active?.roomId ?? null;
+  const stopGroupInviteAlertRef = useRef<(() => void) | null>(null);
+  const pendingGroupInviteRoomIdRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
   const reducedMotion = usePrefersReducedMotion();
   const preferPhoneChrome = usePreferPhoneChrome();
@@ -166,9 +146,37 @@ export default function AppLayout({ children }: AppLayoutProps) {
         openChatId === chatId && typeof document !== "undefined" && document.visibilityState === "visible";
       if (!viewingThisChat) {
         playIncomingChatMessageSound();
+        showNewChatMessageBrowserNotificationIfHidden();
       }
     });
   }, [location]);
+
+  // Групповой созвон: WS-приглашение — тот же рингтон и уведомление, что у личного звонка
+  useEffect(() => {
+    if (!isGroupCallModuleEnabled()) return () => {};
+    return onGroupCallInvite((detail) => {
+      const myId = selfUserIdRef.current;
+      if (!myId || detail.hostUserId === myId) return;
+      if (activeGroupRoomIdRef.current === detail.roomId) return;
+      stopGroupInviteAlertRef.current?.();
+      pendingGroupInviteRoomIdRef.current = detail.roomId;
+      markGroupCallInviteRingFromWebSocket(detail.roomId);
+      const label = detail.chatTitle?.trim() || "Групповой чат";
+      stopGroupInviteAlertRef.current = startGroupCallInviteAlert({
+        chatLabel: label,
+        mediaType: detail.mediaType,
+        onNotificationClick: () => setLocation(`/chat/${encodeURIComponent(detail.chatId)}`),
+      });
+    });
+  }, [setLocation]);
+
+  useEffect(() => {
+    const rid = groupCallCtx.active?.roomId ?? null;
+    if (!rid || pendingGroupInviteRoomIdRef.current !== rid) return;
+    stopGroupInviteAlertRef.current?.();
+    stopGroupInviteAlertRef.current = null;
+    pendingGroupInviteRoomIdRef.current = null;
+  }, [groupCallCtx.active?.roomId]);
 
   const renderNavButton = (item: AppNavItem) => {
     const isActive =
@@ -285,9 +293,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
             )}
           >
             {navItemsLeft.map(renderNavButton)}
-            <NavPulseCenterButton
+            <NavPulseCenterLogoButton
               isActive={basePath.replace(/\/$/, "") === "/profile/me"}
-              onClick={() => setLocation("/profile/me")}
+              logoSrc={PULSE_NAV_LOGO_SRC}
+              onShortPress={() => setLocation("/profile/me")}
             />
             {navItemsRight.map(renderNavButton)}
           </div>

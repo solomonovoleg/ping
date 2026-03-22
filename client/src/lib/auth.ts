@@ -35,13 +35,20 @@ export type AuthUser = {
   city?: string | null;
 };
 
-/** Как на сервере: en/ru → male|female|other; иначе null (форма профиля не теряет выбор). */
-function normalizeGenderFromApi(raw: unknown): string | null {
+/** Как на сервере: en/ru и короткие коды → male|female|other; иначе null. */
+export function normalizeGenderFromApi(raw: unknown): string | null {
+  if (raw === true || raw === false) return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const n = Math.trunc(raw);
+    if (n === 1) return "male";
+    if (n === 2) return "female";
+    if (n === 3) return "other";
+  }
   if (typeof raw !== "string") return null;
   const v = raw.trim().toLowerCase();
-  if (v === "male" || v === "мужской") return "male";
-  if (v === "female" || v === "женский") return "female";
-  if (v === "other" || v === "другое") return "other";
+  if (v === "male" || v === "мужской" || v === "m" || v === "man" || v === "м") return "male";
+  if (v === "female" || v === "женский" || v === "f" || v === "woman" || v === "w" || v === "ж") return "female";
+  if (v === "other" || v === "другое" || v === "o" || v === "x") return "other";
   return null;
 }
 

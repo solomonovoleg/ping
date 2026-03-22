@@ -18,7 +18,7 @@ export const profilePinFolders = pgTable("profile_pin_folders", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
-/** Элемент папки: пост или сториз автора */
+/** Элемент папки: пост, сториз или загруженное медиа (kind = media) */
 export const profilePinItems = pgTable("profile_pin_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   folderId: varchar("folder_id")
@@ -30,6 +30,9 @@ export const profilePinItems = pgTable("profile_pin_items", {
   kind: varchar("kind", { length: 10 }).notNull(),
   postId: varchar("post_id").references(() => posts.id, { onDelete: "cascade" }),
   storyId: varchar("story_id").references(() => stories.id, { onDelete: "cascade" }),
+  /** Прямая загрузка фото/видео в папку (kind = media) */
+  mediaUrl: text("media_url"),
+  mediaIsVideo: boolean("media_is_video").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

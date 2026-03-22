@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderPlus, Loader2, Pencil, Pin, Trash2 } from "lucide-react";
 import { usePulseProfileTheme } from "@/features/profile/pulse-profile";
 import { PulseProfileHighlightTile } from "@/features/profile/pulse-profile";
+import { triggerLightHaptic } from "@/lib/capacitor-native";
 import { resolveUrl } from "@/lib/api-base";
 import {
   addProfilePinItem,
@@ -15,13 +16,18 @@ import {
   type ProfilePinFolderSummary,
   type ProfilePinItemRow,
 } from "@/lib/profile-pins";
-import { uploadPostMedia } from "@/lib/posts";
+import { uploadPostMedia, type PostVideoTrimUpload } from "@/lib/posts";
+import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { PostVideoTrimmerModal } from "@/features/posts/video-trim/PostVideoTrimmerModal";
 import { isVideoMediaUrl } from "../../utils/post-media";
 import { useToast } from "@/hooks/use-toast";
+import { ErrorWithRetry } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { PinCoverThumb } from "./PinCoverThumb";
+import { PinFolderDescriptionBubble, type PinFolderDescriptionBubblePayload } from "./PinFolderDescriptionBubble";
+import { ProfilePinFolderViewer } from "./ProfilePinFolderViewer";
 import type { FeedPost } from "@/lib/posts";
 
 const QK = (profileRouteId: string) => ["profile-pins", profileRouteId] as const;
@@ -52,8 +58,12 @@ export function ProfilePinsSection({
   const { toast } = useToast();
   const qc = useQueryClient();
   const longPressTimer = useRef<number | null>(null);
+  const longPressFiredRef = useRef(false);
+  const folderMediaInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [folderOpenId, setFolderOpenId] = useState<string | null>(null);
+  const [viewerFolderId, setViewerFolderId] = useState<string | null>(null);
+  const [manageFolderId, setManageFolderId] = useState<string | null>(null);
+  const [descBubble, setDescBubble] = useState<PinFolderDescriptionBubblePayload>(null);
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [editOpen, setEditOpen] = useState(false);
@@ -61,6 +71,11 @@ export function ProfilePinsSection({
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [coverBusy, setCoverBusy] = useState(false);
+  const [folderMediaVideoFile, setFolderMediaVideoFile] = useState<File | null>(null);
+  const [folderMediaTrimOpen, setFolderMediaTrimOpen] = useState(false);
+  const [folderMediaBusy, setFolderMediaBusy] = useState(false);
+  const [coverVideoFile, setCoverVideoFile] = useState<File | null>(null);
+  const [coverTrimOpen, setCoverTrimOpen] = useState(false);
 
   const { data: folders = [], isLoading, isError, refetch } = useQuery({
     queryKey: QK(profileRouteId),
@@ -69,23 +84,34 @@ export function ProfilePinsSection({
     staleTime: 30_000,
   });
 
-  const { data: folderDetail, isFetching: detailLoading } = useQuery({
-    queryKey: ["profile-pins", "folder", folderOpenId],
-    queryFn: () => fetchProfilePinFolderDetail(folderOpenId!),
-    enabled: !!folderOpenId,
+  const detailId = manageFolderId ?? viewerFolderId;
+  const {
+    data: folderDetail,
+    isFetching: detailLoading,
+    isError: detailError,
+    refetch: refetchFolderDetail,
+  } = useQuery({
+    queryKey: ["profile-pins", "folder", detailId],
+    queryFn: () => fetchProfilePinFolderDetail(detailId!),
+    enabled: !!detailId,
   });
 
   useEffect(() => {
     if (pinAdd) setAddSheetOpen(true);
   }, [pinAdd]);
 
+  useEffect(() => {
+    if (addSheetOpen && profileRouteId) void refetch();
+  }, [addSheetOpen, profileRouteId, refetch]);
+
   const invalidate = useCallback(() => {
     void qc.invalidateQueries({ queryKey: QK(profileRouteId) });
   }, [qc, profileRouteId]);
 
   const addItemMut = useMutation({
-    mutationFn: async ({ folderId, kind, refId }: { folderId: string; kind: "post" | "story"; refId: string }) => {
-      await addProfilePinItem(folderId, kind, refId);
+    mutationFn: async (args: { folderId: string; kind: "post"; refId: string } | { folderId: string; kind: "story"; refId: string }) => {
+      const { folderId, kind, refId } = args;
+      await addProfilePinItem(folderId, { kind, refId });
     },
     onSuccess: () => {
       invalidate();
@@ -99,8 +125,8 @@ export function ProfilePinsSection({
   const createFolderMut = useMutation({
     mutationFn: async ({ name, attach }: { name: string; attach: PinAdd }) => {
       const row = (await createProfilePinFolder({ name })) as { id: string };
-      if (attach?.kind === "post") await addProfilePinItem(row.id, "post", attach.post.id);
-      else if (attach?.kind === "story") await addProfilePinItem(row.id, "story", attach.storyId);
+      if (attach?.kind === "post") await addProfilePinItem(row.id, { kind: "post", refId: attach.post.id });
+      else if (attach?.kind === "story") await addProfilePinItem(row.id, { kind: "story", refId: attach.storyId });
       return { attached: !!attach };
     },
     onSuccess: (data) => {
@@ -119,7 +145,8 @@ export function ProfilePinsSection({
     mutationFn: (id: string) => deleteProfilePinFolder(id),
     onSuccess: () => {
       invalidate();
-      setFolderOpenId(null);
+      setViewerFolderId(null);
+      setManageFolderId(null);
       toast({ title: "Папка удалена" });
     },
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
@@ -128,7 +155,8 @@ export function ProfilePinsSection({
   const deleteItemMut = useMutation({
     mutationFn: (id: string) => deleteProfilePinItem(id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", folderOpenId] });
+      const fid = folderDetail?.folder.id ?? manageFolderId;
+      if (fid) void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
       invalidate();
       toast({ title: "Удалено из папки" });
     },
@@ -141,7 +169,8 @@ export function ProfilePinsSection({
     },
     onSuccess: () => {
       invalidate();
-      void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", folderOpenId] });
+      const fid = folderDetail?.folder.id;
+      if (fid) void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
       setEditOpen(false);
       toast({ title: "Сохранено" });
     },
@@ -155,18 +184,6 @@ export function ProfilePinsSection({
     }
   };
 
-  const onFolderPointerDown = (folder: ProfilePinFolderSummary) => {
-    clearLongPress();
-    longPressTimer.current = window.setTimeout(() => {
-      const d = folder.description?.trim();
-      if (d) {
-        toast({ title: folder.name, description: d.slice(0, 500) });
-      } else {
-        toast({ title: folder.name, description: "Описание не задано" });
-      }
-    }, 520);
-  };
-
   const openEdit = () => {
     if (!folderDetail?.folder) return;
     setEditFolderId(folderDetail.folder.id);
@@ -177,24 +194,146 @@ export function ProfilePinsSection({
 
   useEffect(() => () => clearLongPress(), []);
 
-  const handleCoverFile = async (file: File | null) => {
-    if (!file || !editFolderId) return;
-    setCoverBusy(true);
-    try {
-      const url = await uploadPostMedia(file);
-      await updateProfilePinFolder(editFolderId, {
-        coverUrl: url,
-        coverIsVideo: isVideoMediaUrl(url),
+  const uploadFolderCover = useCallback(
+    async (file: File, trim?: PostVideoTrimUpload) => {
+      if (!editFolderId) return;
+      setCoverBusy(true);
+      try {
+        const url = await uploadPostMedia(file, trim);
+        await updateProfilePinFolder(editFolderId, {
+          coverUrl: url,
+          coverIsVideo: isVideoMediaUrl(url),
+        });
+        invalidate();
+        const fid = folderDetail?.folder.id ?? detailId;
+        if (fid) void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
+        toast({ title: "Обложка обновлена" });
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось загрузить", variant: "destructive" });
+      } finally {
+        setCoverBusy(false);
+      }
+    },
+    [editFolderId, detailId, folderDetail?.folder.id, invalidate, qc, toast],
+  );
+
+  const handleCoverFilePick = useCallback(
+    async (file: File | null) => {
+      if (!file || !editFolderId) return;
+      const looksVideo =
+        (file.type && file.type.startsWith("video/")) || /\.(mp4|webm|mov|m4v|3gp)$/i.test(file.name || "");
+      if (looksVideo) {
+        setCoverVideoFile(file);
+        setCoverTrimOpen(true);
+        return;
+      }
+      await uploadFolderCover(file);
+    },
+    [editFolderId, uploadFolderCover],
+  );
+
+  const onCoverTrimConfirm = useCallback(
+    async (trim: PostVideoTrimUpload) => {
+      const f = coverVideoFile;
+      if (!f) return;
+      setCoverTrimOpen(false);
+      setCoverVideoFile(null);
+      await uploadFolderCover(f, trim);
+    },
+    [coverVideoFile, uploadFolderCover],
+  );
+
+  const looksLikeVideoFile = useCallback((file: File) => {
+    if (file.type && file.type.startsWith("video/")) return true;
+    return /\.(mp4|webm|mov|m4v|3gp)$/i.test(file.name || "");
+  }, []);
+
+  const onFolderMediaTrimConfirm = useCallback(
+    async (trim: PostVideoTrimUpload) => {
+      const file = folderMediaVideoFile;
+      const fid = manageFolderId;
+      if (!file || !fid) return;
+      setFolderMediaBusy(true);
+      try {
+        const url = await uploadPostMedia(file, trim);
+        await addProfilePinItem(fid, { kind: "media", mediaUrl: url, mediaIsVideo: true });
+        invalidate();
+        void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
+        toast({ title: "Файл добавлен в папку" });
+        setFolderMediaTrimOpen(false);
+        setFolderMediaVideoFile(null);
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось добавить", variant: "destructive" });
+      } finally {
+        setFolderMediaBusy(false);
+      }
+    },
+    [folderMediaVideoFile, manageFolderId, invalidate, qc, toast],
+  );
+
+  const handleFolderMediaFile = useCallback(
+    async (file: File | null) => {
+      const fid = manageFolderId;
+      if (!file || !fid) return;
+      if (looksLikeVideoFile(file)) {
+        setFolderMediaVideoFile(file);
+        setFolderMediaTrimOpen(true);
+        return;
+      }
+      setFolderMediaBusy(true);
+      try {
+        const url = await uploadPostMedia(file);
+        await addProfilePinItem(fid, { kind: "media", mediaUrl: url, mediaIsVideo: false });
+        invalidate();
+        void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
+        toast({ title: "Файл добавлен в папку" });
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось добавить", variant: "destructive" });
+      } finally {
+        setFolderMediaBusy(false);
+      }
+    },
+    [manageFolderId, invalidate, looksLikeVideoFile, qc, toast],
+  );
+
+  const dismissDescBubble = useCallback(() => setDescBubble(null), []);
+
+  const onFolderPointerDown = (folder: ProfilePinFolderSummary, e: React.PointerEvent) => {
+    longPressFiredRef.current = false;
+    clearLongPress();
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    longPressTimer.current = window.setTimeout(() => {
+      longPressFiredRef.current = true;
+      triggerLightHaptic();
+      const d = folder.description?.trim();
+      setDescBubble({
+        title: folder.name,
+        body: d && d.length > 0 ? d.slice(0, 500) : "Описание не задано",
+        clientX,
+        clientY,
       });
-      invalidate();
-      void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", folderOpenId] });
-      toast({ title: "Обложка обновлена" });
-    } catch (e) {
-      toast({ title: e instanceof Error ? e.message : "Не удалось загрузить", variant: "destructive" });
-    } finally {
-      setCoverBusy(false);
-    }
+    }, 520);
   };
+
+  const onFolderTileClick = (folder: ProfilePinFolderSummary) => {
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return;
+    }
+    setDescBubble(null);
+    setViewerFolderId(folder.id);
+  };
+
+  const viewerTitle =
+    (viewerFolderId && folders.find((f) => f.id === viewerFolderId)?.name) ||
+    (folderDetail?.folder.id === viewerFolderId ? folderDetail.folder.name : null) ||
+    "Папка";
+  const viewerItems =
+    viewerFolderId && folderDetail?.folder.id === viewerFolderId ? folderDetail.items : [];
+  const viewerLoading =
+    !!viewerFolderId && !detailError && (!folderDetail || folderDetail.folder.id !== viewerFolderId || detailLoading);
+  const viewerLoadError = !!viewerFolderId && detailError;
 
   const renderTile = (folder: ProfilePinFolderSummary) => {
     const preview = folder.displayPreviewUrl;
@@ -204,8 +343,8 @@ export function ProfilePinsSection({
         key={folder.id}
         type="button"
         className="flex min-w-[4rem] shrink-0 flex-col items-center gap-1.5"
-        onClick={() => setFolderOpenId(folder.id)}
-        onPointerDown={() => onFolderPointerDown(folder)}
+        onClick={() => onFolderTileClick(folder)}
+        onPointerDown={(e) => onFolderPointerDown(folder, e)}
         onPointerUp={clearLongPress}
         onPointerLeave={clearLongPress}
         onPointerCancel={clearLongPress}
@@ -296,7 +435,12 @@ export function ProfilePinsSection({
               <p className="text-sm text-muted-foreground">
                 Выберите папку или создайте новую — контент добавится в конец по времени.
               </p>
-            ) : null}
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Чтобы закрепить пост или сториз, откройте это окно из меню «⋯» у своей публикации или сториз — тогда
+                здесь появятся ваши папки.
+              </p>
+            )}
             <div className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
               {folders.map((f) => (
                 <Button
@@ -304,7 +448,7 @@ export function ProfilePinsSection({
                   type="button"
                   variant="outline"
                   className="h-auto min-h-[var(--uix-touch-min)] justify-start py-2 text-left"
-                  disabled={addItemMut.isPending}
+                  disabled={addItemMut.isPending || !pinAdd}
                   onClick={() => {
                     if (!pinAdd) return;
                     if (pinAdd.kind === "post") {
@@ -339,17 +483,51 @@ export function ProfilePinsSection({
         </SheetContent>
       </Sheet>
 
-      {/* Детали папки */}
-      <Sheet open={!!folderOpenId} onOpenChange={(o) => !o && setFolderOpenId(null)}>
+      <PinFolderDescriptionBubble payload={descBubble} onDismiss={dismissDescBubble} />
+
+      {viewerFolderId ? (
+        <ProfilePinFolderViewer
+          key={viewerFolderId}
+          open
+          onClose={() => setViewerFolderId(null)}
+          folderId={viewerFolderId}
+          folderTitle={viewerTitle}
+          items={viewerItems}
+          loading={viewerLoading}
+          loadError={viewerLoadError}
+          onRetryLoad={() => void refetchFolderDetail()}
+          isMe={isMe}
+          onOpenManage={() => {
+            const id = viewerFolderId;
+            if (!id) return;
+            setDescBubble(null);
+            setManageFolderId(id);
+            setViewerFolderId(null);
+          }}
+          onOpenPinnedPost={onOpenPinnedPost}
+          onOpenPinnedStory={onOpenPinnedStory}
+        />
+      ) : null}
+
+      {/* Управление папкой (список, загрузка, удаление) */}
+      <Sheet open={!!manageFolderId} onOpenChange={(o) => !o && setManageFolderId(null)}>
         <SheetContent side="bottom" className="max-h-[90vh] rounded-t-3xl">
           <SheetHeader>
             <SheetTitle className="pr-8">{folderDetail?.folder.name ?? "Папка"}</SheetTitle>
           </SheetHeader>
-          {detailLoading ? (
+          {detailLoading && manageFolderId ? (
             <div className="flex justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin opacity-50" />
             </div>
-          ) : folderDetail ? (
+          ) : detailError && manageFolderId ? (
+            <div className="py-6">
+              <ErrorWithRetry
+                onRetry={() => void refetchFolderDetail()}
+                title="Не удалось загрузить папку"
+                description="Проверьте сеть и попробуйте снова."
+              />
+            </div>
+          ) : folderDetail && folderDetail.folder.id === manageFolderId ? (
             <div className="mt-4 flex flex-col gap-3">
               {isMe && folderDetail.folder.ownerUserId ? (
                 <div className="flex flex-wrap gap-2">
@@ -357,6 +535,26 @@ export function ProfilePinsSection({
                     <Pencil className="mr-1 h-3.5 w-3.5" />
                     Редактировать
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={folderMediaBusy}
+                    onClick={() => folderMediaInputRef.current?.click()}
+                  >
+                    Фото или видео с устройства
+                  </Button>
+                  <input
+                    ref={folderMediaInputRef}
+                    type="file"
+                    accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v"
+                    className="sr-only"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      e.target.value = "";
+                      void handleFolderMediaFile(f);
+                    }}
+                  />
                   <Button
                     type="button"
                     size="sm"
@@ -384,7 +582,10 @@ export function ProfilePinsSection({
                       className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-black/30"
                       onClick={() => {
                         if (it.kind === "post") onOpenPinnedPost(it.refId);
-                        else onOpenPinnedStory(it.refId);
+                        else if (it.kind === "story") onOpenPinnedStory(it.refId);
+                        else if (it.previewUrl) {
+                          window.open(resolveUrl(it.previewUrl), "_blank", "noopener,noreferrer");
+                        }
                       }}
                     >
                       {it.previewUrl ? (
@@ -402,10 +603,16 @@ export function ProfilePinsSection({
                       ) : null}
                     </button>
                     <div className="min-w-0 flex-1 text-left">
-                      <div className="text-sm font-medium">{it.kind === "post" ? "Пост" : "Сториз"}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        👁 {it.viewsCount} · ❤️ {it.likesCount}
+                      <div className="text-sm font-medium">
+                        {it.kind === "post" ? "Пост" : it.kind === "story" ? "Сториз" : "Файл"}
                       </div>
+                      {it.kind === "media" ? (
+                        <div className="text-[11px] text-muted-foreground">Загружено с устройства</div>
+                      ) : (
+                        <div className="text-[11px] text-muted-foreground">
+                          👁 {it.viewsCount} · ❤️ {it.likesCount}
+                        </div>
+                      )}
                     </div>
                     {isMe ? (
                       <div className="flex shrink-0 flex-col gap-1">
@@ -460,7 +667,9 @@ export function ProfilePinsSection({
           <div className="mt-4 flex flex-col gap-3">
             <label className="text-xs text-muted-foreground">Название</label>
             <Input value={editName} onChange={(e) => setEditName(e.target.value.slice(0, 80))} maxLength={80} />
-            <label className="text-xs text-muted-foreground">Описание (до 500 символов, удерживайте папку на профиле)</label>
+            <label className="text-xs text-muted-foreground">
+              Описание (до 500 символов; на профиле удерживайте папку — всплывёт подсказка)
+            </label>
             <textarea
               className="min-h-[88px] rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={editDesc}
@@ -471,13 +680,13 @@ export function ProfilePinsSection({
               <p className="mb-2 text-xs text-muted-foreground">Обложка (фото или видео с устройства)</p>
               <input
                 type="file"
-                accept="image/*,video/mp4,video/webm,video/quicktime"
+                accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v"
                 className="text-sm"
                 disabled={coverBusy}
                 onChange={(e) => {
                   const f = e.target.files?.[0] ?? null;
                   e.target.value = "";
-                  void handleCoverFile(f);
+                  void handleCoverFilePick(f);
                 }}
               />
               {coverBusy ? <Loader2 className="mt-2 h-4 w-4 animate-spin" /> : null}
@@ -505,6 +714,31 @@ export function ProfilePinsSection({
           </div>
         </SheetContent>
       </Sheet>
+
+      <PostVideoTrimmerModal
+        open={folderMediaTrimOpen}
+        file={folderMediaVideoFile}
+        maxSegmentSeconds={POST_VIDEO_MAX_SECONDS}
+        title="Фрагмент для папки"
+        description={`До ${POST_VIDEO_MAX_SECONDS} сек. Видео будет перекодировано как для поста.`}
+        onOpenChange={(o) => {
+          setFolderMediaTrimOpen(o);
+          if (!o) setFolderMediaVideoFile(null);
+        }}
+        onConfirm={(trim) => void onFolderMediaTrimConfirm(trim)}
+      />
+      <PostVideoTrimmerModal
+        open={coverTrimOpen}
+        file={coverVideoFile}
+        maxSegmentSeconds={POST_VIDEO_MAX_SECONDS}
+        title="Обложка папки"
+        description={`Выберите фрагмент до ${POST_VIDEO_MAX_SECONDS} сек.`}
+        onOpenChange={(o) => {
+          setCoverTrimOpen(o);
+          if (!o) setCoverVideoFile(null);
+        }}
+        onConfirm={(trim) => void onCoverTrimConfirm(trim)}
+      />
     </div>
   );
 }

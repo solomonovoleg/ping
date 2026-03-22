@@ -63,7 +63,7 @@ export function setTranslateLang(lang: TranslateLangCode): void {
 function syncPrefsToServer(chatId: string): void {
   const enabled = getTranslateEnabled(chatId);
   const targetLang = getTranslateLang();
-  apiFetch(`${API}/chats/${chatId}/translate-prefs`, {
+  apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/translate-prefs`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled, targetLang }),

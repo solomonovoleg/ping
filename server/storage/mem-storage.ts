@@ -25,11 +25,24 @@ const foldersByChat = new Map<string, ChatFolder[]>();
 /** In-memory follows: followerId -> Set of followingId */
 const followsMap = new Map<string, Set<string>>();
 
-/** In-memory blocks: blockerId -> Set of blockedId */
-const blocksMap = new Map<string, Set<string>>();
+type MemBlockFlags = { restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean };
+
+function memBlockFull(f: MemBlockFlags): boolean {
+  return f.restrictProfile === true && f.restrictChat === true && f.restrictSocial === true;
+}
+
+/** In-memory blocks: blockerId -> blockedId -> flags */
+const blocksMap = new Map<string, Map<string, MemBlockFlags>>();
 
 /** «Удалено для себя»: key = `${userId}:${chatId}` -> Set<messageId> */
 const messageHiddenMap = new Map<string, Set<string>>();
+
+/** key = `${userId}\t${chatId}` */
+const chatMemberPrefsMem = new Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>();
+
+function chatMemberPrefsKey(userId: string, chatId: string): string {
+  return `${userId}\t${chatId}`;
+}
 
 export class MemStorage implements IStorage {
   private users = createUsersStore();
@@ -184,32 +197,52 @@ export class MemStorage implements IStorage {
     return out;
   }
 
-  async addBlock(blockerId: string, blockedId: string): Promise<void> {
+  async addBlock(
+    blockerId: string,
+    blockedId: string,
+    flags?: Partial<MemBlockFlags>,
+  ): Promise<void> {
     if (blockerId === blockedId) return;
-    let set = blocksMap.get(blockerId);
-    if (!set) {
-      set = new Set();
-      blocksMap.set(blockerId, set);
+    const next: MemBlockFlags = {
+      restrictProfile: flags?.restrictProfile !== false,
+      restrictChat: flags?.restrictChat !== false,
+      restrictSocial: flags?.restrictSocial !== false,
+    };
+    let inner = blocksMap.get(blockerId);
+    if (!inner) {
+      inner = new Map();
+      blocksMap.set(blockerId, inner);
     }
-    set.add(blockedId);
+    inner.set(blockedId, next);
   }
 
   async removeBlock(blockerId: string, blockedId: string): Promise<void> {
-    const set = blocksMap.get(blockerId);
-    if (set) set.delete(blockedId);
+    const inner = blocksMap.get(blockerId);
+    if (inner) inner.delete(blockedId);
   }
 
   async isBlocked(blockerId: string, blockedId: string): Promise<boolean> {
-    const set = blocksMap.get(blockerId);
-    return Promise.resolve(set ? set.has(blockedId) : false);
+    const inner = blocksMap.get(blockerId);
+    return Promise.resolve(inner ? inner.has(blockedId) : false);
+  }
+
+  async getBlockFlags(blockerId: string, blockedId: string): Promise<MemBlockFlags | null> {
+    const inner = blocksMap.get(blockerId);
+    const f = inner?.get(blockedId);
+    return Promise.resolve(f ? { ...f } : null);
   }
 
   async getBlockedRelationIds(viewerId: string): Promise<string[]> {
     const out = new Set<string>();
     const blocked = blocksMap.get(viewerId);
-    if (blocked) blocked.forEach((id) => out.add(id));
-    blocksMap.forEach((set, blockerId) => {
-      if (set.has(viewerId)) out.add(blockerId);
+    if (blocked) {
+      blocked.forEach((f, id) => {
+        if (memBlockFull(f)) out.add(id);
+      });
+    }
+    blocksMap.forEach((inner, blockerId) => {
+      const f = inner.get(viewerId);
+      if (f && memBlockFull(f)) out.add(blockerId);
     });
     return Promise.resolve(Array.from(out));
   }
@@ -373,6 +406,50 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.chats.getByUserId(userId));
   }
 
+  async getChatMemberPrefsForUser(
+    userId: string
+  ): Promise<Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>> {
+    const m = new Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>();
+    const prefix = `${userId}\t`;
+    for (const [k, v] of chatMemberPrefsMem.entries()) {
+      if (k.startsWith(prefix)) {
+        const chatId = k.slice(prefix.length);
+        m.set(chatId, v);
+      }
+    }
+    return Promise.resolve(m);
+  }
+
+  async upsertChatMemberPrefs(
+    userId: string,
+    chatId: string,
+    patch: { pinnedAt?: Date | null; hiddenAt?: Date | null; listSection?: string }
+  ): Promise<void> {
+    const k = chatMemberPrefsKey(userId, chatId);
+    const prev = chatMemberPrefsMem.get(k);
+    chatMemberPrefsMem.set(k, {
+      pinnedAt: patch.pinnedAt !== undefined ? patch.pinnedAt : prev?.pinnedAt ?? null,
+      hiddenAt: patch.hiddenAt !== undefined ? patch.hiddenAt : prev?.hiddenAt ?? null,
+      listSection: patch.listSection !== undefined ? patch.listSection : prev?.listSection ?? "general",
+    });
+  }
+
+  async deleteChatCascade(chatId: string): Promise<boolean> {
+    if (!this.chats.getById(chatId)) return Promise.resolve(false);
+    this.messages.purgeChat(chatId);
+    foldersByChat.delete(chatId);
+    for (const k of [...chatMemberPrefsMem.keys()]) {
+      if (k.endsWith(`\t${chatId}`)) chatMemberPrefsMem.delete(k);
+    }
+    this.chats.deleteChat(chatId);
+    return Promise.resolve(true);
+  }
+
+  async deleteChatMemberPrefs(userId: string, chatId: string): Promise<void> {
+    chatMemberPrefsMem.delete(chatMemberPrefsKey(userId, chatId));
+    return Promise.resolve();
+  }
+
   async getOrCreateDmChat(userId: string, otherUserId: string): Promise<import("@shared/schema").Chat> {
     const existing = this.chats.getDmBetween(userId, otherUserId);
     if (existing) return Promise.resolve(existing);
@@ -506,6 +583,10 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.messages.update(chatId, messageId, content));
   }
 
+  async updateMessageTranscript(chatId: string, messageId: string, transcript: string) {
+    return Promise.resolve(this.messages.updateTranscript(chatId, messageId, transcript));
+  }
+
   async addMessageHidden(userId: string, chatId: string, messageId: string): Promise<void> {
     const key = `${userId}:${chatId}`;
     let set = messageHiddenMap.get(key);
@@ -581,6 +662,11 @@ export class MemStorage implements IStorage {
     const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
     if (!since) return list.filter(fromOthers).length;
     return list.filter((m) => fromOthers(m) && new Date(m.createdAt) > since).length;
+  }
+
+  async getMessageCountByFolder(chatId: string, folderId: string): Promise<number> {
+    const list = this.messages.getByChatId(chatId, undefined, undefined, folderId);
+    return list.length;
   }
 
   async searchMessages(

@@ -13,6 +13,7 @@ import {
   Smartphone,
   SlidersHorizontal,
   Activity,
+  HardDrive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/lib/auth";
@@ -31,6 +32,7 @@ function getDesktopMode(): boolean {
 const NAV = [
   { path: "/admin", label: "Дашборд", icon: LayoutDashboard },
   { path: "/admin/monitors", label: "Мониторы", icon: Activity },
+  { path: "/admin/disk", label: "Диск", icon: HardDrive },
   { path: "/admin/users", label: "Пользователи", icon: Users },
   { path: "/admin/referrals", label: "Пригласительные", icon: Ticket },
   { path: "/admin/admins", label: "Админы", icon: Shield },

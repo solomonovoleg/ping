@@ -54,12 +54,18 @@ export function OpsTrafficSection() {
 
   const cur = data.currentMinute;
   const floodHint =
-    cur && (cur.limited429 >= 5 || cur.anonymous >= Math.max(120, data.limits.anonymousNormal * 0.5));
+    cur &&
+    (cur.limited429 >= 5 ||
+      cur.anonymous >= Math.max(120, data.limits.read.anonymousNormal * 0.5));
 
   const tail = data.history.slice(-36).reverse();
 
-  const anonLimit = data.strictApiShield ? data.limits.anonymousStrict : data.limits.anonymousNormal;
-  const authLimit = data.strictApiShield ? data.limits.authenticatedStrict : data.limits.authenticatedNormal;
+  const readAnon = data.strictApiShield ? data.limits.read.anonymousStrict : data.limits.read.anonymousNormal;
+  const readAuth = data.strictApiShield ? data.limits.read.authenticatedStrict : data.limits.read.authenticatedNormal;
+  const mutAnon =
+    data.strictApiShield ? data.limits.mutation.anonymousStrict : data.limits.mutation.anonymousNormal;
+  const mutAuth =
+    data.strictApiShield ? data.limits.mutation.authenticatedStrict : data.limits.mutation.authenticatedNormal;
 
   return (
     <Card
@@ -101,15 +107,17 @@ export function OpsTrafficSection() {
         <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm space-y-1">
           <div className="font-medium">{adminOpsUi.trafficLimits}</div>
           <div>
-            Без входа (IP): до <strong>{anonLimit}</strong> запр./мин (
-            {data.strictApiShield ? "строгий" : "обычный"} режим)
-          </div>
-          <div>
-            Авторизованные: до <strong>{authLimit}</strong> запр./мин (
+            <span className="text-muted-foreground">GET (чтение)</span> — без входа: до{" "}
+            <strong>{readAnon}</strong> / мин; с входом: до <strong>{readAuth}</strong> / мин (
             {data.strictApiShield ? "строгий" : "обычный"})
           </div>
+          <div>
+            <span className="text-muted-foreground">POST/PUT/PATCH/DELETE</span> — без входа: до{" "}
+            <strong>{mutAnon}</strong> / мин; с входом: до <strong>{mutAuth}</strong> / мин
+          </div>
           <div className="text-muted-foreground text-xs pt-1">
-            Админка, вход, регистрация и объявление платформы не считаются в этом лимите.
+            Два независимых счётчика: частое обновление чата не съедает лимит на отправку сообщений. Админка, вход,
+            регистрация и объявление платформы не считаются.
           </div>
         </div>
 

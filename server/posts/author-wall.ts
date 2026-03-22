@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { posts, users, postComments, postReactions, postShares, postViews, savedPosts } from "@shared/schema";
 import { storage } from "../storage";
+import { loadLatestCommentsByPostIds } from "./load-latest-comments";
 
 type Row = {
   id: string;
@@ -39,6 +40,16 @@ export type AuthorWallPost = {
   author: { id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null };
   channelName: string;
   commentsCount: number;
+  latestComments: {
+    id: string;
+    postId: string;
+    userId: string;
+    text: string;
+    createdAt: string;
+    user: string;
+    avatar: string | null;
+    likes: number;
+  }[];
 };
 
 export async function getAuthorWall(
@@ -89,6 +100,8 @@ export async function getAuthorWall(
       .groupBy(postComments.postId);
     countRows.forEach((r) => { counts[r.postId] = r.count; });
   }
+
+  const latestCommentsByPost = await loadLatestCommentsByPostIds(postIds);
 
   const reactionsByPost: Record<string, { emoji: string; count: number }[]> = {};
   const reactionUsersByPost: Record<string, Record<string, { id: string; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>> = {};
@@ -192,6 +205,7 @@ export async function getAuthorWall(
       },
       channelName: [r.authorDisplayName, r.authorSurname].filter(Boolean).join(" ") || `ID ${r.authorPublicId}`,
       commentsCount: counts[r.id] ?? 0,
+      latestComments: latestCommentsByPost[r.id] ?? [],
     };
   });
 }

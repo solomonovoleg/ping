@@ -13,6 +13,8 @@ export interface ChatsStore {
   getMember(chatId: string, userId: string): ChatMember | undefined;
   getMemberIds(chatId: string): string[];
   setLastRead(chatId: string, userId: string, at: Date): void;
+  /** Удалить чат и всех участников из памяти. */
+  deleteChat(chatId: string): boolean;
 }
 
 export function createChatsStore(): ChatsStore {
@@ -97,6 +99,12 @@ export function createChatsStore(): ChatsStore {
       const list = members.get(chatId);
       const m = list?.find((x) => x.userId === userId);
       if (m) m.lastReadAt = at;
+    },
+    deleteChat(chatId: string) {
+      if (!chats.has(chatId)) return false;
+      chats.delete(chatId);
+      members.delete(chatId);
+      return true;
     },
   };
 }

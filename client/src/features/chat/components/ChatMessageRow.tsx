@@ -87,15 +87,15 @@ const MSG_BUBBLE_CLASSES: Record<
 > = {
   primary: {
     bubble:
-      "bg-primary/15 dark:bg-primary/35 text-foreground dark:text-primary-50 border border-primary/30 dark:border-primary/50 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+      "bg-primary/15 dark:bg-primary text-foreground dark:text-primary-foreground border border-primary/30 dark:border-primary/80 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
     videoNoteBorder: "border-primary-400/50 dark:border-primary-500/35",
     replyBlock: "bg-primary/15 dark:bg-primary/25 border-l-[3px] border-l-primary/50 dark:border-l-primary/60",
-    footer: "text-primary-800/90 dark:text-primary-200/90",
+    footer: "text-primary-800/90 dark:text-primary-foreground/90",
     shatter: "bg-primary-100/90 dark:bg-primary-900/35",
   },
   slate: {
     bubble:
-      "bg-slate-200 dark:bg-slate-700/90 text-foreground dark:text-slate-100 border border-slate-300/70 dark:border-slate-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+      "bg-slate-200 dark:bg-slate-600 text-foreground dark:text-white border border-slate-300/70 dark:border-slate-500/80 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
     videoNoteBorder: "border-slate-400/50 dark:border-slate-500/35",
     replyBlock: "bg-slate-300/20 dark:bg-slate-600/20 border-l-[3px] border-l-slate-500/50 dark:border-l-slate-400/50",
     footer: "text-slate-700/90 dark:text-slate-300/90",
@@ -103,7 +103,7 @@ const MSG_BUBBLE_CLASSES: Record<
   },
   violet: {
     bubble:
-      "bg-violet-200/95 dark:bg-violet-900/50 text-foreground dark:text-violet-100 border border-violet-300/70 dark:border-violet-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+      "bg-violet-200/95 dark:bg-violet-800/95 text-foreground dark:text-white border border-violet-300/70 dark:border-violet-500/80 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
     videoNoteBorder: "border-violet-400/50 dark:border-violet-500/35",
     replyBlock: "bg-violet-300/20 dark:bg-violet-600/25 border-l-[3px] border-l-violet-500/50 dark:border-l-violet-400/50",
     footer: "text-violet-800/90 dark:text-violet-200/90",
@@ -111,7 +111,7 @@ const MSG_BUBBLE_CLASSES: Record<
   },
   sky: {
     bubble:
-      "bg-sky-200/95 dark:bg-sky-900/50 text-foreground dark:text-sky-100 border border-sky-300/70 dark:border-sky-600/70 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
+      "bg-sky-200/95 dark:bg-sky-800/95 text-foreground dark:text-white border border-sky-300/70 dark:border-sky-500/80 shadow-[0_1px_1px_rgba(0,0,0,0.06)]",
     videoNoteBorder: "border-sky-400/50 dark:border-sky-500/35",
     replyBlock: "bg-sky-300/20 dark:bg-sky-600/25 border-l-[3px] border-l-sky-500/50 dark:border-l-sky-400/50",
     footer: "text-sky-800/90 dark:text-sky-200/90",
@@ -165,10 +165,6 @@ export type ChatMessageRowProps = {
   onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
   /** Переведённый текст (если есть перевод) */
   translatedText?: string | null;
-  /** Исходный язык переведённого сообщения (отображается как бейдж) */
-  translatedFromLang?: string | null;
-  /** Колбэк нажатия на бейдж — переключить оригинал/перевод */
-  onToggleOriginal?: () => void;
 };
 
 function formatVideoNoteDuration(seconds: number | null): string {
@@ -177,6 +173,43 @@ function formatVideoNoteDuration(seconds: number | null): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/** Расшифровка + перевод для видеокружка (как у голосового). */
+function MediaTranscriptBlock({
+  transcript,
+  translatedTranscript,
+}: {
+  transcript?: string | null;
+  translatedTranscript?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const main = translatedTranscript?.trim() || transcript?.trim();
+  if (!main) return null;
+  const hasOriginal =
+    Boolean(translatedTranscript?.trim() && transcript?.trim()) &&
+    translatedTranscript!.trim() !== transcript!.trim();
+  return (
+    <div className="mt-1 max-w-[220px]">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((p) => !p);
+        }}
+        className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+        aria-expanded={open}
+      >
+        {open ? "Скрыть текст" : "Показать текст"}
+      </button>
+      {open && (
+        <div className="mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
+          <p>{main}</p>
+          {hasOriginal ? <p className="mt-1 text-[10px] opacity-75">Оригинал: {transcript!.trim()}</p> : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const VIDEO_NOTE_PREVIEW_SEC = 1.2;
@@ -304,8 +337,6 @@ function ChatMessageRowInner({
   onVoiceEnded,
   onOpenMedia,
   translatedText,
-  translatedFromLang,
-  onToggleOriginal,
 }: ChatMessageRowProps) {
   const bubbleStyles = MSG_BUBBLE_CLASSES[messageBubbleColor];
   const bubbleRef = useRef<HTMLDivElement | null>(null);
@@ -583,8 +614,22 @@ function ChatMessageRowInner({
                           : "bg-black/5 dark:bg-white/10 border-primary/45"
                   )}
                 >
-                  <p className="mb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground">{replyAuthor}</p>
-                  <p className="text-[13px] line-clamp-2 break-words leading-snug opacity-95">
+                  <p
+                    className={cn(
+                      "mb-0.5 text-[11px] font-semibold tracking-wide",
+                      vibeTextBubble && isMe
+                        ? "text-neutral-600 dark:text-white/55"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {replyAuthor}
+                  </p>
+                  <p
+                    className={cn(
+                      "text-[13px] line-clamp-2 break-words leading-snug opacity-95",
+                      vibeTextBubble && isMe && "text-neutral-900/92 dark:text-white/92",
+                    )}
+                  >
                     {msg.replyTo
                       ? msg.replyTo.type === "text"
                         ? msg.replyTo.content
@@ -611,6 +656,7 @@ function ChatMessageRowInner({
                     isMe={isMe}
                     bubbleColorPreset={messageBubbleColor}
                     transcript={msg.transcript}
+                    translatedTranscript={translatedText}
                     onEnded={onVoiceEnded ? () => onVoiceEnded(nextVoiceMessageId ?? null) : undefined}
                     autoPlay={activeVoiceId === msg.id}
                   />
@@ -643,24 +689,27 @@ function ChatMessageRowInner({
                 <video src={resolveUrl(msg.content)} className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]" playsInline muted />
               </button>
             ) : msg.type === "video_note" ? (
-              pulseMobileDm && isMe ? (
-                <PulseDmSentVideoNote
-                  src={resolveUrl(msg.content)}
-                  accentColor={pulseDmAccent}
-                  footerLabel={
-                    msg.sendStatus === "sending" || msg.sendStatus === "failed"
-                      ? null
-                      : (() => {
-                          const t = formatMessageTime(msg.createdAt);
-                          const isRead =
-                            lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
-                          return isRead ? `${t} ✓✓` : `${t} ✓`;
-                        })()
-                  }
-                />
-              ) : (
-                <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
-              )
+              <>
+                {pulseMobileDm && isMe ? (
+                  <PulseDmSentVideoNote
+                    src={resolveUrl(msg.content)}
+                    accentColor={pulseDmAccent}
+                    footerLabel={
+                      msg.sendStatus === "sending" || msg.sendStatus === "failed"
+                        ? null
+                        : (() => {
+                            const t = formatMessageTime(msg.createdAt);
+                            const isRead =
+                              lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
+                            return isRead ? `${t} ✓✓` : `${t} ✓`;
+                          })()
+                    }
+                  />
+                ) : (
+                  <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
+                )}
+                <MediaTranscriptBlock transcript={msg.transcript} translatedTranscript={translatedText} />
+              </>
             ) : msg.type === "post_share" ? (
               (() => {
                 let preview: { postId?: string; text?: string; imageUrl?: string | null; authorName?: string; authorId?: string } = {};
@@ -770,17 +819,6 @@ function ChatMessageRowInner({
                 )}
               >
                 {formatMessageTime(msg.createdAt)}
-                {translatedFromLang && (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onToggleOriginal?.(); }}
-                    className="ml-0.5 inline-flex items-center rounded px-1 py-px text-[10px] font-semibold uppercase leading-none opacity-70 hover:opacity-100 bg-primary/10 text-primary transition-opacity"
-                    title={translatedText ? "Показать оригинал" : "Показать перевод"}
-                    aria-label={translatedText ? "Показать оригинал" : "Показать перевод"}
-                  >
-                    {translatedFromLang.toUpperCase()}
-                  </button>
-                )}
                 {isMe && (() => {
                   if (msg.sendStatus === "sending") return <span className="inline-flex items-center gap-0.5" title="Отправляется"><Clock className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" aria-hidden /></span>;
                   if (msg.sendStatus === "failed") return (

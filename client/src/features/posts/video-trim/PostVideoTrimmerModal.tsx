@@ -2,7 +2,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { cn } from "@/lib/utils";
-import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 import type { PostVideoTrimUpload } from "@/lib/posts";
 import { PostVideoTrimmerTimeline } from "./PostVideoTrimmerTimeline";
 import { usePostVideoTrim } from "./use-post-video-trim";
@@ -12,14 +11,25 @@ export type PostVideoTrimmerModalProps = {
   file: File | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: (trim: PostVideoTrimUpload) => void;
+  /** По умолчанию лимит поста (14 с). Для аватара — 4 с. */
+  maxSegmentSeconds?: number;
+  title?: string;
+  description?: string;
 };
 
 /**
- * Выбор фрагмента видео для поста (≤ POST_VIDEO_MAX_SECONDS с).
- * Логика вынесена в ./use-post-video-trim и утилиты; UI — в PostVideoTrimmerTimeline.
+ * Выбор фрагмента видео (лимит сегмента задаётся через maxSegmentSeconds).
  */
-export function PostVideoTrimmerModal({ open, file, onOpenChange, onConfirm }: PostVideoTrimmerModalProps) {
-  const t = usePostVideoTrim({ open, file, onConfirm });
+export function PostVideoTrimmerModal({
+  open,
+  file,
+  onOpenChange,
+  onConfirm,
+  maxSegmentSeconds,
+  title,
+  description,
+}: PostVideoTrimmerModalProps) {
+  const t = usePostVideoTrim({ open, file, maxSegmentSeconds, onConfirm });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -29,9 +39,10 @@ export function PostVideoTrimmerModal({ open, file, onOpenChange, onConfirm }: P
         )}
       >
         <DialogHeader className="px-4 pt-4 pb-2 shrink-0 border-b border-border/60 sm:pt-6">
-          <DialogTitle className="text-base sm:text-lg pr-8">Фрагмент для поста</DialogTitle>
+          <DialogTitle className="text-base sm:text-lg pr-8">{title ?? "Фрагмент для поста"}</DialogTitle>
           <p className="text-sm text-muted-foreground text-left">
-            До {POST_VIDEO_MAX_SECONDS} сек. Перетащите границы или окно на полоске.
+            {description ??
+              `Фрагмент до ${t.maxSegmentSeconds} с (если ролик длиннее — выберите окно). У любого ролика можно сдвинуть начало и конец на полоске.`}
           </p>
         </DialogHeader>
 

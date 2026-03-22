@@ -124,7 +124,16 @@ export function registerStoryMediaUploadRoutes(app: Express): void {
         res.status(201).json({ url: `/uploads/stories/${filename}` });
       } catch (err) {
         console.error("Story media upload error:", err);
-        res.status(500).json({ message: "Не удалось обработать сториз-файл" });
+        const ffmpegLike =
+          err instanceof Error &&
+          /ffmpeg|libx264|hqdn3d|loudnorm|unsharp|filter|codec|invalid|encoder|decoder|hevc|h\.?265|scale|exited with code|ENOENT|spawn/i.test(
+            err.message,
+          );
+        res.status(500).json({
+          message: ffmpegLike
+            ? "Не удалось перекодировать видео сториз. Попробуйте другой файл или MP4 H.264; на сервере нужен ffmpeg с libx264."
+            : "Не удалось обработать сториз-файл",
+        });
       }
     }
   );

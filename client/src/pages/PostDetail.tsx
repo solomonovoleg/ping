@@ -196,7 +196,12 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
         </div>
       </article>
 
-      <CommentsModal isOpen={commentsOpen} onClose={() => setCommentsOpen(false)} postId={postId} />
+      <CommentsModal
+        isOpen={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        postId={postId}
+        postAuthorId={post?.authorId}
+      />
     </div>
   );
 }

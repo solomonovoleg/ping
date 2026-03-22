@@ -20,6 +20,21 @@ import type { ApiChat, ApiMessage } from "../types";
 import { useChatVisibilityRefresh } from "./useChatVisibilityRefresh";
 import { useChatRealtime } from "./useChatRealtime";
 
+async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text.trim()) return fallback;
+    const j = JSON.parse(text) as { message?: string; error?: string };
+    const m =
+      (typeof j?.message === "string" && j.message.trim()) ? j.message.trim()
+      : (typeof j?.error === "string" && j.error.trim()) ? j.error.trim()
+      : "";
+    return m || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Не чаще одного "typing" в 2.5 с; индикатор сбрасывается, если нет ввода 3 с */
 const TYPING_THROTTLE_MS = 2500;
 const TYPING_IDLE_MS = 3000;
@@ -61,7 +76,9 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [typingDisplay, setTypingDisplay] = useState<string | null>(null);
   const [voiceRecordingDisplay, setVoiceRecordingDisplay] = useState<string | null>(null);
-  const [folders, setFolders] = useState<{ id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[]>([]);
+  const [folders, setFolders] = useState<
+    { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number; messageCount?: number }[]
+  >([]);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -113,11 +130,13 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           if (!res.ok) {
             setChat(null);
             setMessages([]);
-            const errMsg =
+            const statusFallback =
               res.status === 401 ? "Сессия истекла. Войдите снова."
               : res.status === 404 ? "Пользователь не найден"
-              : res.status === 400 ? "Некорректный запрос"
+              : res.status === 429
+                ? "Слишком много открытий чатов за короткое время. Подождите минуту."
               : "Не удалось загрузить чат";
+            const errMsg = await readApiErrorMessage(res, statusFallback);
             setError(errMsg);
             setLoading(false);
             return;
@@ -179,7 +198,8 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           setMessages([]);
           setFolders([]);
           setCurrentFolderId(null);
-          setError(chatRes.status === 404 ? "Чат не найден" : "Не удалось загрузить чат");
+          const fb = chatRes.status === 404 ? "Чат не найден" : "Не удалось загрузить чат";
+          setError(await readApiErrorMessage(chatRes, fb));
           setLoading(false);
           return;
         }
@@ -189,7 +209,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         setChat(chatData);
         const foldersResData = foldersRes.ok ? await foldersRes.json() : [];
         const foldersList = Array.isArray(foldersResData)
-          ? (foldersResData as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+          ? (foldersResData as {
+              id: string;
+              name: string;
+              isMain: boolean;
+              orderIndex: number;
+              unreadCount?: number;
+              messageCount?: number;
+            }[])
           : [];
         setFolders(foldersList);
         const mainFolder = foldersList.find((f) => f.isMain) ?? foldersList[0];
@@ -201,7 +228,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
               if (foldersRes2.ok && currentChatIdRef.current === id) {
                 const list2 = await foldersRes2.json();
                 const foldersList2 = Array.isArray(list2)
-                  ? (list2 as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+                  ? (list2 as {
+                      id: string;
+                      name: string;
+                      isMain: boolean;
+                      orderIndex: number;
+                      unreadCount?: number;
+                      messageCount?: number;
+                    }[])
                   : [];
                 setFolders(foldersList2);
               }
@@ -270,7 +304,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     try {
       const list = await listChatFolders(chatId);
       const foldersList = Array.isArray(list)
-        ? (list as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[])
+        ? (list as {
+            id: string;
+            name: string;
+            isMain: boolean;
+            orderIndex: number;
+            unreadCount?: number;
+            messageCount?: number;
+          }[])
         : [];
       if (currentChatIdRef.current === chatId) setFolders(foldersList);
     } catch {
@@ -396,7 +437,16 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       if (msgInOtherFolder) {
         listChatFolders(chatId).then((list) => {
           if (Array.isArray(list) && currentChatIdRef.current === chatId) {
-            setFolders(list as { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number }[]);
+            setFolders(
+              list as {
+                id: string;
+                name: string;
+                isMain: boolean;
+                orderIndex: number;
+                unreadCount?: number;
+                messageCount?: number;
+              }[],
+            );
           }
         }).catch(() => {});
         return;
@@ -414,13 +464,33 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           }
           const existing = byId.get(message.id);
           const msg = message as ApiMessage & { myReaction?: string | null };
-          const merged = { ...message, myReaction: msg.myReaction ?? existing?.myReaction ?? null };
+          const merged = {
+            ...(existing ?? {}),
+            ...message,
+            myReaction: msg.myReaction ?? existing?.myReaction ?? null,
+          };
           byId.set(message.id, merged);
           return Array.from(byId.values()).sort(
             (a, b) => parseMessageDate(a.createdAt).getTime() - parseMessageDate(b.createdAt).getTime()
           );
         });
       });
+      if (chat.type === "group") {
+        listChatFolders(chatId).then((list) => {
+          if (Array.isArray(list) && currentChatIdRef.current === chatId) {
+            setFolders(
+              list as {
+                id: string;
+                name: string;
+                isMain: boolean;
+                orderIndex: number;
+                unreadCount?: number;
+                messageCount?: number;
+              }[],
+            );
+          }
+        }).catch(() => {});
+      }
     });
     return unsub;
   }, [chatId, chat?.type, subscribeChat, user?.id]);
@@ -430,9 +500,25 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const unsub = subscribeMessageDeleted(chatId, (messageId) => {
       if (currentChatIdRef.current !== chatId) return;
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      if (chat?.type === "group") {
+        listChatFolders(chatId).then((list) => {
+          if (Array.isArray(list) && currentChatIdRef.current === chatId) {
+            setFolders(
+              list as {
+                id: string;
+                name: string;
+                isMain: boolean;
+                orderIndex: number;
+                unreadCount?: number;
+                messageCount?: number;
+              }[],
+            );
+          }
+        }).catch(() => {});
+      }
     });
     return unsub;
-  }, [chatId, subscribeMessageDeleted]);
+  }, [chatId, chat?.type, subscribeMessageDeleted]);
 
   useEffect(() => {
     if (!chatId) return;

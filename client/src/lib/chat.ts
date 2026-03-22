@@ -107,6 +107,37 @@ export async function isMessageSaved(messageId: string): Promise<boolean> {
   return !!data.saved;
 }
 
+export async function patchChatMemberMe(
+  chatId: string,
+  body: { pinned?: boolean; hidden?: boolean; listSection?: string }
+): Promise<void> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/me`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось сохранить");
+  }
+}
+
+export async function deleteChatForMe(chatId: string): Promise<void> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/me`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось выйти из чата");
+  }
+}
+
+export async function deleteChatForEveryone(chatId: string): Promise<void> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/for-all`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось удалить чат");
+  }
+}
+
 export async function updateChat(
   chatId: string,
   data: { name?: string; avatarUrl?: string }
@@ -161,6 +192,7 @@ export type ChatFolder = {
   orderIndex: number;
   createdAt: string;
   unreadCount?: number;
+  messageCount?: number;
 };
 
 export async function listChatFolders(chatId: string): Promise<ChatFolder[]> {

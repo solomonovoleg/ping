@@ -39,7 +39,11 @@ import { registerOpsPlatformPublicRoute } from "./admin/ops/platform.public-http
 import { registerOpsUserReportsRoute } from "./admin/ops/reports.user-http";
 import { registerGeoRoutes } from "./geo/routes";
 import { registerProfilePinsRoutes } from "./profile-pins/routes";
-import { apiTrafficRecordMiddleware, createApiShieldLimiter } from "./middleware/api-shield";
+import {
+  apiTrafficRecordMiddleware,
+  createApiShieldMutationLimiter,
+  createApiShieldReadLimiter,
+} from "./middleware/api-shield";
 import { apiTrafficModuleTelemetryMiddleware } from "./admin/telemetry";
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -80,10 +84,12 @@ export async function registerRoutes(
     next();
   });
 
-  const apiShieldLimiter = createApiShieldLimiter();
+  const apiShieldReadLimiter = createApiShieldReadLimiter();
+  const apiShieldMutationLimiter = createApiShieldMutationLimiter();
   app.use(apiTrafficRecordMiddleware);
   app.use(apiTrafficModuleTelemetryMiddleware);
-  app.use("/api", apiShieldLimiter);
+  app.use("/api", apiShieldReadLimiter);
+  app.use("/api", apiShieldMutationLimiter);
 
   registerCallRoutes(app);
   registerGroupCallRoutes(app);

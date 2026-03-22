@@ -55,3 +55,18 @@ export function getMediaAspectRatio(format: MediaDisplayFormat): string | null {
       return null;
   }
 }
+
+/**
+ * Одна картинка/видео в ленте с `object-fit: cover`: три фиксированные рамки
+ * (квадрат, горизонталь 16:9, вертикаль 9:16). Формат слота — из {@link getMediaDisplayFormat}.
+ */
+export function getFeedSingleCropAspectRatio(format: MediaDisplayFormat): "1/1" | "9/16" | "16/9" {
+  switch (format) {
+    case "horizontal":
+      return "16/9";
+    case "story":
+      return "9/16";
+    default:
+      return "1/1";
+  }
+}

@@ -47,11 +47,28 @@ function parseNicknameUpdate(raw: unknown): string | null | undefined {
 
 /** Нормализация пола для API и БД (en + ru). Экспорт для ответов /auth/me и единообразия с PATCH профиля. */
 export function normalizeGenderValue(value: unknown): "male" | "female" | "other" | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const n = Math.trunc(value);
+    if (n === 1) return "male";
+    if (n === 2) return "female";
+    if (n === 3) return "other";
+  }
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  if (normalized === "male" || normalized === "мужской") return "male";
-  if (normalized === "female" || normalized === "женский") return "female";
-  if (normalized === "other" || normalized === "другое") return "other";
+  if (normalized === "male" || normalized === "мужской" || normalized === "m" || normalized === "man" || normalized === "м") {
+    return "male";
+  }
+  if (
+    normalized === "female" ||
+    normalized === "женский" ||
+    normalized === "f" ||
+    normalized === "woman" ||
+    normalized === "w" ||
+    normalized === "ж"
+  ) {
+    return "female";
+  }
+  if (normalized === "other" || normalized === "другое" || normalized === "o" || normalized === "x") return "other";
   return null;
 }
 
@@ -134,7 +151,8 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     isBlockedByMe = await storage.isBlocked(viewerId, target.id);
     isBlockedMe = await storage.isBlocked(target.id, viewerId);
     if (target.hideFromSearch) canMessage = isInMyContacts;
-    if (isBlockedByMe || isBlockedMe) canMessage = false;
+    const theyBlockedMeChat = await storage.getBlockFlags(target.id, viewerId);
+    if (theyBlockedMeChat?.restrictChat) canMessage = false;
   }
   const loadMutual =
     !isMe && !isBlockedByMe && !isBlockedMe
@@ -306,6 +324,12 @@ export async function getProfilePage(viewerId: string, idParam: string, postsLim
   if (target.deletedAt || target.isBlocked) {
     return { profile: buildUnavailableProfile(target), posts: [], stories: [] };
   }
+  if (viewerId !== target.id) {
+    const profileHidden = await storage.getBlockFlags(target.id, viewerId);
+    if (profileHidden?.restrictProfile) {
+      return { profile: buildUnavailableProfile(target), posts: [], stories: [] };
+    }
+  }
   const [profile, profilePosts, profileStories] = await Promise.all([
     buildProfileForViewer(viewerId, target),
     getAuthorWall(viewerId, target.id, postsLimit),
@@ -316,6 +340,15 @@ export async function getProfilePage(viewerId: string, idParam: string, postsLim
 
 export async function getProfileOnly(viewerId: string, idParam: string) {
   const target = await resolveProfileTarget(idParam);
+  if (target.deletedAt || target.isBlocked) {
+    return buildUnavailableProfile(target);
+  }
+  if (viewerId !== target.id) {
+    const profileHidden = await storage.getBlockFlags(target.id, viewerId);
+    if (profileHidden?.restrictProfile) {
+      return buildUnavailableProfile(target);
+    }
+  }
   return buildProfileForViewer(viewerId, target);
 }
 
@@ -345,7 +378,11 @@ export async function getFollowingList(targetUserId: string, limit: number, offs
   return storage.getFollowingList(targetUserId, limit, offset);
 }
 
-export async function blockUser(blockerId: string, blockedId: string): Promise<void> {
+export async function blockUser(
+  blockerId: string,
+  blockedId: string,
+  flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+): Promise<void> {
   if (!blockedId || blockedId === blockerId) {
     throw new UsersServiceError(400, "Нельзя заблокировать себя");
   }
@@ -353,7 +390,7 @@ export async function blockUser(blockerId: string, blockedId: string): Promise<v
   if (!target || target.deletedAt) {
     throw new UsersServiceError(404, "Пользователь не найден");
   }
-  await storage.addBlock(blockerId, blockedId);
+  await storage.addBlock(blockerId, blockedId, flags);
 }
 
 export async function unblockUser(blockerId: string, blockedId: string): Promise<void> {

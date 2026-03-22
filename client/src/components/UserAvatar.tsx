@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
+import { usePrefersReducedMotion } from "@/lib/motion";
+import { useSeamlessVideoLoop } from "@/lib/reels-video";
 
 /** Палитра в стиле логотипа PING: синие и нейтральные тона */
 const AVATAR_COLORS = [
@@ -28,6 +30,10 @@ function getColorForSeed(seed: string) {
   return AVATAR_COLORS[idx];
 }
 
+function isVideoAvatarUrl(url: string): boolean {
+  return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
+}
+
 export type UserAvatarProps = {
   /** URL картинки аватара; если нет — показывается векторный аватар по умолчанию */
   avatarUrl?: string | null;
@@ -46,7 +52,7 @@ export type UserAvatarProps = {
 };
 
 /**
- * Аватар пользователя: фото по ссылке или векторный аватар (буква + градиент)
+ * Аватар пользователя: фото/короткое видео по ссылке или векторный аватар (буква + градиент)
  * в стиле логотипа PING для пользователей без загруженного аватара.
  */
 const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
@@ -68,9 +74,37 @@ export function UserAvatar({
   const { bg, text } = getColorForSeed(colorSeed);
 
   const [imageError, setImageError] = useState(false);
+  const [videoError, setVideoError] = useState(false);
   const resolvedUrl = avatarUrl?.trim() ? resolveUrl(avatarUrl.trim()) : "";
+  const isVideo = resolvedUrl ? isVideoAvatarUrl(resolvedUrl) : false;
+  const reducedMotion = usePrefersReducedMotion();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   useEffect(() => setImageError(false), [resolvedUrl]);
-  const showImage = resolvedUrl && !imageError;
+  useEffect(() => setVideoError(false), [resolvedUrl]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !resolvedUrl || !isVideo || imageError || videoError) return;
+    if (reducedMotion) {
+      v.pause();
+      try {
+        v.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    v.muted = true;
+    v.defaultMuted = true;
+    void v.play().catch(() => {});
+  }, [resolvedUrl, isVideo, reducedMotion, imageError, videoError]);
+
+  const showImage = resolvedUrl && !isVideo && !imageError;
+  const showVideo = Boolean(resolvedUrl && isVideo && !videoError);
+
+  const useSeamlessAvatarLoop = !reducedMotion && showVideo;
+  useSeamlessVideoLoop(videoRef, { enabled: useSeamlessAvatarLoop, srcKey: resolvedUrl });
 
   const isOnline =
     showOnlineIndicator &&
@@ -96,6 +130,25 @@ export function UserAvatar({
 
   const radiusStyle = cornerRadius != null ? { borderRadius: cornerRadius } : undefined;
   const shapeClass = cornerRadius != null ? "object-cover flex-shrink-0" : "rounded-full object-cover flex-shrink-0";
+
+  const ariaLabel = displayName ? `Аватар, ${displayName}` : "Аватар";
+
+  if (showVideo) {
+    return wrapper(
+      <video
+        ref={videoRef}
+        src={resolvedUrl}
+        className={cn(shapeClass, !showOnlineIndicator && className)}
+        style={{ width: size, height: size, ...radiusStyle }}
+        muted
+        playsInline
+        loop={!reducedMotion && !useSeamlessAvatarLoop}
+        preload="metadata"
+        aria-label={ariaLabel}
+        onError={() => setVideoError(true)}
+      />
+    );
+  }
 
   if (showImage) {
     return wrapper(

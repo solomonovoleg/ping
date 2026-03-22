@@ -22,6 +22,9 @@ import {
   ExternalLink,
   Mail,
   Users,
+  Mic,
+  Video,
+  Loader2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
@@ -45,6 +48,10 @@ import { getStoryBeautyEnabled, setStoryBeautyEnabled } from "@/lib/story-prefs"
 import { getMyReferralCodes, createReferralCode, getInvitedUsers, type InvitedUser } from "@/lib/referrals";
 import { formatDateWithYearLocal } from "@/lib/timezone";
 import { startDm } from "@/lib/search";
+import {
+  primeMicrophoneCapture,
+  primeCameraAndMicrophoneCapture,
+} from "@/lib/media-capture-prime";
 
 import { PageTitle } from "@/components/PageTitle";
 import { Button } from "@/components/ui/button";
@@ -75,6 +82,7 @@ export default function Settings() {
   const [storyBeauty, setStoryBeautyState] = useState(getStoryBeautyEnabled);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [mediaPrimeBusy, setMediaPrimeBusy] = useState<null | "mic" | "cam">(null);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -151,7 +159,7 @@ export default function Settings() {
     setOpeningChatUserId(invited.id);
     try {
       const chat = await startDm(invited.id);
-      setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+      setLocation(`/chat/${encodeURIComponent(chat.id)}`);
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : "Не удалось начать диалог", variant: "destructive" });
     } finally {
@@ -218,6 +226,60 @@ export default function Settings() {
   const changeTheme = (newTheme: ThemeId) => {
     setThemeState(newTheme);
     setTheme(newTheme);
+  };
+
+  const runPrimeMicrophone = async () => {
+    setMediaPrimeBusy("mic");
+    try {
+      const r = await primeMicrophoneCapture();
+      if (r === "granted") {
+        toast({
+          title: "Микрофон разрешён",
+          description: "Тот же доступ будет использоваться для звонков, голосовых и распознавания речи.",
+        });
+      } else if (r === "denied") {
+        toast({
+          title: "Доступ к микрофону не дан",
+          description: "Разрешите в настройках браузера или системы для этого сайта / приложения.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Микрофон недоступен",
+          description: "Проверьте HTTPS и поддержку браузера.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setMediaPrimeBusy(null);
+    }
+  };
+
+  const runPrimeCameraMic = async () => {
+    setMediaPrimeBusy("cam");
+    try {
+      const r = await primeCameraAndMicrophoneCapture();
+      if (r === "granted") {
+        toast({
+          title: "Камера и микрофон разрешены",
+          description: "Подходит для видеозвонков и съёмки в веб-версии.",
+        });
+      } else if (r === "denied") {
+        toast({
+          title: "Доступ не дан",
+          description: "Разрешите камеру и микрофон в настройках браузера или системы.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Не удалось получить доступ",
+          description: "Проверьте устройство и ограничения браузера.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setMediaPrimeBusy(null);
+    }
   };
 
   return (
@@ -404,6 +466,50 @@ export default function Settings() {
                   setStoryBeautyState(checked);
                 }}
               />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider ml-4">
+              Камера и микрофон
+            </h3>
+            <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm space-y-3">
+              <p className="text-sm leading-snug text-muted-foreground">
+                Браузер запоминает разрешение для этого сайта. Мы используем одинаковые настройки захвата для звонков,
+                голосовых и «голос → текст», чтобы система не спрашивала заново из‑за другого профиля микрофона. В
+                диалоге доступа выберите вариант с сохранением («Всегда разрешать» / «Разрешить для сайта»), если он
+                есть. В приложении PING доступ к камере запрашивается через систему один раз.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="min-h-[var(--uix-touch-min)] justify-start gap-2 sm:flex-1"
+                  disabled={mediaPrimeBusy !== null}
+                  onClick={() => void runPrimeMicrophone()}
+                >
+                  {mediaPrimeBusy === "mic" ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                  ) : (
+                    <Mic className="h-4 w-4 shrink-0" aria-hidden />
+                  )}
+                  Разрешить микрофон
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="min-h-[var(--uix-touch-min)] justify-start gap-2 sm:flex-1"
+                  disabled={mediaPrimeBusy !== null}
+                  onClick={() => void runPrimeCameraMic()}
+                >
+                  {mediaPrimeBusy === "cam" ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                  ) : (
+                    <Video className="h-4 w-4 shrink-0" aria-hidden />
+                  )}
+                  Камера + микрофон
+                </Button>
+              </div>
             </div>
           </div>
 

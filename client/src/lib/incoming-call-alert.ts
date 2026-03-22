@@ -61,8 +61,19 @@ function startLoopingCallTone(volume = 1): () => void {
   };
 }
 
-export function startIncomingCallAlert(callerName: string | null): () => void {
-  const name = callerName?.trim() || "Абонент";
+export type RingingIncomingAlertOptions = {
+  notificationTitle: string;
+  notificationBody: string;
+  notificationTag: string;
+  /** После focus + stop (например перейти в чат). */
+  onNotificationClick?: () => void;
+};
+
+/**
+ * Рингтон + вибро + системное уведомление (если вкладка в фоне). Общая основа для личного и группового звонка.
+ */
+export function startRingingIncomingAlert(options: RingingIncomingAlertOptions): () => void {
+  const { notificationTitle, notificationBody, notificationTag, onNotificationClick } = options;
   let stopped = false;
   let vibrateInterval: ReturnType<typeof setInterval> | null = null;
   let notification: Notification | null = null;
@@ -91,6 +102,35 @@ export function startIncomingCallAlert(callerName: string | null): () => void {
     }
   };
 
+  const attachNotification = () => {
+    if (typeof document === "undefined" || document.visibilityState !== "hidden") return;
+    if (!("Notification" in window) || Notification.permission === "denied") return;
+    const show = () => {
+      if (stopped) return;
+      try {
+        notification = new Notification(notificationTitle, {
+          body: notificationBody,
+          tag: notificationTag,
+          requireInteraction: true,
+        });
+        notification.onclick = () => {
+          window.focus();
+          stop();
+          onNotificationClick?.();
+        };
+      } catch (e) {
+        if (typeof console !== "undefined" && console.warn) console.warn("RingingAlert: Notification", e);
+      }
+    };
+    if (Notification.permission === "granted") {
+      show();
+    } else {
+      Notification.requestPermission().then((p) => {
+        if (p === "granted") show();
+      });
+    }
+  };
+
   try {
     if (typeof navigator.vibrate === "function") {
       navigator.vibrate(VIBRATE_PATTERN);
@@ -99,41 +139,67 @@ export function startIncomingCallAlert(callerName: string | null): () => void {
       }, VIBRATE_REPEAT_MS);
     }
   } catch (e) {
-    if (typeof console !== "undefined" && console.warn) console.warn("IncomingCall: vibration", e);
+    if (typeof console !== "undefined" && console.warn) console.warn("RingingAlert: vibration", e);
   }
 
-  if (typeof document !== "undefined" && document.visibilityState === "hidden" && "Notification" in window && Notification.permission !== "denied") {
-    if (Notification.permission === "granted") {
-      try {
-        notification = new Notification("Входящий звонок", { body: name, tag: "ping-incoming-call", requireInteraction: true });
-        notification.onclick = () => {
-          window.focus();
-          stop();
-        };
-      } catch (e) {
-        if (typeof console !== "undefined" && console.warn) console.warn("IncomingCall: Notification", e);
-      }
-    } else {
-      Notification.requestPermission().then((p) => {
-        if (p === "granted" && !stopped) {
-          try {
-            notification = new Notification("Входящий звонок", { body: name, tag: "ping-incoming-call", requireInteraction: true });
-            notification.onclick = () => {
-              window.focus();
-              stop();
-            };
-          } catch (e) {
-            if (typeof console !== "undefined" && console.warn) console.warn("IncomingCall: Notification", e);
-          }
-        }
-      });
-    }
-  }
+  attachNotification();
 
   return stop;
+}
+
+export function startIncomingCallAlert(callerName: string | null): () => void {
+  const name = callerName?.trim() || "Абонент";
+  return startRingingIncomingAlert({
+    notificationTitle: "Входящий звонок",
+    notificationBody: name,
+    notificationTag: "ping-incoming-call",
+  });
+}
+
+/** Входящий групповой аудио/видео созвон — тот же рингтон, что у личного звонка. */
+export function startGroupCallInviteAlert(params: {
+  chatLabel: string;
+  mediaType: "audio" | "video";
+  onNotificationClick?: () => void;
+}): () => void {
+  const label = params.chatLabel?.trim() || "Групповой чат";
+  const kind = params.mediaType === "video" ? "Видеозвонок в группе" : "Звонок в группе";
+  return startRingingIncomingAlert({
+    notificationTitle: kind,
+    notificationBody: label,
+    notificationTag: "ping-group-call-invite",
+    onNotificationClick: params.onNotificationClick,
+  });
 }
 
 /** Рингтон для звонящего (исходящий вызов). */
 export function startRingbackTone(): () => void {
   return startLoopingCallTone(0.9);
+}
+
+let lastNewMessageBrowserNotifAt = 0;
+
+/** Короткое системное уведомление, если вкладка в фоне (звук идёт отдельно через playIncomingChatMessageSound). */
+export function showNewChatMessageBrowserNotificationIfHidden(): void {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden") return;
+  if (!("Notification" in window) || Notification.permission === "denied") return;
+  const now = Date.now();
+  if (now - lastNewMessageBrowserNotifAt < 2800) return;
+  lastNewMessageBrowserNotifAt = now;
+  const title = "Новое сообщение";
+  const body = "Откройте приложение, чтобы прочитать.";
+  const show = () => {
+    try {
+      new Notification(title, { body, tag: "ping-new-chat-message" });
+    } catch (e) {
+      if (typeof console !== "undefined" && console.warn) console.warn("NewMessage: Notification", e);
+    }
+  };
+  if (Notification.permission === "granted") {
+    show();
+  } else {
+    void Notification.requestPermission().then((p) => {
+      if (p === "granted") show();
+    });
+  }
 }

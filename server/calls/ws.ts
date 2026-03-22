@@ -99,6 +99,14 @@ function clearDisconnectCleanupTimer(userId: string): void {
 export type ChatListUpdateOptions = {
   /** Подсказка клиенту: воспроизвести звук входящего, если чат не открыт (в т.ч. до подписки на новый чат). */
   incomingMessage?: { chatId: string; senderId: string };
+  /** Новая комната группового созвона — рингтон + уведомление как у личного звонка. */
+  groupCallInvite?: {
+    chatId: string;
+    roomId: string;
+    mediaType: "audio" | "video";
+    hostUserId: string;
+    chatTitle?: string | null;
+  };
 };
 
 /** Notify a user that their chat list changed (new chat, etc.) */
@@ -106,6 +114,9 @@ export function notifyChatListUpdate(userId: string, options?: ChatListUpdateOpt
   const payload: Record<string, unknown> = { type: "chat-list-update" };
   if (options?.incomingMessage) {
     payload.incomingMessage = options.incomingMessage;
+  }
+  if (options?.groupCallInvite) {
+    payload.groupCallInvite = options.groupCallInvite;
   }
   sendToUser(userId, payload);
 }
@@ -194,11 +205,14 @@ export function attachCallWebSocket(httpServer: HttpServer): void {
         // ── Chat subscriptions (shared transport) ───────────────
         if (type === "subscribe-chat") {
           const chatId = typeof parsed.chatId === "string" ? parsed.chatId : "";
-          if (chatId) {
+          if (!chatId) return;
+          // Только после проверки членства — иначе гонка: сообщения успевают уйти подписчику до removeSubscription.
+          try {
+            const members = await storage.getChatMemberIds(chatId);
+            if (!members.includes(userId)) return;
             addSubscription(chatId, ws);
-            storage.getChatMemberIds(chatId).then((members) => {
-              if (!members.includes(userId)) removeSubscription(chatId, ws);
-            }).catch(() => removeSubscription(chatId, ws));
+          } catch {
+            // чат не найден / ошибка БД — не подписываем
           }
           return;
         }

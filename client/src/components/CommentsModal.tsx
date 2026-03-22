@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { X, Send, Heart, MessageCircle } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { X, Send, Heart, MessageCircle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
-import { fetchComments, createComment, formatCommentTime, type CommentItem } from "@/lib/comments";
+import { fetchComments, createComment, deleteComment, formatCommentTime, type CommentItem } from "@/lib/comments";
 import { recordPostView } from "@/lib/posts";
 import { triggerLightHaptic } from "@/lib/capacitor-native";
 import { triggerSuccessFeedback } from "@/lib/micro-feedback";
@@ -22,19 +23,29 @@ interface CommentsModalProps {
   isOpen: boolean;
   onClose: () => void;
   postId: number | string | null;
+  /** Для инвалидации кеша постов автора и права автора удалять чужие комментарии в своём посте */
+  postAuthorId?: string | null;
 }
 
-export default function CommentsModal({ isOpen, onClose, postId }: CommentsModalProps) {
+export default function CommentsModal({ isOpen, onClose, postId, postAuthorId }: CommentsModalProps) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newComment, setNewComment] = useState("");
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const bumpPostQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+    if (postAuthorId) void queryClient.invalidateQueries({ queryKey: ["posts", "author", postAuthorId] });
+    if (postId != null) void queryClient.invalidateQueries({ queryKey: ["post", String(postId)] });
+  }, [postAuthorId, postId, queryClient]);
 
   useEffect(() => {
     if (!isOpen || postId == null) {
@@ -49,8 +60,8 @@ export default function CommentsModal({ isOpen, onClose, postId }: CommentsModal
       .then((list) => {
         if (!cancelled) setComments(list);
       })
-      .catch(() => {
-        if (!cancelled) setError("Не удалось загрузить комментарии");
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Не удалось загрузить комментарии");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -98,6 +109,25 @@ export default function CommentsModal({ isOpen, onClose, postId }: CommentsModal
       setError(e instanceof Error ? e.message : "Не удалось отправить комментарий");
     } finally {
       setSending(false);
+    }
+  };
+
+  const canDeleteComment = (c: CommentItem) =>
+    !!user?.id && (c.userId === user.id || (!!postAuthorId && postAuthorId === user.id));
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (postId == null || !user) return;
+    if (!window.confirm("Удалить этот комментарий?")) return;
+    setDeletingId(commentId);
+    setError(null);
+    try {
+      await deleteComment(postId, commentId);
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+      bumpPostQueries();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось удалить комментарий");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -184,7 +214,9 @@ export default function CommentsModal({ isOpen, onClose, postId }: CommentsModal
                       setLoading(true);
                       fetchComments(postId)
                         .then((list) => setComments(list))
-                        .catch(() => setError("Не удалось загрузить комментарии"))
+                        .catch((e) =>
+                          setError(e instanceof Error ? e.message : "Не удалось загрузить комментарии"),
+                        )
                         .finally(() => setLoading(false));
                     }
                   }}
@@ -232,6 +264,18 @@ export default function CommentsModal({ isOpen, onClose, postId }: CommentsModal
                       </button>
                     </div>
                     <div className="flex flex-col items-center gap-1 shrink-0 pt-1">
+                      {canDeleteComment(comment) ? (
+                        <TapScaleButton
+                          type="button"
+                          onClick={() => void handleDeleteComment(comment.id)}
+                          haptic
+                          disabled={deletingId === comment.id}
+                          className="p-1.5 rounded-full hover:bg-destructive/15 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center text-muted-foreground hover:text-destructive"
+                          aria-label="Удалить комментарий"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </TapScaleButton>
+                      ) : null}
                       <TapScaleButton
                         type="button"
                         onClick={() => toggleLike(comment.id)}

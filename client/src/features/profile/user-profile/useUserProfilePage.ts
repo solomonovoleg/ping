@@ -210,7 +210,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
     if (!apiProfile?.canMessage) return;
     try {
       const chat = await startDm(apiProfile.id);
-      setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+      setLocation(`/chat/${encodeURIComponent(chat.id)}`);
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : t.toast.chatStartFailed, variant: "destructive" });
     }

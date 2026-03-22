@@ -66,6 +66,8 @@ type Props = {
   isMe?: boolean;
   bubbleColorPreset?: BubbleColorPreset;
   transcript?: string | null;
+  /** Перевод расшифровки (при включённом переводе чата) */
+  translatedTranscript?: string | null;
   className?: string;
   /** Вызывается при завершении воспроизведения (для «слушать следующее») */
   onEnded?: () => void;
@@ -73,7 +75,16 @@ type Props = {
   autoPlay?: boolean;
 };
 
-export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "primary", transcript, className, onEnded: onEndedProp, autoPlay }: Props) {
+export function VoiceMessagePlayer({
+  src,
+  isMe = true,
+  bubbleColorPreset = "primary",
+  transcript,
+  translatedTranscript,
+  className,
+  onEnded: onEndedProp,
+  autoPlay,
+}: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const blobUrlRef = useRef<string | null>(null);
   const hasSetSrcRef = useRef(false);
@@ -350,7 +361,7 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
           </div>
         </div>
       </div>
-      {transcript?.trim() && (
+      {(transcript?.trim() || translatedTranscript?.trim()) && (
         <div className="mt-1">
           <button
             type="button"
@@ -361,9 +372,14 @@ export function VoiceMessagePlayer({ src, isMe = true, bubbleColorPreset = "prim
             {transcriptOpen ? "Скрыть текст" : "Показать текст"}
           </button>
           {transcriptOpen && (
-            <p className="mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
-              {transcript.trim()}
-            </p>
+            <div className="mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
+              <p>{(translatedTranscript?.trim() || transcript?.trim()) ?? ""}</p>
+              {translatedTranscript?.trim() &&
+              transcript?.trim() &&
+              translatedTranscript.trim() !== transcript.trim() ? (
+                <p className="mt-1 text-[10px] opacity-75">Оригинал: {transcript.trim()}</p>
+              ) : null}
+            </div>
           )}
         </div>
       )}

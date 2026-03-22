@@ -29,6 +29,8 @@ export const messages = pgTable("messages", {
   senderId: varchar("sender_id").references(() => users.id, { onDelete: "set null" }),
   type: text("type", { enum: messageTypeEnum }).notNull().default("text"),
   content: text("content").notNull(),
+  /** Расшифровка голосового / видеокружка (ASR), затем переводится как текст при включённом переводе чата */
+  transcript: text("transcript"),
   // @ts-expect-error TS7024 - circular reference in callback
   replyToId: varchar("reply_to_id").references(() => messages.id, { onDelete: "set null" }),
   /** Пересланное сообщение: откуда (id сообщения-источника). */

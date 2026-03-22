@@ -8,14 +8,24 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/contexts/AuthContext";
-import { updateProfile, uploadAvatar, uploadCover } from "@/lib/auth";
+import { updateProfile, uploadAvatar, uploadCover, normalizeGenderFromApi } from "@/lib/auth";
 import { resolveUrl } from "@/lib/api-base";
 import { useToast } from "@/hooks/use-toast";
 import { AvatarCropModal } from "@/components/AvatarCropModal";
+import { ProfileCoverAdjustModal } from "@/components/ProfileCoverAdjustModal";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import type { Gender } from "@shared/schema";
 import { NAME_MAX_LENGTH, NICKNAME_MAX_LENGTH } from "@shared/schema";
 import { CitySuggestInput } from "@/components/CitySuggestInput";
+import { UserAvatar } from "@/components/UserAvatar";
+import {
+  PULSE_PROFILE_AVATAR_INNER_PX,
+  PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX,
+} from "@/features/profile/pulse-profile";
+import { fetchImageAsDataUrl } from "@/lib/profile-cover-editor";
+import { uploadPostMedia, type PostVideoTrimUpload } from "@/lib/posts";
+import { AVATAR_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { PostVideoTrimmerModal } from "@/features/posts/video-trim/PostVideoTrimmerModal";
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "Мужской" },
@@ -23,13 +33,9 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "other", label: "Другое" },
 ];
 
-function normalizeGender(value: unknown): Gender | "" {
-  if (typeof value !== "string") return "";
-  const v = value.trim().toLowerCase();
-  if (v === "male" || v === "мужской") return "male";
-  if (v === "female" || v === "женский") return "female";
-  if (v === "other" || v === "другое") return "other";
-  return "";
+function genderForForm(raw: unknown): Gender | "" {
+  const g = normalizeGenderFromApi(raw);
+  return g === "male" || g === "female" || g === "other" ? g : "";
 }
 
 export default function EditProfile() {
@@ -50,10 +56,13 @@ export default function EditProfile() {
   const [editCoverUrl, setEditCoverUrl] = useState("");
   const [editShowCover, setEditShowCover] = useState(true);
   const [avatarCropDataUrl, setAvatarCropDataUrl] = useState<string | null>(null);
+  const [avatarVideoTrimFile, setAvatarVideoTrimFile] = useState<File | null>(null);
+  const [avatarVideoTrimOpen, setAvatarVideoTrimOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverImageError, setCoverImageError] = useState(false);
+  const [coverAdjustDataUrl, setCoverAdjustDataUrl] = useState<string | null>(null);
   const [avatarImageError, setAvatarImageError] = useState(false);
   const [error, setError] = useState("");
 
@@ -67,7 +76,7 @@ export default function EditProfile() {
     setEditDisplayName((user.displayName ?? "").slice(0, NAME_MAX_LENGTH));
     setEditSurname((user.surname ?? "").slice(0, NAME_MAX_LENGTH));
     setEditNickname(((user as { nickname?: string | null }).nickname ?? "").trim().replace(/^@+/, "").slice(0, NICKNAME_MAX_LENGTH));
-    setEditGender(normalizeGender(user.gender));
+    setEditGender(genderForForm(user.gender));
     setEditBirthDate(user.birthDate ?? "");
     setEditCity(((user as { city?: string | null }).city ?? "").trim());
     setEditAvatarUrl(user.avatarUrl ?? "");
@@ -80,16 +89,54 @@ export default function EditProfile() {
     setAvatarImageError(false);
   }, [user]);
 
-  const handleEditAvatarFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAvatarCropDataUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
-  }, []);
+  const handleEditAvatarFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      e.target.value = "";
+      if (file.type.startsWith("video/") || /\.(mp4|webm|mov|m4v|3gp)$/i.test(file.name)) {
+        setAvatarVideoTrimFile(file);
+        setAvatarVideoTrimOpen(true);
+        return;
+      }
+      if (!isLikelyImageFile(file)) {
+        toast({ title: "Выберите изображение или видео", variant: "destructive" });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAvatarCropDataUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    },
+    [isLikelyImageFile, toast],
+  );
+
+  const onAvatarVideoTrimConfirm = useCallback(
+    async (trim: PostVideoTrimUpload) => {
+      const file = avatarVideoTrimFile;
+      if (!file) return;
+      setAvatarVideoTrimOpen(false);
+      setAvatarVideoTrimFile(null);
+      setUploadingAvatar(true);
+      try {
+        const url = await uploadPostMedia(file, trim, { trimMaxSeconds: AVATAR_VIDEO_MAX_SECONDS });
+        setEditAvatarUrl(url);
+        setEditAvatarPreview(url);
+        setAvatarImageError(false);
+        toast({ title: "Видео загружено", description: "Нажмите «Сохранить», чтобы применить живой аватар." });
+      } catch (err) {
+        toast({
+          title: "Не удалось загрузить видео",
+          description: err instanceof Error ? err.message : "Попробуйте другой файл",
+          variant: "destructive",
+        });
+      } finally {
+        setUploadingAvatar(false);
+      }
+    },
+    [avatarVideoTrimFile, toast],
+  );
 
   const clearEditAvatar = useCallback(() => {
     setEditAvatarUrl("");
@@ -162,35 +209,74 @@ export default function EditProfile() {
     ],
   );
 
-  const handleCoverFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!isLikelyImageFile(file)) {
+  const handleCoverFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (!isLikelyImageFile(file)) {
+        toast({
+          title: "Неподдерживаемый файл",
+          description: "Выберите изображение (JPG, PNG, WebP, HEIC/HEIF).",
+          variant: "destructive",
+        });
+        e.target.value = "";
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setCoverAdjustDataUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    },
+    [isLikelyImageFile]
+  );
+
+  const openCoverAdjustExisting = useCallback(async () => {
+    const raw = editCoverUrl.trim();
+    if (!raw) {
       toast({
-        title: "Неподдерживаемый файл",
-        description: "Выберите изображение (JPG, PNG, WebP, HEIC/HEIF).",
+        title: "Нет обложки",
+        description: "Сначала загрузите изображение.",
         variant: "destructive",
       });
-      e.target.value = "";
       return;
     }
-    setUploadingCover(true);
-    uploadCover(file)
-      .then((url) => {
-        setEditCoverUrl(url);
-        setCoverImageError(false);
-        toast({ title: "Шапка загружена" });
-      })
-      .catch((err) => {
-        setCoverImageError(true);
-        const msg = err instanceof Error ? err.message : "Проверьте интернет и попробуйте снова";
-        toast({ title: "Ошибка загрузки шапки", description: msg, variant: "destructive" });
-      })
-      .finally(() => {
-        setUploadingCover(false);
-        e.target.value = "";
+    if (raw.startsWith("data:")) {
+      setCoverAdjustDataUrl(raw);
+      return;
+    }
+    try {
+      const dataUrl = await fetchImageAsDataUrl(resolveUrl(raw));
+      setCoverAdjustDataUrl(dataUrl);
+    } catch {
+      toast({
+        title: "Не удалось открыть редактор",
+        description: "Проверьте сеть или загрузите шапку заново.",
+        variant: "destructive",
       });
-  }, [isLikelyImageFile, toast]);
+    }
+  }, [editCoverUrl, toast]);
+
+  const handleCoverAdjustConfirm = useCallback(
+    (file: File) => {
+      setCoverAdjustDataUrl(null);
+      setUploadingCover(true);
+      uploadCover(file)
+        .then((url) => {
+          setEditCoverUrl(url);
+          setCoverImageError(false);
+          toast({ title: "Шапка загружена" });
+        })
+        .catch((err) => {
+          setCoverImageError(true);
+          const msg = err instanceof Error ? err.message : "Проверьте интернет и попробуйте снова";
+          toast({ title: "Ошибка загрузки шапки", description: msg, variant: "destructive" });
+        })
+        .finally(() => setUploadingCover(false));
+    },
+    [toast]
+  );
 
   if (!user) {
     return (
@@ -243,12 +329,34 @@ export default function EditProfile() {
                 {uploadingCover && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white text-sm">Загрузка…</div>
                 )}
-                <div className="absolute bottom-2 right-4 flex gap-2">
+                <div className="absolute bottom-2 left-2 right-2 flex flex-wrap items-center justify-end gap-2 sm:left-auto sm:right-4">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="min-h-[var(--uix-touch-min)] bg-background/90 shadow-sm"
+                    onClick={() => void openCoverAdjustExisting()}
+                    disabled={uploadingCover}
+                  >
+                    Положение и масштаб
+                  </Button>
                   <label className="cursor-pointer">
                     <input type="file" accept="image/*" className="sr-only" onChange={handleCoverFile} disabled={uploadingCover} />
-                    <span className="inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent">Заменить</span>
+                    <span className="inline-flex min-h-[var(--uix-touch-min)] items-center justify-center rounded-md border border-input bg-background/90 px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-accent">
+                      Заменить
+                    </span>
                   </label>
-                  <Button type="button" variant="outline" size="sm" onClick={() => { setEditCoverUrl(""); setCoverImageError(false); }} disabled={uploadingCover}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="min-h-[var(--uix-touch-min)] bg-background/90 shadow-sm"
+                    onClick={() => {
+                      setEditCoverUrl("");
+                      setCoverImageError(false);
+                    }}
+                    disabled={uploadingCover}
+                  >
                     Удалить
                   </Button>
                 </div>
@@ -318,23 +426,47 @@ export default function EditProfile() {
           </div>
 
           <div className="flex flex-col items-center gap-3">
-            <Label>Аватар</Label>
+            <div className="text-center space-y-1">
+              <Label>Аватар</Label>
+              <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-snug">
+                Одно фото сохраняется <span className="font-medium text-foreground">квадратом</span>: в шапке профиля — сквиркл, в чатах и списках — круг (маска в интерфейсе).
+              </p>
+            </div>
             <div className="flex items-center gap-3 flex-wrap justify-center">
               {editAvatarPreview ? (
                 <>
-                  <div className="relative">
+                  <div className="relative rounded-2xl px-2 py-2">
                     {avatarImageError ? (
-                      <div className="h-20 w-20 rounded-full border-2 border-destructive/50 bg-destructive/10 flex items-center justify-center text-destructive text-xs text-center px-1">Ошибка загрузки</div>
+                      <div className="h-20 w-20 rounded-full border-2 border-destructive/50 bg-destructive/10 flex items-center justify-center text-destructive text-xs text-center px-1 mx-auto">
+                        Ошибка загрузки
+                      </div>
                     ) : (
-                    <img
-                      src={resolveUrl(editAvatarPreview)}
-                      alt=""
-                      className="h-20 w-20 rounded-full object-cover border-2 border-border"
-                      onError={() => setAvatarImageError(true)}
-                    />
+                      <div className="flex items-end justify-center gap-6">
+                        <div className="flex flex-col items-center gap-1">
+                          <UserAvatar
+                            avatarUrl={editAvatarPreview}
+                            displayName={editDisplayName}
+                            seed={user.id}
+                            size={PULSE_PROFILE_AVATAR_INNER_PX}
+                            cornerRadius={PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX}
+                            className="ring-2 ring-border"
+                          />
+                          <span className="text-[10px] text-muted-foreground">Профиль</span>
+                        </div>
+                        <div className="flex flex-col items-center gap-1">
+                          <UserAvatar
+                            avatarUrl={editAvatarPreview}
+                            displayName={editDisplayName}
+                            seed={user.id}
+                            size={56}
+                            className="ring-2 ring-border"
+                          />
+                          <span className="text-[10px] text-muted-foreground">Чаты</span>
+                        </div>
+                      </div>
                     )}
                     {uploadingAvatar && (
-                      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 text-white text-xs">
+                      <span className="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/70 text-foreground text-xs font-medium backdrop-blur-[2px]">
                         Загрузка…
                       </span>
                     )}
@@ -347,12 +479,12 @@ export default function EditProfile() {
               <label className="cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v"
                   className="sr-only"
                   onChange={handleEditAvatarFile}
                 />
                 <span className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
-                  {editAvatarPreview ? "Заменить фото" : "Выбрать фото"}
+                  {editAvatarPreview ? "Заменить" : "Фото или видео (до 4 с)"}
                 </span>
               </label>
             </div>
@@ -398,9 +530,15 @@ export default function EditProfile() {
           </div>
 
           <div className="space-y-2">
-            <Label>Пол *</Label>
-            <Select value={editGender || undefined} onValueChange={(v) => setEditGender((v && ["male", "female", "other"].includes(v) ? v : "") as Gender | "")} required>
-              <SelectTrigger>
+            <Label htmlFor="editGender">Пол *</Label>
+            <Select
+              value={editGender === "" ? undefined : editGender}
+              onValueChange={(v) => {
+                if (v === "male" || v === "female" || v === "other") setEditGender(v);
+              }}
+              required
+            >
+              <SelectTrigger id="editGender" className="min-h-[var(--uix-touch-min)]">
                 <SelectValue placeholder="Выберите пол" />
               </SelectTrigger>
               <SelectContent>
@@ -424,15 +562,13 @@ export default function EditProfile() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="editCity">Город (по желанию)</Label>
-            <p className="text-sm text-muted-foreground">
-              Подсказки из открытых данных (Photon/OSM). Можно выбрать из списка или ввести свой вариант.
-            </p>
+            <Label htmlFor="editCity">Введите город</Label>
             <CitySuggestInput
               id="editCity"
               value={editCity}
               onChange={setEditCity}
               disabled={saving || uploadingAvatar || uploadingCover}
+              placeholder="Город"
             />
           </div>
 
@@ -486,6 +622,14 @@ export default function EditProfile() {
         </form>
       </div>
 
+      {coverAdjustDataUrl ? (
+        <ProfileCoverAdjustModal
+          imageDataUrl={coverAdjustDataUrl}
+          onCancel={() => setCoverAdjustDataUrl(null)}
+          onConfirm={handleCoverAdjustConfirm}
+        />
+      ) : null}
+
       {avatarCropDataUrl && (
         <AvatarCropModal
           imageDataUrl={avatarCropDataUrl}
@@ -509,6 +653,19 @@ export default function EditProfile() {
           onCancel={() => setAvatarCropDataUrl(null)}
         />
       )}
+
+      <PostVideoTrimmerModal
+        open={avatarVideoTrimOpen}
+        file={avatarVideoTrimFile}
+        maxSegmentSeconds={AVATAR_VIDEO_MAX_SECONDS}
+        title="Живой аватар"
+        description={`Выберите фрагмент до ${AVATAR_VIDEO_MAX_SECONDS} сек. Видео будет обрезано и перекодировано.`}
+        onOpenChange={(o) => {
+          setAvatarVideoTrimOpen(o);
+          if (!o) setAvatarVideoTrimFile(null);
+        }}
+        onConfirm={(trim) => void onAvatarVideoTrimConfirm(trim)}
+      />
     </div>
   );
 }

@@ -20,6 +20,54 @@ export interface TranslateResult {
   detectedLang: string;
 }
 
+/** Опционально: предыдущие реплики в чате для снятия двусмысленности (местоимения, сленг). */
+export type TranslateOptions = {
+  chatId?: string;
+  /** Время сообщения, которое переводим — в контекст попадают только более ранние. */
+  anchorCreatedAt?: Date;
+};
+
+/** Сколько предыдущих реплик подмешивать в промпт (смысл, ирония, отсылки). */
+const CONTEXT_MSG_CAP = 10;
+const CONTEXT_LINE_MAX = 420;
+
+async function loadPriorTextLinesForTranslate(
+  chatId: string,
+  messageId: string,
+  anchorCreatedAt: Date,
+): Promise<string[]> {
+  if (!process.env.DATABASE_URL) return [];
+  try {
+    const { getDb } = await import("../db");
+    const { messages } = await import("@shared/schema");
+    const { eq, and, lt, ne, desc } = await import("drizzle-orm");
+    const db = getDb();
+    const rows = await db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          eq(messages.type, "text"),
+          ne(messages.id, messageId),
+          lt(messages.createdAt, anchorCreatedAt),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(CONTEXT_MSG_CAP);
+
+    const lines: string[] = [];
+    for (const r of rows) {
+      const t = (r.content ?? "").trim().replace(/\s+/g, " ");
+      if (!t) continue;
+      lines.push(t.length > CONTEXT_LINE_MAX ? `${t.slice(0, CONTEXT_LINE_MAX)}…` : t);
+    }
+    return lines.reverse();
+  } catch {
+    return [];
+  }
+}
+
 // --------------- In-memory prefs cache (backed by DB via routes) ---------------
 
 export type TranslatePref = { enabled: boolean; targetLang: string };
@@ -80,7 +128,26 @@ export function setCachedTranslation(messageId: string, targetLang: string, resu
 
 // --------------- OpenRouter ---------------
 
-async function callOpenRouterTranslate(text: string, targetLang: string): Promise<TranslateResult | null> {
+/** Убрать типичные преамбулы, если модель нарушила формат. */
+function normalizeModelTranslationOutput(raw: string): string {
+  let t = raw.trim().replace(/^["']|["']$/g, "");
+  const oneLinePref = /^(translation|перевод|here'?s the translation|the translation is)\s*[:：]\s*/i;
+  t = t.replace(oneLinePref, "").trim();
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length >= 2 && lines[0].length < 56 && oneLinePref.test(lines[0])) {
+    return lines.slice(1).join("\n").trim();
+  }
+  if (lines.length >= 2 && lines[0].length < 24 && /^(translation|перевод)\b/i.test(lines[0])) {
+    return lines.slice(1).join("\n").trim();
+  }
+  return t;
+}
+
+async function callOpenRouterTranslate(
+  text: string,
+  targetLang: string,
+  priorLines?: string[],
+): Promise<TranslateResult | null> {
   const { callOpenRouter, isOpenRouterConfigured } = await import("../lib/openrouter");
   if (!isOpenRouterConfigured()) {
     if (process.env.TRANSLATE_DEBUG === "1") {
@@ -91,28 +158,64 @@ async function callOpenRouterTranslate(text: string, targetLang: string): Promis
   const model =
     process.env.OPENROUTER_TRANSLATE_MODEL?.trim() ||
     process.env.OPENROUTER_MODEL?.trim() ||
-    "openai/gpt-3.5-turbo";
+    "openai/gpt-4o-mini";
   const label = TARGET_LANG_LABEL[targetLang] ?? targetLang;
+  const hasContext = priorLines && priorLines.length > 0;
+  const systemPrompt =
+    `You translate mobile instant messages (messengers: short, informal lines).
+
+Primary goal: convey what the sender MEANT — intent, implication, and emotional tone — not a dictionary or word-for-word gloss. ` +
+    `Write the way a native ${label} speaker would naturally type in the same register (casual, slang, humor, irritation, affection) as the original. ` +
+    `Map idioms and fixed expressions to natural equivalents in ${label}; avoid literal calques that sound wooden or wrong.
+
+Use earlier lines in the thread only to resolve references (who/what), subtext, and tone. Do not copy or summarize them into your answer.
+
+Hard rules:
+- Do not invent facts, names, or details not present in the message you translate.
+- Do not explain the joke or add apologies; just produce the message as the user would send it.
+- Keep emojis, @mentions, URLs, and numbers as in the source unless grammar in ${label} requires a small fix.
+- If that message is already entirely in ${label}, return it unchanged (same wording).
+
+Output: ONLY the translated message text — one chat line or one short paragraph like a real reply. No quotes, no "Translation:", no markdown, no bullets, no notes.`;
+
+  const userBlock = hasContext
+    ? [
+        `Earlier messages in the same chat (oldest first). Use for context and tone only; your output must be ONLY the translation of the final line below.`,
+        "",
+        ...priorLines.map((line, i) => `${i + 1}. ${line}`),
+        "",
+        `---`,
+        `Translate the following line into ${label} (BCP-47: ${targetLang}). Output nothing else:`,
+        text,
+      ].join("\n")
+    : [
+        `Translate the following chat line into ${label} (BCP-47: ${targetLang}).`,
+        `Prioritize natural meaning and how a native speaker would say it in a messenger, not literal words.`,
+        ``,
+        text,
+      ].join("\n");
   try {
     const out = await callOpenRouter(
       [
         {
           role: "system",
-          content:
-            "You translate instant-messaging text. Reply with ONLY the translated text: no quotes, no markdown, no explanation.",
+          content: systemPrompt,
         },
         {
           role: "user",
-          content: `Translate into ${label} (language code ${targetLang}).\n\n${text}`,
+          content: userBlock,
         },
       ],
       {
         model,
-        maxTokens: Math.min(1024, Math.ceil(text.length / 2) + 128),
-        temperature: 0.2,
+        maxTokens: Math.min(
+          2048,
+          Math.ceil(text.length / 2) + (hasContext ? 320 : 160) + (hasContext ? priorLines!.join("").length / 8 : 0),
+        ),
+        temperature: 0.28,
       },
     );
-    const trimmed = out.trim().replace(/^["']|["']$/g, "");
+    const trimmed = normalizeModelTranslationOutput(out);
     if (!trimmed) return null;
     return { translatedText: trimmed, detectedLang: "auto" };
   } catch (e) {
@@ -125,8 +228,9 @@ export async function callProvider(
   text: string,
   targetLang: string,
   _sourceLang?: string,
+  priorLines?: string[],
 ): Promise<TranslateResult | null> {
-  return callOpenRouterTranslate(text, targetLang);
+  return callOpenRouterTranslate(text, targetLang, priorLines);
 }
 
 /**
@@ -140,13 +244,22 @@ export async function translate(
   targetLang: string,
   messageId?: string,
   sourceLang?: string,
+  options?: TranslateOptions,
 ): Promise<TranslateResult | null> {
-  if (messageId) {
+  let priorLines: string[] | undefined;
+  const anchor = options?.anchorCreatedAt;
+  const anchorOk = anchor != null && !Number.isNaN(anchor.getTime());
+  if (messageId && options?.chatId && anchorOk) {
+    priorLines = await loadPriorTextLinesForTranslate(options.chatId, messageId, anchor);
+  }
+  const useContext = priorLines && priorLines.length > 0;
+
+  if (!useContext && messageId) {
     const cached = getCachedTranslation(messageId, targetLang);
     if (cached) return cached;
   }
 
-  if (messageId && process.env.DATABASE_URL) {
+  if (!useContext && messageId && process.env.DATABASE_URL) {
     try {
       const { getDb } = await import("../db");
       const { messageTranslations } = await import("@shared/schema");
@@ -165,7 +278,7 @@ export async function translate(
     } catch {}
   }
 
-  const result = await callProvider(text, targetLang, sourceLang);
+  const result = await callProvider(text, targetLang, sourceLang, useContext ? priorLines : undefined);
   if (!result) return null;
 
   if (messageId) {
@@ -175,12 +288,30 @@ export async function translate(
         const { getDb } = await import("../db");
         const { messageTranslations } = await import("@shared/schema");
         const db = getDb();
-        await db.insert(messageTranslations).values({
-          messageId,
-          targetLang,
-          translatedText: result.translatedText,
-          detectedLang: result.detectedLang,
-        }).onConflictDoNothing();
+        if (useContext) {
+          await db
+            .insert(messageTranslations)
+            .values({
+              messageId,
+              targetLang,
+              translatedText: result.translatedText,
+              detectedLang: result.detectedLang,
+            })
+            .onConflictDoUpdate({
+              target: [messageTranslations.messageId, messageTranslations.targetLang],
+              set: {
+                translatedText: result.translatedText,
+                detectedLang: result.detectedLang,
+              },
+            });
+        } else {
+          await db.insert(messageTranslations).values({
+            messageId,
+            targetLang,
+            translatedText: result.translatedText,
+            detectedLang: result.detectedLang,
+          }).onConflictDoNothing();
+        }
       } catch {}
     }
   }

@@ -99,7 +99,7 @@ export function GlobalSearch({
       setOpen(false);
       setQuery("");
       onClear?.();
-      setLocation(`/chat/${chat.otherMember?.publicId ?? chat.id}`);
+      setLocation(`/chat/${encodeURIComponent(chat.id)}`);
     } catch (e) {
       toast({
         title: e instanceof Error ? e.message : "Не удалось начать диалог",

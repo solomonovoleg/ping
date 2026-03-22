@@ -8,14 +8,15 @@ export function formatPostVideoTrimTime(sec: number): string {
   return `${m}:${r.toString().padStart(2, "0")}`;
 }
 
-/** Сжимает [start,end] в допустимые границы по длительности ролика и лимитам поста. */
+/** Сжимает [start,end] в допустимые границы по длительности ролика и лимиту сегмента (пост / аватар). */
 export function normalizePostVideoTrimRange(
   startSec: number,
   endSec: number,
   durationSec: number,
+  maxSegmentSec: number = POST_VIDEO_MAX_SECONDS,
 ): [number, number] {
   const MIN = POST_VIDEO_MIN_SEGMENT_SECONDS;
-  const MAX = POST_VIDEO_MAX_SECONDS;
+  const MAX = maxSegmentSec;
   let s = startSec;
   let e = endSec;
   s = Math.max(0, s);

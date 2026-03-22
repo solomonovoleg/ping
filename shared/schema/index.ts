@@ -22,6 +22,7 @@ export * from "./saved-messages";
 export * from "./message-hidden";
 export * from "./tracks";
 export * from "./chat-folders";
+export * from "./chat-member-prefs";
 export * from "./scheduled-messages";
 export * from "./chat-vibe";
 export * from "./message-translations";

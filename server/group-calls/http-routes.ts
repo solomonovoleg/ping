@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { requireAuth, getUserId } from "../auth/session";
 import { ensureCallHistorySession } from "../call-transcripts/service";
+import { notifyChatListUpdate } from "../calls/ws";
 import { storage } from "../storage";
 import { isGroupCallsServerEnabled } from "./flags";
 import { createOrReuseRoom, getActiveRoomIdForChat, getRoom } from "./room-runtime";
@@ -48,6 +49,20 @@ export function registerGroupCallRoutes(app: Express): void {
           });
         } catch (err) {
           console.error("[group-calls] ensureCallHistorySession failed (созвон в комнате всё равно возможен):", err);
+        }
+        const chatTitle =
+          typeof chat.name === "string" && chat.name.trim() ? chat.name.trim() : null;
+        for (const memberId of members) {
+          if (memberId === userId) continue;
+          notifyChatListUpdate(memberId, {
+            groupCallInvite: {
+              chatId,
+              roomId: room.roomId,
+              mediaType,
+              hostUserId: userId,
+              chatTitle,
+            },
+          });
         }
       }
       res.json({

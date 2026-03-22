@@ -28,7 +28,10 @@ function normalizeDbUrl(u) {
 }
 
 const { Client } = require("pg");
-const sqlPath = path.join(process.cwd(), "migrations/0016_profile_pins.sql");
+const sqlPaths = [
+  path.join(process.cwd(), "migrations/0016_profile_pins.sql"),
+  path.join(process.cwd(), "migrations/0017_profile_pin_media.sql"),
+];
 
 async function main() {
   const url = normalizeDbUrl(process.env.DATABASE_URL);
@@ -36,11 +39,14 @@ async function main() {
     console.error("DATABASE_URL not set");
     process.exit(1);
   }
-  const SQL = fs.readFileSync(sqlPath, "utf-8");
   const client = new Client({ connectionString: url.trim() });
   await client.connect();
   try {
-    await client.query(SQL);
+    for (const sqlPath of sqlPaths) {
+      if (!fs.existsSync(sqlPath)) continue;
+      const SQL = fs.readFileSync(sqlPath, "utf-8");
+      await client.query(SQL);
+    }
     console.log("profile_pin_folders, profile_pin_items ready");
   } finally {
     await client.end();

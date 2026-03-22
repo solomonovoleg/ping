@@ -5,6 +5,7 @@ import {
   MAX_MESSAGES_PAGE,
   searchMessagesInChats,
 } from "./repository";
+import { tryGlobalMemorySearch } from "./memory-search";
 import { toAiMessageDto, type AiMessageDto } from "./serializers";
 
 import { callOpenRouter as callOpenRouterShared } from "../lib/openrouter";
@@ -151,15 +152,14 @@ function buildCapabilityHelpReply(userInput: string): string {
   return [
     `${prefix}Я могу это сделать через доступный функционал, давайте уточним команду.`,
     "Что умею прямо сейчас:",
-    "• искать фразы по вашим чатам;",
-    "• подбирать нужный чат по имени собеседника/названию группы;",
-    "• выдавать найденные фрагменты сообщений с датой.",
-    "• по темам, которые система накопила из ваших чатов (малые порции, без загрузки всей переписки в модель).",
+    "• искать по всем вашим чатам по смыслу (напишите: «найди сообщение про …», «где я писал про …»);",
+    "• искать фразу в одном чате: «найди <фраза> в чате с <имя>»;",
+    "• подбирать чат по имени и показывать найденные фрагменты с датой.",
+    "• по темам, которые система накопила из переписок (малые порции, без загрузки всего архива в модель).",
     "",
-    "Напишите в одном из форматов:",
-    "• «найди <фраза> в чате с <имя>»",
-    "• «поиск по чату с <имя>: <фраза>»",
-    "• «в чате с <имя> найди <фраза>»",
+    "Примеры:",
+    "• «найди сообщение про покупки в субботу»",
+    "• «найди договор в чате с Олег»",
   ].join("\n");
 }
 
@@ -209,25 +209,58 @@ export async function sendAiMessage(userId: string, content: string): Promise<Se
   const userMsg = await createAiMessage(userId, "user", content);
 
   const scopedSearchReply = await buildScopedChatSearchReply(userId, content);
-  const assistantContent = scopedSearchReply
-    ? scopedSearchReply
-    : await (async () => {
-        const recent = await fetchAiMessages(userId, CONTEXT_MESSAGES_COUNT, null);
-        const openRouterMessages: { role: "user" | "assistant" | "system"; content: string }[] = [
-          {
-            role: "system",
-            content:
-              "Ты AI OVER внутри PING MOOT. Никогда не отвечай в стиле «не умею/нет доступа», если запрос частично решаем. " +
-              "Если не хватает точности, предложи ближайший рабочий формат команды и следующий шаг. " +
-              "Для поиска по чатам предлагай: «найди <фраза> в чате с <имя>» или «поиск по чату с <имя>: <фраза>». " +
-              "Отвечай кратко, по-русски, с практичным предложением действий.",
-          },
-        ];
-        openRouterMessages.push(...recent.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
-        openRouterMessages.push({ role: "user" as const, content });
-        const raw = await callOpenRouter(openRouterMessages);
-        return needsCapabilityFallback(raw) ? buildCapabilityHelpReply(content) : raw;
-      })();
+  if (scopedSearchReply) {
+    const assistantMsg = await createAiMessage(userId, "assistant", scopedSearchReply);
+    return {
+      userMessage: { id: userMsg.id, role: "user", content, createdAt: userMsg.createdAt },
+      assistantMessage: {
+        id: assistantMsg.id,
+        role: "assistant",
+        content: scopedSearchReply,
+        createdAt: assistantMsg.createdAt,
+        payload: null,
+      },
+    };
+  }
+
+  const memorySearch = await tryGlobalMemorySearch(userId, content);
+  if (memorySearch) {
+    const assistantMsg = await createAiMessage(
+      userId,
+      "assistant",
+      memorySearch.summary,
+      memorySearch.payload,
+    );
+    return {
+      userMessage: { id: userMsg.id, role: "user", content, createdAt: userMsg.createdAt },
+      assistantMessage: {
+        id: assistantMsg.id,
+        role: "assistant",
+        content: memorySearch.summary,
+        createdAt: assistantMsg.createdAt,
+        payload: memorySearch.payload,
+      },
+    };
+  }
+
+  const assistantContent = await (async () => {
+    const recent = await fetchAiMessages(userId, CONTEXT_MESSAGES_COUNT, null);
+    const openRouterMessages: { role: "user" | "assistant" | "system"; content: string }[] = [
+      {
+        role: "system",
+        content:
+          "Ты AI OVER внутри PING MOOT. Никогда не отвечай в стиле «не умею/нет доступа», если запрос частично решаем. " +
+          "Если не хватает точности, предложи ближайший рабочий формат команды и следующий шаг. " +
+          "Для поиска по одному чату: «найди <фраза> в чате с <имя>». " +
+          "Для поиска сразу по всем перепискам пользователь может написать, например: «найди сообщение про …» или «где я писал про …». " +
+          "Отвечай кратко, по-русски, с практичным предложением действий.",
+      },
+    ];
+    openRouterMessages.push(...recent.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+    openRouterMessages.push({ role: "user" as const, content });
+    const raw = await callOpenRouter(openRouterMessages);
+    return needsCapabilityFallback(raw) ? buildCapabilityHelpReply(content) : raw;
+  })();
   const assistantMsg = await createAiMessage(userId, "assistant", assistantContent);
 
   return {
@@ -237,6 +270,7 @@ export async function sendAiMessage(userId: string, content: string): Promise<Se
       role: "assistant",
       content: assistantContent,
       createdAt: assistantMsg.createdAt,
+      payload: null,
     },
   };
 }

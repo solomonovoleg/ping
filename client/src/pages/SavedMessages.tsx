@@ -67,7 +67,11 @@ export default function SavedMessages() {
             {list.map((item) => (
               <li key={`${item.chatId}-${item.messageId}`}>
                 <TapScaleDiv
-                  onClick={() => setLocation(`/chat/${item.chatId}?messageId=${item.messageId}`)}
+                  onClick={() =>
+                    setLocation(
+                      `/chat/${encodeURIComponent(item.chatId)}?messageId=${encodeURIComponent(item.messageId)}`,
+                    )
+                  }
                   className="uix-list-row flex flex-col gap-0.5 p-3 rounded-xl"
                 >
                   <span className="text-xs text-muted-foreground">{item.chatName}</span>

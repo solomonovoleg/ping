@@ -24,7 +24,7 @@ export type ProfilePinFolderRow = {
 
 export type ProfilePinItemRow = {
   id: string;
-  kind: "post" | "story";
+  kind: "post" | "story" | "media";
   refId: string;
   createdAt: string;
   previewUrl: string | null;
@@ -33,6 +33,11 @@ export type ProfilePinItemRow = {
   likesCount: number;
   text: string;
 };
+
+export type AddProfilePinItemPayload =
+  | { kind: "post"; refId: string }
+  | { kind: "story"; refId: string }
+  | { kind: "media"; mediaUrl: string; mediaIsVideo: boolean };
 
 export async function fetchProfilePinFolders(profileRouteId: string): Promise<ProfilePinFolderSummary[]> {
   const res = await apiFetch(
@@ -104,12 +109,16 @@ export async function deleteProfilePinFolder(folderId: string) {
   }
 }
 
-export async function addProfilePinItem(folderId: string, kind: "post" | "story", refId: string) {
+export async function addProfilePinItem(folderId: string, payload: AddProfilePinItemPayload) {
+  const body =
+    payload.kind === "media"
+      ? { kind: "media", mediaUrl: payload.mediaUrl, mediaIsVideo: payload.mediaIsVideo }
+      : { kind: payload.kind, refId: payload.refId };
   const res = await apiFetch(`${API}/profile-pins/folders/${encodeURIComponent(folderId)}/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ kind, refId }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));

@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MapPin, Loader2 } from "lucide-react";
 import { fetchCitySuggestions } from "@/lib/geo";
 import { cn } from "@/lib/utils";
 import { PROFILE_CITY_MAX_LENGTH } from "@shared/schema";
 
 const DEBOUNCE_MS = 320;
+/** Поверх overflow-x-hidden у корневого shell (иначе WebKit обрезает выпадающий список) */
+const LIST_Z = 12000;
 
 type CitySuggestInputProps = {
   id?: string;
@@ -28,8 +31,10 @@ export function CitySuggestInput({
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [highlight, setHighlight] = useState(-1);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const portalListRef = useRef<HTMLUListElement>(null);
   const seqRef = useRef(0);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [listBox, setListBox] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const runSuggest = useCallback((q: string) => {
     const t = q.trim();
@@ -67,12 +72,34 @@ export function CitySuggestInput({
     return () => clearTimeout(h);
   }, [value, open, disabled, runSuggest]);
 
+  const syncListPosition = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setListBox({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 200) });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || suggestions.length === 0) {
+      setListBox(null);
+      return;
+    }
+    syncListPosition();
+    window.addEventListener("resize", syncListPosition);
+    window.addEventListener("scroll", syncListPosition, true);
+    return () => {
+      window.removeEventListener("resize", syncListPosition);
+      window.removeEventListener("scroll", syncListPosition, true);
+    };
+  }, [open, suggestions.length, syncListPosition, value]);
+
   useEffect(() => {
     function onDocDown(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setHighlight(-1);
-      }
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t)) return;
+      if (portalListRef.current?.contains(t)) return;
+      setOpen(false);
+      setHighlight(-1);
     }
     document.addEventListener("mousedown", onDocDown);
     return () => document.removeEventListener("mousedown", onDocDown);
@@ -84,6 +111,46 @@ export function CitySuggestInput({
     setHighlight(-1);
     setSuggestions([]);
   };
+
+  const listId = `${id ?? "city"}-listbox`;
+  const showList = open && suggestions.length > 0 && listBox != null;
+
+  const listEl =
+    showList && typeof document !== "undefined" ? (
+      <ul
+        ref={portalListRef}
+        id={listId}
+        role="listbox"
+        className="fixed max-h-[min(240px,40vh)] overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-lg"
+        style={{
+          top: listBox.top,
+          left: listBox.left,
+          width: listBox.width,
+          zIndex: LIST_Z,
+        }}
+      >
+        {suggestions.map((s, i) => (
+          <li key={`${s}-${i}`} role="presentation">
+            <button
+              type="button"
+              role="option"
+              aria-selected={i === highlight}
+              className={cn(
+                "flex w-full px-3 py-2.5 text-left text-sm transition-colors",
+                i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-muted/80"
+              )}
+              onMouseDown={(ev) => {
+                ev.preventDefault();
+                pick(s);
+              }}
+              onMouseEnter={() => setHighlight(i)}
+            >
+              {s}
+            </button>
+          </li>
+        ))}
+      </ul>
+    ) : null;
 
   return (
     <div ref={wrapRef} className={cn("relative", className)}>
@@ -105,12 +172,16 @@ export function CitySuggestInput({
               blurTimerRef.current = null;
             }
             setOpen(true);
+            const t = value.trim();
+            if (t.length >= 2) {
+              runSuggest(value);
+            }
           }}
           onBlur={() => {
             blurTimerRef.current = setTimeout(() => {
               setOpen(false);
               setHighlight(-1);
-            }, 160);
+            }, 200);
           }}
           onKeyDown={(e) => {
             if (!open || suggestions.length === 0) return;
@@ -130,8 +201,8 @@ export function CitySuggestInput({
           }}
           autoComplete="off"
           aria-autocomplete="list"
-          aria-expanded={open && suggestions.length > 0}
-          aria-controls={open && suggestions.length > 0 ? `${id ?? "city"}-listbox` : undefined}
+          aria-expanded={showList}
+          aria-controls={showList ? listId : undefined}
           className={cn(
             "flex h-10 w-full min-w-0 rounded-md border border-input bg-background py-2 pl-9 pr-9 text-sm ring-offset-background",
             "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -146,34 +217,7 @@ export function CitySuggestInput({
           />
         ) : null}
       </div>
-      {open && suggestions.length > 0 ? (
-        <ul
-          id={`${id ?? "city"}-listbox`}
-          role="listbox"
-          className="absolute z-50 mt-1 max-h-[min(240px,40vh)] w-full overflow-y-auto rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-md"
-        >
-          {suggestions.map((s, i) => (
-            <li key={`${s}-${i}`} role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected={i === highlight}
-                className={cn(
-                  "flex w-full px-3 py-2.5 text-left text-sm transition-colors",
-                  i === highlight ? "bg-accent text-accent-foreground" : "hover:bg-muted/80"
-                )}
-                onMouseDown={(ev) => {
-                  ev.preventDefault();
-                  pick(s);
-                }}
-                onMouseEnter={() => setHighlight(i)}
-              >
-                {s}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {listEl ? createPortal(listEl, document.body) : null}
     </div>
   );
 }

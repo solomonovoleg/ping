@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { referralsCheckLimiter } from "../auth/rate-limit";
 import { storage } from "../storage";
 import { requireAuth, getUserId } from "../auth/session";
 import { generateReferralCode, normalizeReferralCodeInput } from "./code-generator";
@@ -50,7 +51,7 @@ export function registerReferralRoutes(app: Express): void {
   });
 
   /** Проверить код (публично): действителен ли, от кого приглашение */
-  app.get("/api/referrals/check", async (req: Request, res: Response) => {
+  app.get("/api/referrals/check", referralsCheckLimiter, async (req: Request, res: Response) => {
     const raw = typeof req.query.code === "string" ? req.query.code : "";
     const code = normalizeReferralCodeInput(raw);
     if (!code) {

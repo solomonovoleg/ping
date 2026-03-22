@@ -1,9 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { UserAvatar } from "@/components/UserAvatar";
+import {
+  PULSE_PROFILE_AVATAR_INNER_PX,
+  PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX,
+} from "@/features/profile/pulse-profile";
+import {
+  drawSquareAvatarCrop,
+  initialScaleCoverSquare,
+  squareAvatarCropToDataUrl,
+} from "@/lib/avatar-square-crop";
 
-const SIZE = 280;
-const OUTPUT_SIZE = 256;
+const PREVIEW_FRAME = 280;
+/** Экспорт на сервер — достаточно для чёткого отображения на экране. */
+const OUTPUT_SIZE = 512;
+/** Лёгкое превью для двух миниатюр под кропом. */
+const PREVIEW_THUMB_SIZE = 168;
 
 export type AvatarCropModalProps = {
   imageDataUrl: string;
@@ -20,20 +33,19 @@ export function AvatarCropModal({ imageDataUrl, onConfirm, onCancel, className }
   const [offsetY, setOffsetY] = useState(0);
   const [ready, setReady] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const dragStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
   const pinchStart = useRef<{ distance: number; scale: number } | null>(null);
 
   const getTouchDistance = (t1: React.Touch, t2: React.Touch) =>
     Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
 
-  const radius = SIZE / 2;
-
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
       imgRef.current = img;
-      const fit = Math.min(SIZE / img.width, SIZE / img.height);
+      const fit = initialScaleCoverSquare(img.width, img.height, PREVIEW_FRAME);
       setScale(fit);
       setOffsetX(0);
       setOffsetY(0);
@@ -48,50 +60,44 @@ export function AvatarCropModal({ imageDataUrl, onConfirm, onCancel, className }
     if (!canvas || !img || !ready) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    canvas.width = SIZE;
-    canvas.height = SIZE;
-    ctx.clearRect(0, 0, SIZE, SIZE);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(radius, radius, radius, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    ctx.translate(radius + offsetX, radius + offsetY);
-    ctx.scale(scale, scale);
-    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height);
-    ctx.restore();
-  }, [ready, scale, offsetX, offsetY, radius]);
+    canvas.width = PREVIEW_FRAME;
+    canvas.height = PREVIEW_FRAME;
+    drawSquareAvatarCrop(ctx, img, PREVIEW_FRAME, scale, offsetX, offsetY);
+  }, [ready, scale, offsetX, offsetY]);
 
   useEffect(() => {
     draw();
   }, [draw]);
 
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img || !ready) {
+      setPreviewDataUrl(null);
+      return;
+    }
+    const url = squareAvatarCropToDataUrl(
+      img,
+      PREVIEW_FRAME,
+      PREVIEW_THUMB_SIZE,
+      scale,
+      offsetX,
+      offsetY,
+      0.82
+    );
+    setPreviewDataUrl(url || null);
+  }, [ready, scale, offsetX, offsetY]);
+
   const getCroppedDataUrl = useCallback((): string => {
     const img = imgRef.current;
     if (!img) return imageDataUrl;
-    const out = document.createElement("canvas");
-    out.width = OUTPUT_SIZE;
-    out.height = OUTPUT_SIZE;
-    const ctx = out.getContext("2d");
-    if (!ctx) return imageDataUrl;
-    ctx.beginPath();
-    ctx.arc(OUTPUT_SIZE / 2, OUTPUT_SIZE / 2, OUTPUT_SIZE / 2, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    const s = (scale * OUTPUT_SIZE) / SIZE;
-    const dx = (offsetX * OUTPUT_SIZE) / SIZE;
-    const dy = (offsetY * OUTPUT_SIZE) / SIZE;
-    ctx.translate(OUTPUT_SIZE / 2 + dx, OUTPUT_SIZE / 2 + dy);
-    ctx.scale(s, s);
-    ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height);
-    return out.toDataURL("image/jpeg", 0.88);
+    return squareAvatarCropToDataUrl(img, PREVIEW_FRAME, OUTPUT_SIZE, scale, offsetX, offsetY, 0.88) || imageDataUrl;
   }, [imageDataUrl, scale, offsetX, offsetY]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    setScale((prev) => Math.max(0.2, Math.min(4, prev * (1 + delta))));
+    setScale((prev) => Math.max(0.2, Math.min(5, prev * (1 + delta))));
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -149,7 +155,7 @@ export function AvatarCropModal({ imageDataUrl, onConfirm, onCancel, className }
       e.preventDefault();
       const dist = getTouchDistance(e.touches[0], e.touches[1]);
       const ratio = dist / pinchStart.current.distance;
-      setScale((prev) => Math.max(0.2, Math.min(4, pinchStart.current!.scale * ratio)));
+      setScale(() => Math.max(0.2, Math.min(5, pinchStart.current!.scale * ratio)));
       return;
     }
     if (dragging && e.touches.length === 1) {
@@ -170,30 +176,70 @@ export function AvatarCropModal({ imageDataUrl, onConfirm, onCancel, className }
       onClick={onCancel}
     >
       <div
-        className="bg-background rounded-2xl shadow-xl border border-border overflow-hidden w-full max-w-[328px]"
+        className="bg-background rounded-2xl shadow-xl border border-border overflow-hidden w-full max-w-[360px]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-3 border-b border-border text-center text-sm font-medium text-muted-foreground">
-          Переместите и масштабируйте фото (два пальца — зум на телефоне)
+        <div className="p-3 border-b border-border space-y-1">
+          <p className="text-center text-sm font-semibold text-foreground">Кадрирование аватара</p>
+          <p className="text-center text-xs text-muted-foreground leading-snug">
+            Сохраняем <span className="font-medium text-foreground">квадрат</span>: в профиле он станет со скруглёнными углами, в чатах и списках — кругом. Ниже видно оба варианта.
+          </p>
         </div>
         <div
-          className="relative select-none touch-none"
-          style={{ width: SIZE, height: SIZE, touchAction: "none" }}
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
+          className="relative mx-auto flex justify-center pt-2"
+          style={{ width: PREVIEW_FRAME, height: PREVIEW_FRAME }}
         >
-          <canvas
-            ref={canvasRef}
-            className="block w-full h-full cursor-move rounded-full border-2 border-border"
-            style={{ borderRadius: "50%" }}
-          />
+          <div
+            className="relative select-none touch-none overflow-hidden rounded-lg border-2 border-dashed border-primary/35 bg-muted/30"
+            style={{ width: PREVIEW_FRAME, height: PREVIEW_FRAME, touchAction: "none" }}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
+          >
+            <canvas ref={canvasRef} className="block h-full w-full cursor-move" width={PREVIEW_FRAME} height={PREVIEW_FRAME} />
+          </div>
         </div>
-        <div className="p-3 flex gap-2">
-          <Button type="button" variant="outline" className="flex-1 min-h-[var(--uix-touch-min)]" onClick={onCancel} aria-label="Отмена, не сохранять">
+
+        {previewDataUrl ? (
+          <div className="px-3 pt-3 pb-1">
+            <p className="mb-2 text-center text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Как будет в приложении
+            </p>
+            <div className="flex items-end justify-center gap-8">
+              <div className="flex flex-col items-center gap-1.5">
+                <UserAvatar
+                  avatarUrl={previewDataUrl}
+                  displayName=" "
+                  seed="crop-preview"
+                  size={PULSE_PROFILE_AVATAR_INNER_PX}
+                  cornerRadius={PULSE_PROFILE_AVATAR_SQUIRCLE_INNER_RX}
+                  className="ring-2 ring-border shadow-sm"
+                />
+                <span className="max-w-[100px] text-center text-[10px] leading-tight text-muted-foreground">
+                  Профиль (сквиркл)
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-1.5">
+                <UserAvatar
+                  avatarUrl={previewDataUrl}
+                  displayName=" "
+                  seed="crop-preview"
+                  size={56}
+                  className="ring-2 ring-border shadow-sm"
+                />
+                <span className="max-w-[100px] text-center text-[10px] leading-tight text-muted-foreground">
+                  Чаты и списки (круг)
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="p-3 flex gap-2 border-t border-border">
+          <Button type="button" variant="outline" className="flex-1 min-h-[var(--uix-touch-min)]" onClick={onCancel} aria-label="Отмена">
             Отмена
           </Button>
           <Button

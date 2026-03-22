@@ -48,9 +48,15 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
         return;
       }
       const scale = getIntensityScale();
+      // Пузыри: на «низкой» интенсивности иначе rgba-альфа входящих почти нулевая — вайб незаметен.
+      const bubbleScale = Math.max(scale, 0.78);
       root.style.setProperty("--chat-vibe-bg-tint", scaleAlpha(tokens.backgroundTint, scale));
-      root.style.setProperty("--chat-vibe-bubble-in", scaleAlpha(tokens.bubbleIncoming, scale));
-      root.style.setProperty("--chat-vibe-bubble-out", scaleAlpha(tokens.bubbleOutgoing, scale));
+      root.style.setProperty("--chat-vibe-bubble-in", scaleAlpha(tokens.bubbleIncoming, bubbleScale));
+      /* Исходящий: не даём альфе упасть слишком низко — иначе «белый» текст на почти белом фоне в светлом чате */
+      root.style.setProperty(
+        "--chat-vibe-bubble-out",
+        scaleAlpha(tokens.bubbleOutgoing, bubbleScale, { minAlpha: 0.62 }),
+      );
       root.style.setProperty("--chat-vibe-accent", scaleAlpha(tokens.accentGlow, scale));
       root.style.setProperty(
         "--chat-vibe-overlay-opacity",
@@ -180,13 +186,16 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
   return state;
 }
 
-function scaleAlpha(color: string, scale: number): string {
+function scaleAlpha(color: string, scale: number, opts?: { minAlpha?: number }): string {
   if (color === "transparent" || !color) return "transparent";
   const rgbaMatch = color.match(
     /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)/,
   );
   if (rgbaMatch) {
-    const a = parseFloat(rgbaMatch[4] ?? "1") * scale;
+    let a = parseFloat(rgbaMatch[4] ?? "1") * scale;
+    if (opts?.minAlpha != null && Number.isFinite(a)) {
+      a = Math.max(opts.minAlpha, Math.min(1, a));
+    }
     return `rgba(${rgbaMatch[1]}, ${rgbaMatch[2]}, ${rgbaMatch[3]}, ${Math.round(a * 1000) / 1000})`;
   }
   return color;
@@ -199,8 +208,8 @@ function mergeTokens(
   return {
     ...base,
     ...(typeof override.backgroundTint === "string" && { backgroundTint: override.backgroundTint }),
-    ...(typeof override.bubbleIncoming === "string" && { bubbleIncoming: override.bubbleIncoming }),
-    ...(typeof override.bubbleOutgoing === "string" && { bubbleOutgoing: override.bubbleOutgoing }),
+    // Пузыри — только с клиента (getClientVibeTokens по light/dark). Серверные токены были почти одинаковые
+    // для in/out и затирали контраст как у PULSE (светлый входящий / насыщенный исходящий).
     ...(typeof override.accentGlow === "string" && { accentGlow: override.accentGlow }),
     ...(typeof override.overlayType === "string" && {
       overlayType: override.overlayType as VibeThemeTokens["overlayType"],

@@ -15,7 +15,11 @@ export async function fetchComments(postId: string | number): Promise<CommentIte
   const res = await apiFetch(`${API}/posts/${encodeURIComponent(String(postId))}/comments`, {
     cache: "no-store",
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { message?: unknown };
+    const msg = typeof data.message === "string" ? data.message : null;
+    throw new Error(msg || (res.status === 503 ? "Комментарии временно недоступны" : "Не удалось загрузить комментарии"));
+  }
   const data = await res.json();
   if (!Array.isArray(data)) return [];
   return data.map((c: Record<string, unknown>) => ({
@@ -28,6 +32,19 @@ export async function fetchComments(postId: string | number): Promise<CommentIte
     avatar: typeof c.avatar === "string" ? c.avatar : null,
     likes: typeof c.likes === "number" ? c.likes : 0,
   }));
+}
+
+export async function deleteComment(postId: string | number, commentId: string): Promise<void> {
+  const res = await apiFetch(
+    `${API}/posts/${encodeURIComponent(String(postId))}/comments/${encodeURIComponent(commentId)}`,
+    { method: "DELETE" },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data && typeof data.message === "string" ? data.message : null) || "Не удалось удалить комментарий",
+    );
+  }
 }
 
 export async function createComment(

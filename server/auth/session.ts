@@ -1,3 +1,4 @@
+/** Сессия + приоритет над Bearer: `docs/API_AUTH_AND_PUBLIC.md`. */
 import session from "express-session";
 import type { Express, Request, Response, NextFunction } from "express";
 import MemoryStore from "memorystore";
@@ -112,7 +113,7 @@ export function setupSession(app: Express): void {
   });
 }
 
-/** ID текущего пользователя: сессия (веб) или Bearer token (мобильное приложение). */
+/** ID текущего пользователя: сессия (веб) или Bearer token (мобильное приложение). Сессия имеет приоритет. */
 export function getUserId(req: Request): string | undefined {
   return req.session?.userId ?? req.authUserId;
 }

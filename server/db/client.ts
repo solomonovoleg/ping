@@ -86,6 +86,7 @@ export async function ensureUserColumns(): Promise<void> {
     await p.query("ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded_from_message_id VARCHAR REFERENCES messages(id) ON DELETE SET NULL");
     await p.query("ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded_from_sender_id VARCHAR REFERENCES users(id) ON DELETE SET NULL");
     await p.query("ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded_from_sender_name TEXT");
+    await p.query("ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript TEXT");
     await p.query(`
       CREATE TABLE IF NOT EXISTS saved_messages (
         user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -105,6 +106,7 @@ export async function ensureUserColumns(): Promise<void> {
       )
     `);
     await p.query("CREATE INDEX IF NOT EXISTS ai_chat_messages_user_created ON ai_chat_messages(user_id, created_at DESC)");
+    await p.query("ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS payload JSONB");
     console.log("[db] ensureUserColumns: last_seen_at, fcm_token OK");
   } catch (e) {
     console.error("[db] ensureUserColumns failed (повторим при следующем запросе):", e);

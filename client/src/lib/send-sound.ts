@@ -7,6 +7,8 @@ import { getMicroSoundsEnabled } from "@/lib/micro-feedback";
 let cachedContext: AudioContext | null = null;
 let likeAudioEl: HTMLAudioElement | null = null;
 let likeNotifyAudioEl: HTMLAudioElement | null = null;
+/** Отдельный элемент от «notify», чтобы не сбивать currentTime у лайк-уведомления. */
+let incomingChatAudioEl: HTMLAudioElement | null = null;
 let likeNotifyLastPlayedAt = 0;
 let incomingChatSoundLastAt = 0;
 
@@ -23,19 +25,34 @@ function getContext(): AudioContext | null {
   }
 }
 
-function getUiAudio(url: string, kind: "like" | "notify"): HTMLAudioElement | null {
+function getUiAudio(url: string, kind: "like" | "notify" | "incomingChat"): HTMLAudioElement | null {
   if (typeof window === "undefined") return null;
-  const existing = kind === "like" ? likeAudioEl : likeNotifyAudioEl;
+  const existing =
+    kind === "like" ? likeAudioEl : kind === "notify" ? likeNotifyAudioEl : incomingChatAudioEl;
   if (existing) return existing;
   try {
     const el = new Audio(url);
     el.preload = "auto";
     if (kind === "like") likeAudioEl = el;
-    else likeNotifyAudioEl = el;
+    else if (kind === "notify") likeNotifyAudioEl = el;
+    else incomingChatAudioEl = el;
     return el;
   } catch {
     return null;
   }
+}
+
+function warmUiAudioElement(el: HTMLAudioElement): void {
+  const v = el.volume;
+  el.volume = 0.001;
+  void el
+    .play()
+    .then(() => {
+      el.pause();
+      el.currentTime = 0;
+      el.volume = v;
+    })
+    .catch(() => {});
 }
 
 /**
@@ -49,19 +66,10 @@ export function installBrowserAudioUnlock(): () => void {
     const ctx = getContext();
     if (ctx?.state === "suspended") void ctx.resume().catch(() => {});
     try {
-      const el = getUiAudio("/sounds/like-notification.mp3", "notify");
-      if (el) {
-        const v = el.volume;
-        el.volume = 0.001;
-        void el
-          .play()
-          .then(() => {
-            el.pause();
-            el.currentTime = 0;
-            el.volume = v;
-          })
-          .catch(() => {});
-      }
+      const notifyEl = getUiAudio("/sounds/like-notification.mp3", "notify");
+      if (notifyEl) warmUiAudioElement(notifyEl);
+      const incomingEl = getUiAudio("/sounds/like-notification.mp3", "incomingChat");
+      if (incomingEl) warmUiAudioElement(incomingEl);
     } catch {
       /* ignore */
     }
@@ -81,35 +89,59 @@ export function installBrowserAudioUnlock(): () => void {
   };
 }
 
-/** Короткий двухтоновый сигнал: входящее сообщение в чате (не от вас). */
+function playIncomingChatMessageSoundInner(ctx: AudioContext): void {
+  const t0 = ctx.currentTime;
+  const playPing = (start: number, freq: number, dur: number) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(0.09, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    osc.start(start);
+    osc.stop(start + dur);
+  };
+  playPing(t0, 660, 0.055);
+  playPing(t0 + 0.045, 520, 0.065);
+}
+
+function playIncomingChatMessageSoundOscillatorFallback(): void {
+  const ctx = getContext();
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(() => playIncomingChatMessageSoundInner(ctx)).catch(() => {});
+      return;
+    }
+    playIncomingChatMessageSoundInner(ctx);
+  } catch {
+    /* autoplay / runtime */
+  }
+}
+
+/** Короткий сигнал: входящее сообщение в чате (не от вас). Сначала mp3 (как у лайк-уведомления) — лучше после unlock; иначе Web Audio. */
 export function playIncomingChatMessageSound(): void {
   if (!getMicroSoundsEnabled()) return;
   const now = Date.now();
   if (now - incomingChatSoundLastAt < 520) return;
   incomingChatSoundLastAt = now;
-  const ctx = getContext();
-  if (!ctx) return;
-  try {
-    if (ctx.state === "suspended") void ctx.resume();
-    const t0 = ctx.currentTime;
-    const playPing = (start: number, freq: number, dur: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.linearRampToValueAtTime(0.09, start + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
-      osc.start(start);
-      osc.stop(start + dur);
-    };
-    playPing(t0, 660, 0.055);
-    playPing(t0 + 0.045, 520, 0.065);
-  } catch {
-    /* autoplay / runtime */
+  const el = getUiAudio("/sounds/like-notification.mp3", "incomingChat");
+  if (el) {
+    try {
+      el.currentTime = 0;
+      void el.play().catch(() => {
+        playIncomingChatMessageSoundOscillatorFallback();
+      });
+      return;
+    } catch {
+      playIncomingChatMessageSoundOscillatorFallback();
+      return;
+    }
   }
+  playIncomingChatMessageSoundOscillatorFallback();
 }
 
 /** Воспроизвести звук отправки сообщения (один короткий мягкий тон). */

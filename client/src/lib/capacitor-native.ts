@@ -12,10 +12,40 @@ export function isNative(): boolean {
   }
 }
 
+/** Проверить/запросить доступ к камере у Capacitor один раз, без повторных диалогов при каждом снимке. */
+async function ensureNativeCameraPermission(): Promise<boolean> {
+  if (!isNative()) return true;
+  try {
+    const { Camera } = await import("@capacitor/camera");
+    const cur = await Camera.checkPermissions();
+    if (cur.camera === "granted" || cur.camera === "limited") return true;
+    const next = await Camera.requestPermissions({ permissions: ["camera"] });
+    return next.camera === "granted" || next.camera === "limited";
+  } catch {
+    return false;
+  }
+}
+
+/** Доступ к фото для выбора из галереи (iOS/Android). */
+async function ensureNativePhotosPermission(): Promise<boolean> {
+  if (!isNative()) return true;
+  try {
+    const { Camera } = await import("@capacitor/camera");
+    const cur = await Camera.checkPermissions();
+    if (cur.photos === "granted" || cur.photos === "limited") return true;
+    const next = await Camera.requestPermissions({ permissions: ["photos"] });
+    return next.photos === "granted" || next.photos === "limited";
+  } catch {
+    return false;
+  }
+}
+
 /** Получить фото с камеры (нативно или через input file в вебе). Возвращает dataUrl или null. */
 export async function takePhotoFromCamera(): Promise<string | null> {
   if (!isNative()) return null;
   try {
+    const ok = await ensureNativeCameraPermission();
+    if (!ok) return null;
     const { Camera, CameraResultType } = await import("@capacitor/camera");
     const photo = await Camera.getPhoto({
       quality: 90,
@@ -33,6 +63,8 @@ export async function takePhotoFromCamera(): Promise<string | null> {
 export async function pickPhotoFromGallery(): Promise<string | null> {
   if (!isNative()) return null;
   try {
+    const ok = await ensureNativePhotosPermission();
+    if (!ok) return null;
     const { Camera, CameraResultType } = await import("@capacitor/camera");
     const photo = await Camera.getPhoto({
       quality: 90,
@@ -87,6 +119,17 @@ export function triggerSelectionHaptic(): void {
       }
     })
     .catch(() => {});
+}
+
+/** Долгое нажатие → сервисное меню: нативный хаптик + короткий виброимпульс в поддерживаемых браузерах (Android Chrome). */
+export function triggerContextMenuOpenFeedback(): void {
+  triggerLightHaptic();
+  if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+  try {
+    navigator.vibrate(16);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { contactsPhoneMatchLimiter } from "../auth/rate-limit";
+import { contactsPhoneMatchLimiter, profilePatchLimiter } from "../auth/rate-limit";
 import { requireAuth, getUserId } from "../auth/session";
 import {
   addContact,
@@ -47,10 +47,10 @@ export function registerUsersRoutes(app: Express): void {
     res.json({ ok: true });
   });
 
-  app.patch("/api/users/me", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/users/me", requireAuth, profilePatchLimiter, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     try {
-      const payload = await updateMyProfile(userId, req.body ?? {});
+      const payload = await updateMyProfile(userId, (req.body ?? {}) as Record<string, unknown>);
       res.json(payload);
     } catch (error) {
       if (respondServiceError(res, error)) return;
@@ -142,7 +142,16 @@ export function registerUsersRoutes(app: Express): void {
     const blockerId = getUserId(req)!;
     const blockedId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     try {
-      await blockUser(blockerId, blockedId ?? "");
+      const b = req.body;
+      const flags =
+        b && typeof b === "object"
+          ? {
+              restrictProfile: (b as { restrictProfile?: unknown }).restrictProfile !== false,
+              restrictChat: (b as { restrictChat?: unknown }).restrictChat !== false,
+              restrictSocial: (b as { restrictSocial?: unknown }).restrictSocial !== false,
+            }
+          : undefined;
+      await blockUser(blockerId, blockedId ?? "", flags);
       res.json({ ok: true });
     } catch (error) {
       if (respondServiceError(res, error)) return;

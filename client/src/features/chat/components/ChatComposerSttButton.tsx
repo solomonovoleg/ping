@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Speech } from "lucide-react";
 import { TapScaleButton } from "@/components/ui/tap-scale";
-import { cn } from "@/lib/utils";
 import { playPulseUiTone } from "@/lib/chat-pulse-ui-sound";
+import { primeMicrophoneCapture } from "@/lib/media-capture-prime";
 
 export type ComposerSttPhase = "idle" | "listening" | "transcribing";
 
@@ -35,8 +36,6 @@ type Props = {
   disabled?: boolean;
   allowSound: boolean;
   onTranscript: (text: string) => void;
-  /** «!» внутри капсулы; оверлей ренерит родитель по onUiChange */
-  embedded?: boolean;
   onUiChange?: (state: { phase: ComposerSttPhase; liveLine: string }) => void;
   /** Пустой результат (тишина, ошибка, нет API) — без вставки демо-текста */
   onEmptyResult?: () => void;
@@ -99,17 +98,22 @@ export function ChatComposerSttButton({
   disabled,
   allowSound,
   onTranscript,
-  embedded,
   onUiChange,
   onEmptyResult,
 }: Props) {
   const [phase, setPhase] = useState<ComposerSttPhase>("idle");
+  const phaseRef = useRef<ComposerSttPhase>("idle");
   const [liveLine, setLiveLine] = useState("");
   const recRef = useRef<InstanceType<SpeechRecCtor> | null>(null);
   const transcriptRef = useRef("");
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const listenFinishedRef = useRef(false);
   const listenStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sttStartLockRef = useRef(false);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   useEffect(() => {
     onUiChange?.({ phase, liveLine });
@@ -195,64 +199,75 @@ export function ChatComposerSttButton({
   }, [finishListening]);
 
   const startListening = useCallback(() => {
-    if (disabled || phase !== "idle") return;
+    if (disabled || phaseRef.current !== "idle" || sttStartLockRef.current) return;
+    sttStartLockRef.current = true;
     listenFinishedRef.current = false;
     playPulseUiTone("stt_start", allowSound);
     transcriptRef.current = "";
     setLiveLine("");
-    const Ctor = getSpeechRecognition();
-    if (!Ctor) {
-      setPhase("listening");
-      timersRef.current.push(
-        setTimeout(() => {
-          finishListening("");
-        }, 2400),
-      );
-      return;
-    }
 
-    try {
-      const rec = new Ctor();
-      rec.continuous = false;
-      rec.interimResults = true;
-      rec.lang = "ru-RU";
-      rec.onresult = (ev) => {
-        let line = "";
-        for (let i = 0; i < ev.results.length; i++) {
-          line += ev.results[i]?.[0]?.transcript ?? "";
-        }
-        const t = line.trim();
-        transcriptRef.current = t;
-        setLiveLine(t);
-      };
-      rec.onerror = () => {
-        transcriptRef.current = transcriptRef.current || "";
-      };
-      rec.onend = () => {
-        if (listenStopTimerRef.current) {
-          clearTimeout(listenStopTimerRef.current);
-          listenStopTimerRef.current = null;
-        }
-        scheduleFinishFromEnd();
-      };
-      recRef.current = rec;
-      rec.start();
-      setPhase("listening");
-      listenStopTimerRef.current = setTimeout(() => {
-        listenStopTimerRef.current = null;
-        try {
-          rec.stop();
-        } catch {
+    void (async () => {
+      try {
+        await primeMicrophoneCapture();
+        if (disabled || phaseRef.current !== "idle") return;
+
+      const Ctor = getSpeechRecognition();
+      if (!Ctor) {
+        setPhase("listening");
+        timersRef.current.push(
+          setTimeout(() => {
+            finishListening("");
+          }, 2400),
+        );
+        return;
+      }
+
+      try {
+        const rec = new Ctor();
+        rec.continuous = false;
+        rec.interimResults = true;
+        rec.lang = "ru-RU";
+        rec.onresult = (ev) => {
+          let line = "";
+          for (let i = 0; i < ev.results.length; i++) {
+            line += ev.results[i]?.[0]?.transcript ?? "";
+          }
+          const t = line.trim();
+          transcriptRef.current = t;
+          setLiveLine(t);
+        };
+        rec.onerror = () => {
+          transcriptRef.current = transcriptRef.current || "";
+        };
+        rec.onend = () => {
+          if (listenStopTimerRef.current) {
+            clearTimeout(listenStopTimerRef.current);
+            listenStopTimerRef.current = null;
+          }
           scheduleFinishFromEnd();
-        }
-      }, 2600);
-    } catch {
-      setPhase("listening");
-      timersRef.current.push(setTimeout(() => finishListening(""), 2400));
-    }
-  }, [allowSound, disabled, finishListening, phase, scheduleFinishFromEnd]);
+        };
+        recRef.current = rec;
+        rec.start();
+        setPhase("listening");
+        listenStopTimerRef.current = setTimeout(() => {
+          listenStopTimerRef.current = null;
+          try {
+            rec.stop();
+          } catch {
+            scheduleFinishFromEnd();
+          }
+        }, 2600);
+      } catch {
+        setPhase("listening");
+        timersRef.current.push(setTimeout(() => finishListening(""), 2400));
+      }
+      } finally {
+        sttStartLockRef.current = false;
+      }
+    })();
+  }, [allowSound, disabled, finishListening, scheduleFinishFromEnd]);
 
-  if (!embedded && phase === "listening") {
+  if (phase === "listening") {
     return (
       <div
         className="flex min-h-[var(--uix-touch-min)] min-w-[3rem] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-primary/35 bg-primary/10 px-2 py-1"
@@ -273,7 +288,7 @@ export function ChatComposerSttButton({
     );
   }
 
-  if (!embedded && phase === "transcribing") {
+  if (phase === "transcribing") {
     return (
       <div
         className="flex max-w-[140px] min-h-[var(--uix-touch-min)] shrink-0 flex-col justify-center rounded-2xl border border-violet-400/35 bg-violet-500/10 px-2 py-1"
@@ -288,27 +303,17 @@ export function ChatComposerSttButton({
     );
   }
 
-  const idleBtn = (
+  return (
     <TapScaleButton
       type="button"
       haptic
       disabled={disabled}
       onClick={startListening}
-      className={cn(
-        embedded
-          ? "mr-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[17px] font-black leading-none text-primary transition-colors hover:bg-black/8 dark:hover:bg-white/10"
-          : "chat-composer-round flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] shrink-0 items-center justify-center font-black text-primary",
-      )}
+      className="chat-composer-round flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] shrink-0 items-center justify-center text-primary"
       aria-label="Голос в текст"
       title="Голос в текст"
     >
-      <span aria-hidden>!</span>
+      <Speech className="h-[20px] w-[20px] stroke-[1.75]" aria-hidden />
     </TapScaleButton>
   );
-
-  if (embedded) {
-    return phase === "idle" ? idleBtn : <span className="mr-0.5 inline-flex h-9 w-9 shrink-0" aria-hidden />;
-  }
-
-  return idleBtn;
 }

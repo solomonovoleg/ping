@@ -3,7 +3,9 @@
  * GET /api/link-preview?url=...
  */
 import type { Request, Response } from "express";
+import { linkPreviewLimiter } from "../auth/rate-limit";
 import { requireAuth } from "../auth/session";
+import { isSsrfRiskUrl } from "../security/ssrf-guard";
 
 const URL_RE = /^https?:\/\/[^\s<>"{}|\\^`[\]]+$/i;
 const FETCH_TIMEOUT_MS = 5000;
@@ -24,9 +26,21 @@ function extractOgMeta(html: string): { image?: string; title?: string; descript
 }
 
 export function registerLinkPreviewRoutes(app: import("express").Express): void {
-  app.get("/api/link-preview", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/link-preview", requireAuth, linkPreviewLimiter, async (req: Request, res: Response) => {
     const url = typeof req.query.url === "string" ? req.query.url.trim() : "";
     if (!url || !URL_RE.test(url)) {
+      return res.status(400).json({ message: "Некорректный URL" });
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return res.status(400).json({ message: "Некорректный URL" });
+      }
+      if (isSsrfRiskUrl(parsed)) {
+        return res.status(400).json({ message: "URL недоступен для превью" });
+      }
+    } catch {
       return res.status(400).json({ message: "Некорректный URL" });
     }
     try {

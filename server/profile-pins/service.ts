@@ -47,6 +47,18 @@ async function assertNotBlocked(a: string, b: string): Promise<void> {
   if (ab || ba) throw new ProfilePinsError(403, "Нет доступа");
 }
 
+/** URL после upload/post-media: локальный префикс или ключ posts/ в S3. */
+function isAllowedProfilePinMediaUrl(url: string): boolean {
+  const u = url.trim();
+  if (!u || u.length > 2048) return false;
+  if (u.startsWith("/uploads/posts/")) return true;
+  try {
+    return new URL(u).pathname.includes("/posts/");
+  } catch {
+    return false;
+  }
+}
+
 function normalizePinProfileParam(raw: string): string {
   try {
     return decodeURIComponent(raw).trim().replace(/^@+/, "");
@@ -142,6 +154,12 @@ export async function listPinFolders(viewerId: string, profileIdParam: string) {
       if (!s) return { url: null, isVideo: false };
       const url = s.thumbnailUrl ?? s.mediaUrl;
       const v = /\.(mp4|webm|mov)(\?|$)/i.test(s.mediaUrl) || /\.(mp4|webm|mov)(\?|$)/i.test(url);
+      return { url, isVideo: v };
+    }
+    if (it.kind === "media" && it.mediaUrl) {
+      const url = it.mediaUrl.trim();
+      const v =
+        it.mediaIsVideo === true || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
       return { url, isVideo: v };
     }
     return { url: null, isVideo: false };
@@ -269,6 +287,22 @@ export async function getPinFolderDetail(viewerId: string, folderId: string) {
           text: "",
         };
       }
+      if (it.kind === "media" && it.mediaUrl) {
+        const url = it.mediaUrl.trim();
+        const isVideo =
+          it.mediaIsVideo === true || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
+        return {
+          id: it.id,
+          kind: "media" as const,
+          refId: it.id,
+          createdAt: it.createdAt.toISOString(),
+          previewUrl: url,
+          isVideo,
+          viewsCount: 0,
+          likesCount: 0,
+          text: "",
+        };
+      }
       return null;
     })
   );
@@ -360,12 +394,41 @@ export async function deletePinFolder(userId: string, folderId: string) {
 
 export async function addPinItem(userId: string, folderId: string, body: Record<string, unknown>) {
   await assertFolderOwner(userId, folderId);
-  const kind = body.kind === "story" ? "story" : body.kind === "post" ? "post" : "";
-  if (kind !== "post" && kind !== "story") throw new ProfilePinsError(400, "kind: post или story");
-  const refId = typeof body.refId === "string" ? body.refId.trim() : "";
-  if (!refId) throw new ProfilePinsError(400, "Укажите refId");
+  const kindRaw = body.kind;
+  const kind =
+    kindRaw === "story"
+      ? "story"
+      : kindRaw === "post"
+        ? "post"
+        : kindRaw === "media"
+          ? "media"
+          : "";
 
   const db = getDb();
+
+  if (kind === "media") {
+    const mediaUrl = typeof body.mediaUrl === "string" ? body.mediaUrl.trim() : "";
+    if (!mediaUrl) throw new ProfilePinsError(400, "Укажите mediaUrl");
+    if (!isAllowedProfilePinMediaUrl(mediaUrl)) throw new ProfilePinsError(400, "Недопустимый URL медиа");
+    const mediaIsVideo = body.mediaIsVideo === true;
+    const [row] = await db
+      .insert(profilePinItems)
+      .values({
+        folderId,
+        ownerUserId: userId,
+        kind: "media",
+        postId: null,
+        storyId: null,
+        mediaUrl,
+        mediaIsVideo,
+      })
+      .returning();
+    return row;
+  }
+
+  if (kind !== "post" && kind !== "story") throw new ProfilePinsError(400, "kind: post, story или media");
+  const refId = typeof body.refId === "string" ? body.refId.trim() : "";
+  if (!refId) throw new ProfilePinsError(400, "Укажите refId");
 
   if (kind === "post") {
     const [p] = await db.select().from(posts).where(eq(posts.id, refId)).limit(1);
@@ -387,6 +450,8 @@ export async function addPinItem(userId: string, folderId: string, body: Record<
         kind: "post",
         postId: refId,
         storyId: null,
+        mediaUrl: null,
+        mediaIsVideo: false,
       })
       .returning();
     return row;
@@ -408,6 +473,8 @@ export async function addPinItem(userId: string, folderId: string, body: Record<
       kind: "story",
       postId: null,
       storyId: refId,
+      mediaUrl: null,
+      mediaIsVideo: false,
     })
     .returning();
   return row;

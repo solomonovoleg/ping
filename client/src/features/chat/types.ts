@@ -17,6 +17,16 @@ export type ApiChat = {
   name: string | null;
   avatarUrl?: string | null;
   createdAt: string;
+  /** Закреплён в списке (сервер). */
+  pinnedAt?: string | null;
+  /** Полка: general | friends | work | promo */
+  listSection?: string;
+  lastMessage?: { type: string; content: string; createdAt: string } | null;
+  hasUnread?: boolean;
+  unreadCount?: number;
+  otherMemberAvatarUrl?: string | null;
+  otherMemberHasActiveStory?: boolean;
+  otherMemberHasUnseenStory?: boolean;
   /** Роль текущего пользователя в группе (admin | member) */
   myRole?: "admin" | "member";
   /** Участники группового чата (для отображения имени отправителя) */
@@ -31,6 +41,8 @@ export type ApiChat = {
     lastReadAt?: string | null;
     lastSeenAt?: string | null;
   } | null;
+  /** Превью «был(а)…» в списке чатов (DM). */
+  otherMemberLastSeenAt?: string | null;
 };
 
 export type ApiMessage = {

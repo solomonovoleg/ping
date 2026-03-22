@@ -95,15 +95,20 @@ export type TrafficShieldMinuteDto = {
   limited429: number;
 };
 
+export type TrafficShieldLimitsBlock = {
+  anonymousNormal: number;
+  anonymousStrict: number;
+  authenticatedNormal: number;
+  authenticatedStrict: number;
+};
+
 export type TrafficShieldDto = {
   generatedAt: string;
   strictApiShield: boolean;
   windowMs: number;
   limits: {
-    anonymousNormal: number;
-    anonymousStrict: number;
-    authenticatedNormal: number;
-    authenticatedStrict: number;
+    read: TrafficShieldLimitsBlock;
+    mutation: TrafficShieldLimitsBlock;
   };
   currentMinute: TrafficShieldMinuteDto | null;
   history: TrafficShieldMinuteDto[];
@@ -150,6 +155,66 @@ export type ModulesTelemetryDto = {
 
 export async function fetchModulesTelemetry(): Promise<ModulesTelemetryDto> {
   const res = await adminOpsFetch("/admin/modules-telemetry");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export type DiskMountStatsDto = {
+  totalBytes: number;
+  freeBytes: number;
+  usedBytes: number;
+};
+
+export type DiskBreakdownRowDto = {
+  id: string;
+  label: string;
+  section: "uploads" | "database" | "disk";
+  bytes: number;
+  files: number | null;
+  pctOfDiskTotal: number | null;
+  pctOfDiskFree: number | null;
+};
+
+export type ServerHostSnapshotDto = {
+  projectPath: string;
+  projectDiskBytes: number | null;
+  projectDiskSource: "du" | "walk_skipped" | "none";
+  projectDiskError: string | null;
+  projectPctOfMountTotal: number | null;
+  projectPctOfMountUsed: number | null;
+  projectPctOfMountFree: number | null;
+  uploadsDirBytes: number | null;
+  uploadsPctOfProjectDisk: number | null;
+  memTotalBytes: number;
+  memFreeBytes: number;
+  memUsedBytes: number;
+  memUsedPct: number;
+  processRssBytes: number;
+  processRssPctOfMemTotal: number | null;
+  processRssPctOfMemUsed: number | null;
+  processRssPctOfProjectDisk: number | null;
+  loadAvg1: number;
+  loadAvg5: number;
+  loadAvg15: number;
+  cpuCount: number;
+  loadPerCore1: number | null;
+};
+
+export type DiskOpsReportDto = {
+  generatedAt: string;
+  cwd: string;
+  uploadsDir: string;
+  statfsPath: string;
+  projectPath: string;
+  s3Configured: boolean;
+  mount: DiskMountStatsDto | null;
+  mountError: string | null;
+  host: ServerHostSnapshotDto;
+  rows: DiskBreakdownRowDto[];
+};
+
+export async function fetchOpsDisk(): Promise<DiskOpsReportDto> {
+  const res = await adminOpsFetch("/admin/ops/disk");
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

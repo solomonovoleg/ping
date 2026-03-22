@@ -6,7 +6,10 @@ export interface MessagesStore {
   get(chatId: string, messageId: string): Message | undefined;
   create(data: InsertMessage): Message;
   delete(chatId: string, messageId: string): boolean;
+  /** Удалить все сообщения чата (при удалении чата целиком). */
+  purgeChat(chatId: string): void;
   update(chatId: string, messageId: string, content: string): Message | undefined;
+  updateTranscript(chatId: string, messageId: string, transcript: string): Message | undefined;
 }
 
 export function createMessagesStore(): MessagesStore {
@@ -67,6 +70,7 @@ export function createMessagesStore(): MessagesStore {
         senderId: d.senderId ?? null,
         type: rawType,
         content: d.content,
+        transcript: null,
         replyToId: d.replyToId ?? null,
         forwardedFromMessageId: d.forwardedFromMessageId ?? null,
         forwardedFromSenderId: d.forwardedFromSenderId ?? null,
@@ -86,11 +90,21 @@ export function createMessagesStore(): MessagesStore {
       byChat.set(chatId, list);
       return true;
     },
+    purgeChat(chatId: string) {
+      byChat.delete(chatId);
+    },
     update(chatId: string, messageId: string, content: string) {
       const list = byChat.get(chatId) ?? [];
       const msg = list.find((m) => m.id === messageId);
       if (!msg) return undefined;
       msg.content = content.trim();
+      return msg;
+    },
+    updateTranscript(chatId: string, messageId: string, transcript: string) {
+      const list = byChat.get(chatId) ?? [];
+      const msg = list.find((m) => m.id === messageId);
+      if (!msg) return undefined;
+      (msg as { transcript?: string | null }).transcript = transcript.trim() || null;
       return msg;
     },
   };

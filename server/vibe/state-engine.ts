@@ -13,8 +13,8 @@ const FAST_BATCH_INTERVAL = 4;
 const DEEP_BATCH_INTERVAL = 16;
 const FAST_WINDOW = 8;
 const DEEP_WINDOW = 20;
-/** Ниже 0.7 правила почти никогда не «переключали» тему — вайб оставался casual */
-const MIN_CONFIDENCE_TO_SWITCH = 0.52;
+/** Порог переключения темы после смягчения rule-analyzer (denom + ничья второго места). */
+const MIN_CONFIDENCE_TO_SWITCH = 0.48;
 const MIN_GAP_TO_SWITCH = 0.08;
 const COOLDOWN_MS = 35_000;
 const MIN_CONSECUTIVE_BATCHES = 1;

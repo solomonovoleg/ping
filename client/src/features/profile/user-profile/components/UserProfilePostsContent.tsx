@@ -1,23 +1,33 @@
 import type { UseMutationResult } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  ArrowUpRight,
   Bookmark,
   Copy,
   Edit3,
   Eye,
-  Forward,
-  MessageCircle,
+  Link2,
+  MessageSquare,
   MoreHorizontal,
   PenSquare,
   Play,
   Pin,
   Plus,
+  Share2,
+  SmilePlus,
   Tag,
   Trash2,
 } from "lucide-react";
+import { UserAvatar } from "@/components/UserAvatar";
 import { cn } from "@/lib/utils";
 import type { FeedPost } from "@/lib/posts";
+import { formatPostTime } from "@/lib/posts";
+import { fetchSavedPosts, sharePostToUser } from "@/lib/posts";
+import { useAuth } from "@/contexts/AuthContext";
+import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
+import { buildProfilePostPath } from "@/lib/profile-route";
+import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { PostMedia } from "@/components/PostMedia";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
@@ -55,6 +65,24 @@ function profilePostPublicUrl(isMe: boolean, normalizedRouteId: string, postId: 
   const base = typeof window !== "undefined" ? window.location.origin : "";
   const seg = isMe ? "me" : encodeURIComponent(normalizedRouteId);
   return `${base}/profile/${seg}/post/${postId}`;
+}
+
+/** Публичная ссылка на пост по данным автора (для «Сохранено» и чужих постов). */
+function postPublicUrl(post: FeedPost, viewerId: string | undefined) {
+  const base = typeof window !== "undefined" ? window.location.origin : "";
+  const seg =
+    viewerId && post.authorId === viewerId
+      ? "me"
+      : post.author?.publicId != null
+        ? String(post.author.publicId)
+        : post.authorId;
+  return `${base}/profile/${encodeURIComponent(seg)}/post/${post.id}`;
+}
+
+function postDetailPath(post: FeedPost, viewerId: string | undefined) {
+  if (viewerId && post.authorId === viewerId) return `/profile/me/post/${post.id}`;
+  const token = post.author?.publicId != null ? String(post.author.publicId) : post.authorId;
+  return `/profile/${encodeURIComponent(token)}/post/${post.id}`;
 }
 
 export function UserProfilePostsContent({
@@ -106,7 +134,42 @@ export function UserProfilePostsContent({
 }) {
   const { th } = usePulseProfileTheme();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [savedOverride, setSavedOverride] = useState<Record<string, boolean>>({});
+  const [sharePostId, setSharePostId] = useState<string | null>(null);
+
+  const showSavedTab = activeTab === "saved";
+  const {
+    data: savedPosts = [],
+    isFetching: savedFetching,
+    isError: savedError,
+    error: savedErrorDetail,
+    refetch: refetchSaved,
+  } = useQuery({
+    queryKey: ["posts", "saved", user?.id],
+    queryFn: () => fetchSavedPosts(50),
+    enabled: isMe && showSavedTab,
+  });
+
+  const { data: contactsForShare = [] } = useQuery<ContactUser[]>({
+    queryKey: ["contacts", "list"],
+    queryFn: listContactsWithProfiles,
+    enabled: sharePostId !== null && !!user,
+  });
+
+  const shareToUserMutation = useMutation({
+    mutationFn: ({ postId, toUserId }: { postId: string; toUserId: string }) => sharePostToUser(postId, toUserId),
+    onSuccess: (data) => {
+      setSharePostId(null);
+      toast({ title: "Пост отправлен в чат" });
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      setLocation(`/chat/${encodeURIComponent(data.chatId)}`);
+    },
+    onError: (e) =>
+      toast({ title: e instanceof Error ? e.message : "Не удалось отправить", variant: "destructive" }),
+  });
 
   const isPostSaved = useCallback(
     (post: FeedPost) => {
@@ -118,9 +181,9 @@ export function UserProfilePostsContent({
     [isMe, savedOverride]
   );
 
-  const copyPostLink = useCallback(
-    (postId: string) => {
-      const url = profilePostPublicUrl(isMe, normalizedRouteId, postId);
+  const copyPostLinkForPost = useCallback(
+    (post: FeedPost) => {
+      const url = showSavedTab ? postPublicUrl(post, user?.id) : profilePostPublicUrl(isMe, normalizedRouteId, post.id);
       if (!navigator.clipboard?.writeText) {
         toast({ title: tToast.copyUnavailable, variant: "destructive" });
         return;
@@ -130,23 +193,7 @@ export function UserProfilePostsContent({
         () => toast({ title: tToast.copyLinkFailed, variant: "destructive" })
       );
     },
-    [isMe, normalizedRouteId, toast]
-  );
-
-  const handleSharePost = useCallback(
-    async (postId: string) => {
-      const url = profilePostPublicUrl(isMe, normalizedRouteId, postId);
-      if (typeof navigator !== "undefined" && navigator.share) {
-        try {
-          await navigator.share({ url });
-          return;
-        } catch {
-          /* fallback */
-        }
-      }
-      copyPostLink(postId);
-    },
-    [copyPostLink, isMe, normalizedRouteId]
+    [isMe, normalizedRouteId, showSavedTab, toast, user?.id]
   );
 
   const toggleSave = useCallback(
@@ -164,22 +211,187 @@ export function UserProfilePostsContent({
     [isMe, isPostSaved, savePostMutation]
   );
 
+  const shareTargetPost =
+    sharePostId != null
+      ? profilePosts.find((p) => p.id === sharePostId) ?? savedPosts.find((p) => p.id === sharePostId)
+      : undefined;
+
+  const shareSheet = (
+    <AnimatePresence>
+      {sharePostId ? (
+        <motion.div
+          className="fixed inset-0 z-[400] flex items-end bg-black/50 backdrop-blur-sm"
+          initial={prefersReducedMotion ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }}
+          onClick={() => !shareToUserMutation.isPending && setSharePostId(null)}
+        >
+          <motion.div
+            className="mx-auto flex max-h-[min(72vh,640px)] w-full max-w-[480px] flex-col overflow-hidden rounded-t-[24px] border border-border/60 bg-background shadow-2xl"
+            initial={prefersReducedMotion ? false : { y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto mb-2 mt-3 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
+            <div className="flex items-center justify-between border-b border-border/40 px-4 pb-3 pt-1">
+              <p className="text-base font-bold">Поделиться</p>
+              <button
+                type="button"
+                className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-muted-foreground hover:bg-secondary"
+                aria-label="Закрыть"
+                disabled={shareToUserMutation.isPending}
+                onClick={() => setSharePostId(null)}
+              >
+                <span className="text-lg leading-none">×</span>
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(12px,calc(env(safe-area-inset-bottom,0px)+12px))]">
+              {(() => {
+                const sp = shareTargetPost;
+                const shareUrl =
+                  sp != null
+                    ? `${window.location.origin}${buildProfilePostPath({
+                        postId: sp.id,
+                        isMe: sp.authorId === user?.id,
+                        publicId: sp.author?.publicId,
+                        userId: sp.authorId,
+                        fallbackPath: "/posts",
+                      })}`
+                    : "";
+                const shareTitle = sp
+                  ? [sp.author?.displayName, sp.author?.surname].filter(Boolean).join(" ") || "Пост"
+                  : "Пост";
+
+                const runNativeShare = async () => {
+                  try {
+                    if (navigator.share) {
+                      await navigator.share({ title: shareTitle, text: shareTitle, url: shareUrl });
+                      setSharePostId(null);
+                      return;
+                    }
+                    if (shareUrl && navigator.clipboard?.writeText) {
+                      await navigator.clipboard.writeText(shareUrl);
+                      toast({ title: tToast.linkCopied });
+                      setSharePostId(null);
+                    }
+                  } catch (e) {
+                    if ((e as Error)?.name === "AbortError") return;
+                    toast({ title: tToast.shareFailed, variant: "destructive" });
+                  }
+                };
+
+                const copyLink = async () => {
+                  if (!shareUrl) return;
+                  try {
+                    await navigator.clipboard.writeText(shareUrl);
+                    toast({ title: tToast.linkCopied });
+                    setSharePostId(null);
+                  } catch {
+                    toast({ title: tToast.copyLinkFailed, variant: "destructive" });
+                  }
+                };
+
+                if (!sp) {
+                  return (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      Пост не найден. Обновите страницу.
+                    </p>
+                  );
+                }
+
+                return (
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => void runNativeShare()}
+                      className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-xl border border-border/50 bg-secondary/40 px-4 py-3 text-left text-sm font-medium hover:bg-secondary/60"
+                    >
+                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-primary">
+                        <Share2 className="h-5 w-5" />
+                      </span>
+                      <span>Системное меню (соцсети, приложения…)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyLink()}
+                      className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-xl border border-border/50 bg-secondary/25 px-4 py-3 text-left text-sm font-medium hover:bg-secondary/45"
+                    >
+                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+                        <Link2 className="h-5 w-5" />
+                      </span>
+                      <span>Копировать ссылку на пост</span>
+                    </button>
+                    <p className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Отправить в Ping
+                    </p>
+                    {contactsForShare.filter((c) => c.id !== user?.id).length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Нет контактов — добавьте людей в разделе «Контакты».
+                      </p>
+                    ) : (
+                      <ul className="flex flex-col gap-1 pb-2">
+                        {contactsForShare
+                          .filter((c) => c.id !== user?.id)
+                          .map((c) => (
+                            <li key={c.id}>
+                              <button
+                                type="button"
+                                disabled={shareToUserMutation.isPending}
+                                className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-secondary/60"
+                                onClick={() => shareToUserMutation.mutate({ postId: sharePostId, toUserId: c.id })}
+                              >
+                                <UserAvatar
+                                  avatarUrl={c.avatarUrl ?? undefined}
+                                  displayName={
+                                    [c.displayName, c.surname].filter(Boolean).join(" ") || `ID ${c.publicId}`
+                                  }
+                                  seed={c.id}
+                                  size={40}
+                                  className="h-10 w-10 rounded-xl"
+                                />
+                                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                                  {[c.displayName, c.surname].filter(Boolean).join(" ") || `ID ${c.publicId}`}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+
   if (activeTab === "tagged") {
     return (
-      <div className="px-2 py-6">
-        <ListEmptyState
-          icon={Tag}
-          title="Отметки"
-          description="Раздел в разработке — скоро здесь будут публикации, где вас отметили."
-        />
-      </div>
+      <>
+        <div className="px-2 py-6">
+          <ListEmptyState
+            icon={Tag}
+            title="Отметки"
+            description="Раздел в разработке — скоро здесь будут публикации, где вас отметили."
+          />
+        </div>
+        {shareSheet}
+      </>
     );
   }
-  if (activeTab === "saved") {
+  if (showSavedTab && !isMe) {
     return (
-      <div className="px-2 py-6">
-        <ListEmptyState icon={Bookmark} title={u.savedTitle} description={u.savedDesc} />
-      </div>
+      <>
+        <div className="px-2 py-6">
+          <ListEmptyState icon={Bookmark} title={u.savedTitle} description={u.savedOtherProfileHint} />
+        </div>
+        {shareSheet}
+      </>
     );
   }
   if (activeTab === "posts" && postViewMode === "grid") {
@@ -265,6 +477,10 @@ export function UserProfilePostsContent({
         const reactionTotal = sortedReactions.reduce((s, r) => s + r.count, 0);
         const saved = isPostSaved(post);
         const sharesCount = post.sharesCount ?? 0;
+        const latestComments = Array.isArray(post.latestComments) ? post.latestComments : [];
+        const lastComment = [...latestComments].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        )[0];
 
         const menu = (
           <DropdownMenu>
@@ -279,7 +495,7 @@ export function UserProfilePostsContent({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem onClick={() => copyPostLink(post.id)}>
+              <DropdownMenuItem onClick={() => copyPostLinkForPost(post)}>
                 <Copy className="h-4 w-4" />
                 {u.copyPostLink}
               </DropdownMenuItem>
@@ -363,63 +579,117 @@ export function UserProfilePostsContent({
               />
             </div>
 
-            <div className="relative px-3 pb-1 pt-2">
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  className="flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 flex-wrap items-center gap-1.5 text-left transition-opacity active:opacity-80"
-                  style={{ color: th.text }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
-                  }}
-                >
-                  {topEmojis.map((r) => (
-                    <span key={r.emoji} className="text-lg leading-none">
-                      {r.emoji}
-                    </span>
-                  ))}
-                  {extraTypes > 0 ? (
-                    <span
-                      className="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"
-                      style={{ background: th.surface, color: th.text, opacity: 0.85 }}
-                    >
-                      +{extraTypes}
-                    </span>
-                  ) : null}
-                  <span className="text-[15px] font-semibold tabular-nums">{reactionTotal}</span>
-                </button>
-
-                <div
-                  className="flex shrink-0 items-center gap-3 text-[13px] font-medium tabular-nums"
-                  style={{ color: th.text }}
-                >
-                  <span className="flex items-center gap-1 opacity-90">
-                    <Eye className="h-3.5 w-3.5 opacity-70" aria-hidden />
-                    {formatProfilePostMetric(post.viewsCount)}
-                  </span>
+            <div className="relative px-3 pb-2 pt-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
                   <button
                     type="button"
-                    className="flex items-center gap-1 opacity-90 transition-opacity active:opacity-70"
+                    className={cn(
+                      "inline-flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-xl border px-2.5 py-2 text-left transition-transform active:scale-[0.99] sm:flex-none sm:max-w-[min(100%,240px)]",
+                      post.myReaction ? "border-primary/40 bg-primary/10" : "border-border/50 bg-secondary/20"
+                    )}
+                    style={{ color: th.text }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                      if (post.myReaction) {
+                        reactionMutation.mutate({ postId: post.id, emoji: null });
+                      } else {
+                        setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                      }
+                    }}
+                  >
+                    {topEmojis.map((r) => (
+                      <span key={r.emoji} className="text-[16px] leading-none">
+                        {r.emoji}
+                      </span>
+                    ))}
+                    {post.myReaction && !topEmojis.some((r) => r.emoji === post.myReaction) ? (
+                      <span className="text-[16px] leading-none">{post.myReaction}</span>
+                    ) : null}
+                    {extraTypes > 0 ? (
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
+                        style={{ background: th.surface, color: th.text, opacity: 0.9 }}
+                      >
+                        +{extraTypes}
+                      </span>
+                    ) : null}
+                    {topEmojis.length === 0 && !post.myReaction ? (
+                      <SmilePlus className="h-[18px] w-[18px] shrink-0 opacity-70" strokeWidth={2} aria-hidden />
+                    ) : null}
+                    <span
+                      className={cn(
+                        "text-[13px] font-semibold tabular-nums",
+                        topEmojis.length === 0 && !post.myReaction ? "opacity-75" : ""
+                      )}
+                    >
+                      {reactionTotal > 0 || post.myReaction ? reactionTotal : u.reactionsCta}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border bg-background/90 shadow-sm min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] transition-colors",
+                      showReactionPicker === post.id ? "border-primary/45 text-primary" : "border-border/50 text-muted-foreground"
+                    )}
+                    aria-label={u.addReactionAria}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                      setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                    }}
+                  >
+                    <Plus className="h-4 w-4" strokeWidth={2.25} />
+                  </button>
+                </div>
+
+                <div
+                  className="ml-auto flex shrink-0 items-center justify-end gap-0.5"
+                  style={{ paddingRight: "max(0px, env(safe-area-inset-right, 0px))" }}
+                >
+                  <button
+                    type="button"
+                    className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 opacity-90 transition-colors active:scale-[0.98] hover:opacity-100"
+                    style={{ color: th.text }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
                       setActiveCommentPostId(post.id);
                     }}
                     aria-label={u.openComments}
                   >
-                    <MessageCircle className="h-3.5 w-3.5 opacity-70" aria-hidden />
-                    {formatProfilePostMetric(post.commentsCount)}
+                    <MessageSquare className="h-4 w-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+                    <span className="text-[12px] font-semibold tabular-nums">{formatProfilePostMetric(post.commentsCount)}</span>
                   </button>
-                  <span className="flex items-center gap-1 opacity-90">
-                    <ArrowUpRight className="h-3.5 w-3.5 opacity-70" aria-hidden />
-                    {formatProfilePostMetric(sharesCount)}
+                  <button
+                    type="button"
+                    className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 opacity-90 transition-colors active:scale-[0.98] hover:opacity-100"
+                    style={{ color: th.text }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                      setSharePostId(post.id);
+                    }}
+                    aria-label={u.share}
+                  >
+                    <Share2 className="h-4 w-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+                    <span className="text-[12px] font-semibold tabular-nums">{formatProfilePostMetric(sharesCount)}</span>
+                  </button>
+                  <span
+                    className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 opacity-75"
+                    style={{ color: th.text }}
+                    title={u.viewsHint}
+                  >
+                    <Eye className="h-4 w-4 shrink-0 opacity-75" strokeWidth={2} aria-hidden />
+                    <span className="text-[12px] font-semibold tabular-nums">{formatProfilePostMetric(post.viewsCount)}</span>
                   </span>
                 </div>
               </div>
 
               {showReactionPicker === post.id ? (
                 <div
-                  className="absolute bottom-full left-0 z-50 mb-2 flex items-center gap-2 rounded-full border px-3 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200"
+                  className="absolute bottom-full left-3 z-50 mb-2 flex max-w-[min(calc(100vw-2rem),360px)] flex-wrap items-center justify-center gap-1.5 rounded-2xl border px-3 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200 sm:justify-start"
                   style={{
                     background: th.navBg,
                     borderColor: th.border,
@@ -440,7 +710,8 @@ export function UserProfilePostsContent({
                         });
                         setShowReactionPicker(null);
                       }}
-                      className="text-2xl transition-transform hover:scale-125 active:scale-95"
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-2xl transition-transform hover:scale-110 active:scale-95"
+                      aria-label={`${u.reactionAriaPrefix} ${emoji}`}
                     >
                       {emoji}
                     </button>
@@ -449,44 +720,30 @@ export function UserProfilePostsContent({
               ) : null}
             </div>
 
-            <div className="flex items-center justify-between px-3 pb-3 pt-1">
+            {lastComment ? (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  void handleSharePost(post.id);
+                  setActiveCommentPostId(post.id);
                 }}
-                className="flex h-10 w-10 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-transform active:scale-95"
-                style={{
-                  background: th.surface,
-                  border: `1px solid ${th.border}`,
-                  color: th.text,
-                }}
-                aria-label={u.share}
+                className="mx-3 mb-2 mt-0 max-w-[calc(100%-1.5rem)] rounded-xl border px-3 py-2.5 text-left transition-opacity active:opacity-80"
+                style={{ borderColor: th.border, background: th.surface }}
+                aria-label={`${u.lastCommentPreview}: ${lastComment.user}`}
               >
-                <Forward className="h-[18px] w-[18px]" strokeWidth={2.25} />
+                <span className="text-[11px] font-medium opacity-70" style={{ color: th.text }}>
+                  {lastComment.user} · {formatPostTime(lastComment.createdAt)}
+                </span>
+                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug" style={{ color: th.text }}>
+                  {lastComment.text}
+                </p>
+                {post.commentsCount > 1 ? (
+                  <span className="mt-1 inline-block text-[11px] font-medium text-primary">
+                    {u.allCommentsCount(post.commentsCount)}
+                  </span>
+                ) : null}
               </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (viewerCanSave) toggleSave(post);
-                }}
-                disabled={!viewerCanSave || savePostMutation.isPending}
-                className={cn(
-                  "flex h-10 w-10 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full transition-transform active:scale-95",
-                  !viewerCanSave && "opacity-40"
-                )}
-                style={{
-                  background: th.surface,
-                  border: `1px solid ${th.border}`,
-                  color: th.text,
-                }}
-                aria-label={saved ? u.removeBookmark : u.saveBookmark}
-              >
-                <Bookmark className={cn("h-[18px] w-[18px]", saved && "fill-current")} strokeWidth={2.25} />
-              </button>
-            </div>
+            ) : null}
           </PulseProfileThemedPostCard>
         );
       })}

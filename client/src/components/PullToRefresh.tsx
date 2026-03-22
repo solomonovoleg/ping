@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Loader2, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { triggerSelectionHaptic } from "@/lib/capacitor-native";
+import { triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
 
 const PULL_THRESHOLD = 72;
 const RESISTANCE = 0.4;
@@ -10,9 +10,19 @@ const HOLD_TO_REFRESH_MS = 2000;
 
 interface PullToRefreshProps {
   onRefresh: () => Promise<unknown> | void;
+  /** Вызывается при отпускании жеста, если тяга дошла до порога (вместе с обновлением списка). */
+  onPastThresholdRelease?: () => void;
   children: React.ReactNode;
   className?: string;
   disabled?: boolean;
+  /** Удержание тяги у порога без отпускания: авто-обновление (по умолчанию включено). */
+  enableHoldRefresh?: boolean;
+  /**
+   * Удержание тяги вниз у порога дольше этого времени (мс) — отдельное действие (например, скрытые чаты).
+   * Не вызывает onRefresh при срабатывании.
+   */
+  holdRevealMs?: number;
+  onHoldReveal?: () => void;
   /** Показывать кнопку «Наверх» после скролла вниз (аудит п.26) */
   showScrollToTop?: boolean;
   /** Внешний ref на скролл-контейнер, если нужно управлять scrollTop извне (например, сохранять позицию ленты). */
@@ -33,9 +43,13 @@ interface PullToRefreshProps {
  */
 export function PullToRefresh({
   onRefresh,
+  onPastThresholdRelease,
   children,
   className,
   disabled,
+  enableHoldRefresh = true,
+  holdRevealMs,
+  onHoldReveal,
   showScrollToTop,
   scrollRef,
   overlayTop,
@@ -50,6 +64,8 @@ export function PullToRefresh({
   const startYRef = useRef(0);
   const startScrollTopRef = useRef(0);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revealFiredRef = useRef(false);
 
   useEffect(() => {
     if (!showScrollToTop) return;
@@ -63,7 +79,7 @@ export function PullToRefresh({
 
   /** При удержании тяги вниз 2 сек — обновление без отпускания */
   useEffect(() => {
-    if (refreshing || pullY < PULL_THRESHOLD) {
+    if (!enableHoldRefresh || refreshing || pullY < PULL_THRESHOLD) {
       if (holdTimerRef.current) {
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
@@ -80,10 +96,32 @@ export function PullToRefresh({
     return () => {
       if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
     };
-  }, [pullY, refreshing, onRefresh]);
+  }, [pullY, refreshing, onRefresh, enableHoldRefresh]);
+
+  /** Удержание у порога дольше — скрытые чаты и т.п. */
+  useEffect(() => {
+    if (!holdRevealMs || !onHoldReveal || refreshing || pullY < PULL_THRESHOLD) {
+      if (holdRevealTimerRef.current) {
+        clearTimeout(holdRevealTimerRef.current);
+        holdRevealTimerRef.current = null;
+      }
+      return;
+    }
+    holdRevealTimerRef.current = setTimeout(() => {
+      holdRevealTimerRef.current = null;
+      revealFiredRef.current = true;
+      void triggerLightHaptic();
+      setPullY(0);
+      onHoldReveal();
+    }, holdRevealMs);
+    return () => {
+      if (holdRevealTimerRef.current) clearTimeout(holdRevealTimerRef.current);
+    };
+  }, [pullY, refreshing, holdRevealMs, onHoldReveal]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (disabled) return;
+    revealFiredRef.current = false;
     startYRef.current = e.touches[0].clientY;
     startScrollTopRef.current = effectiveScrollRef.current?.scrollTop ?? 0;
   }, [disabled]);
@@ -101,7 +139,13 @@ export function PullToRefresh({
 
   const handleTouchEnd = useCallback(() => {
     if (refreshing) return;
+    if (revealFiredRef.current) {
+      revealFiredRef.current = false;
+      setPullY(0);
+      return;
+    }
     if (pullY >= PULL_THRESHOLD) {
+      onPastThresholdRelease?.();
       triggerSelectionHaptic();
       setPullY(0);
       setRefreshing(true);
@@ -110,7 +154,7 @@ export function PullToRefresh({
     } else {
       setPullY(0);
     }
-  }, [onRefresh, pullY, refreshing]);
+  }, [onRefresh, onPastThresholdRelease, pullY, refreshing]);
 
   return (
     <div className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", className)}>
@@ -132,11 +176,18 @@ export function PullToRefresh({
         {refreshing ? (
           <Loader2 className="w-6 h-6 animate-spin text-primary" aria-hidden />
         ) : pullY > 16 ? (
-          <Loader2
-            className="w-5 h-5 text-muted-foreground transition-opacity"
-            style={{ opacity: Math.min(1, pullY / PULL_THRESHOLD) }}
-            aria-hidden
-          />
+          <div className="flex flex-col items-center gap-0.5 px-2">
+            <Loader2
+              className="w-5 h-5 text-muted-foreground transition-opacity"
+              style={{ opacity: Math.min(1, pullY / PULL_THRESHOLD) }}
+              aria-hidden
+            />
+            {holdRevealMs && pullY >= PULL_THRESHOLD * 0.85 ? (
+              <span className="text-[10px] text-muted-foreground text-center leading-tight max-w-[200px]">
+                Удерживайте, чтобы открыть скрытые чаты
+              </span>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div

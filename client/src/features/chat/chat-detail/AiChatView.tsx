@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { ChevronLeft, MoreVertical, Send, Sparkles } from "lucide-react";
+import { ChevronLeft, MessageSquare, MoreVertical, Send, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { TapScaleButton } from "@/components/ui/tap-scale";
@@ -8,10 +8,80 @@ import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useAiChat } from "@/features/chat/hooks/useAiChat";
 import { formatMessageTime } from "@/features/chat/utils/format";
 import { useChatSpacingPreset } from "./useChatSpacingPreset";
+import type { AiMemorySearchPayloadV1 } from "@/lib/ai-chat";
+
+function AiMemorySearchAttachment({
+  payload,
+  onOpenInChat,
+}: {
+  payload: AiMemorySearchPayloadV1;
+  onOpenInChat: (chatId: string, messageId: string) => void;
+}) {
+  const hasTags = payload.tags.length > 0;
+  const bm = payload.bestMatch;
+  return (
+    <div className="mt-3 space-y-3 border-t border-indigo-500/15 pt-3 dark:border-indigo-400/20">
+      {hasTags ? (
+        <div>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Теги поиска</p>
+          <div className="flex flex-wrap gap-1.5">
+            {payload.tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-1 text-[11px] font-medium text-indigo-800 dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-100"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {bm ? (
+        <div className="rounded-xl border border-border bg-muted/40 p-3 dark:bg-muted/25">
+          <p className="text-[11px] font-semibold text-muted-foreground">Наиболее подходящее</p>
+          <p className="mt-1 line-clamp-3 text-[13px] leading-snug text-foreground/90">{bm.excerpt}</p>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">«{bm.chatTitle}»</p>
+          <TapScaleButton
+            type="button"
+            haptic
+            className="mt-3 flex w-full min-h-[var(--uix-touch-min)] items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-600/90 dark:bg-indigo-500 dark:hover:bg-indigo-500/90"
+            onClick={() => onOpenInChat(bm.chatId, bm.messageId)}
+            aria-label={`Открыть сообщение в чате ${bm.chatTitle}`}
+          >
+            <MessageSquare className="h-4 w-4 shrink-0 opacity-95" aria-hidden />
+            Открыть в чате
+          </TapScaleButton>
+        </div>
+      ) : null}
+      {payload.alternatives && payload.alternatives.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Ещё варианты</p>
+          <ul className="flex flex-col gap-2">
+            {payload.alternatives.map((alt) => (
+              <li key={alt.messageId}>
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-border/80 bg-background/80 px-3 py-2 text-left text-[12px] transition-colors hover:bg-muted/60 dark:bg-background/50"
+                  onClick={() => onOpenInChat(alt.chatId, alt.messageId)}
+                >
+                  <span className="line-clamp-2 text-foreground/90">{alt.excerpt}</span>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">«{alt.chatTitle}»</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /** Экран чата с ИИ (AI OVER): список сообщений, ввод текста, подгрузка контекста */
 export function AiChatView() {
   const [, setLocation] = useLocation();
+  const openChatMessage = (chatId: string, messageId: string) => {
+    setLocation(`/chat/${encodeURIComponent(chatId)}?messageId=${encodeURIComponent(messageId)}`);
+  };
   const ai = useAiChat();
   const [input, setInput] = useState("");
   const { toast } = useToast();
@@ -26,8 +96,13 @@ export function AiChatView() {
   };
 
   return (
-    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-[radial-gradient(circle_at_top_right,hsl(var(--muted))_0%,hsl(var(--background))_56%,white_100%)] pb-[var(--uix-chat-bottom-pad)] uix-screen">
-      <header className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center justify-between rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76", spacing.headerYClass)}>
+    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-background pb-[var(--uix-chat-bottom-pad)] uix-screen">
+      <header
+        className={cn(
+          "uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center justify-between rounded-[20px] border border-border bg-background pt-safe-offset-2 shadow-sm dark:border-border",
+          spacing.headerYClass,
+        )}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <TapScaleButton
             type="button"
@@ -106,13 +181,16 @@ export function AiChatView() {
                 <div key={msg.id} className={cn("flex flex-col max-w-[85%] gap-1.5", msg.role === "user" ? "ml-auto items-end" : "items-start")}>
                   <div
                     className={cn(
-                      "relative rounded-2xl px-5 py-4 text-[15px] leading-relaxed shadow-[0_4px_20px_rgba(70,71,211,0.06)]",
+                      "relative rounded-2xl px-5 py-4 text-[15px] leading-relaxed",
                       msg.role === "user"
-                        ? "rounded-tr-none bg-indigo-600 text-white shadow-[0_8px_30px_rgba(70,71,211,0.18)]"
-                        : "rounded-tl-none border border-indigo-500/10 bg-white/80 text-foreground backdrop-blur-sm dark:bg-slate-900/70"
+                        ? "rounded-tr-none bg-indigo-600 text-white shadow-sm"
+                        : "rounded-tl-none border border-border bg-card text-foreground dark:bg-card"
                     )}
                   >
                     <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                    {msg.role === "assistant" && msg.payload?.v === 1 ? (
+                      <AiMemorySearchAttachment payload={msg.payload} onOpenInChat={openChatMessage} />
+                    ) : null}
                   </div>
                   <div className="px-1">
                     <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{formatMessageTime(msg.createdAt)}</span>
@@ -137,7 +215,7 @@ export function AiChatView() {
 
       <section className={cn("uix-content-x absolute inset-x-0 bottom-0 z-20 pb-4 pb-safe", spacing.bottomBarYClass)}>
         <div className="mx-auto w-full max-w-4xl">
-          <div className="flex items-end gap-2 rounded-3xl border border-white/30 bg-white/75 p-2 shadow-[0_12px_40px_rgba(70,71,211,0.12)] backdrop-blur-2xl dark:border-slate-700/40 dark:bg-slate-900/80">
+          <div className="flex items-end gap-2 rounded-3xl border border-border bg-background p-2 shadow-sm dark:bg-background">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}

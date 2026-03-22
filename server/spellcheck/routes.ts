@@ -4,6 +4,7 @@
  * Отправка сообщений НЕ зависит от spellcheck — это чисто подсказки при наборе.
  */
 import type { Express } from "express";
+import { requireAuth } from "../auth/session";
 
 const YANDEX_SPELLER_URL = "https://speller.yandex.net/services/spellservice.json/checkText";
 const REQUEST_TIMEOUT_MS = 4000;
@@ -43,7 +44,7 @@ async function callYandexSpeller(text: string): Promise<SpellError[]> {
 }
 
 export function registerSpellcheckRoutes(app: Express): void {
-  app.post("/api/spellcheck", async (req, res) => {
+  app.post("/api/spellcheck", requireAuth, async (req, res) => {
     try {
       const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
       if (!text || text.length < 2) {

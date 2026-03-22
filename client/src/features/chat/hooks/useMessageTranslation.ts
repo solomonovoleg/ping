@@ -8,7 +8,7 @@
  *
  * No visible loading: messages from WS arrive pre-translated; history translations load in parallel with messages.
  */
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { API, apiFetch } from "@/lib/api-base";
 import type { ApiMessage } from "../types";
 
@@ -19,25 +19,10 @@ export interface TranslationEntry {
 
 export type TranslationMap = Map<string, TranslationEntry>;
 
-const CYRILLIC_RE = /[\u0400-\u04FF]/;
-
-function guessLang(text: string): string | null {
-  const letters = text.replace(/[\s\d.,!?;:'"()\-\[\]{}@#$%^&*+=<>/\\|~`_]/g, "");
-  if (!letters) return null;
-  const cyr = (letters.match(/[\u0400-\u04FF]/g) || []).length;
-  const lat = (letters.match(/[A-Za-z]/g) || []).length;
-  const total = cyr + lat;
-  if (total === 0) return null;
-  if (cyr / total > 0.5) return "ru";
-  if (lat / total > 0.5) return "en";
-  return null;
-}
-
-function needsTranslation(text: string, targetLang: string): boolean {
-  const lang = guessLang(text);
-  if (!lang) return false;
-  if (targetLang === "ru") return !CYRILLIC_RE.test(text) || lang !== "ru";
-  return lang !== targetLang;
+function translateSourceText(msg: ApiMessage): string {
+  if (msg.type === "text") return msg.content.trim();
+  if (msg.type === "voice" || msg.type === "video_note") return (msg.transcript ?? "").trim();
+  return "";
 }
 
 export function useMessageTranslation(
@@ -48,11 +33,8 @@ export function useMessageTranslation(
   chatId: string,
 ): {
   translations: TranslationMap;
-  showOriginalIds: Set<string>;
-  toggleOriginal: (messageId: string) => void;
 } {
   const [translations, setTranslations] = useState<TranslationMap>(() => new Map());
-  const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(() => new Set());
 
   const pendingRef = useRef<Set<string>>(new Set());
   const enabledRef = useRef(enabled);
@@ -65,7 +47,7 @@ export function useMessageTranslation(
     if (bulkFetchedRef.current === `${chatId}:${targetLang}`) return;
     bulkFetchedRef.current = `${chatId}:${targetLang}`;
 
-    apiFetch(`${API}/chats/${chatId}/translations?targetLang=${encodeURIComponent(targetLang)}`)
+    apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/translations?targetLang=${encodeURIComponent(targetLang)}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (!data?.translations || !enabledRef.current) return;
@@ -95,19 +77,21 @@ export function useMessageTranslation(
 
     for (const msg of messages) {
       if (msg.senderId === currentUserId) continue;
-      if (msg.type !== "text") continue;
+      const sourceText = translateSourceText(msg);
+      if (!sourceText) continue;
 
       // Already have translation in local state
       if (translations.has(msg.id)) continue;
 
-      // WS delivered translation inline
-      if (msg.translatedText && msg.detectedLang) {
-        newEntries.push([msg.id, { translatedText: msg.translatedText, detectedLang: msg.detectedLang }]);
+      // WS delivered translation inline (server translates per recipient before push)
+      const inline = msg.translatedText?.trim();
+      if (inline) {
+        newEntries.push([msg.id, { translatedText: inline, detectedLang: msg.detectedLang || "auto" }]);
         continue;
       }
 
-      // Need to request translation
-      if (!pendingRef.current.has(msg.id) && needsTranslation(msg.content, targetLang)) {
+      // Запрос перевода: текст или расшифровка голосового/кружка
+      if (!pendingRef.current.has(msg.id)) {
         toTranslate.push(msg);
       }
     }
@@ -122,10 +106,11 @@ export function useMessageTranslation(
 
     for (const msg of toTranslate) {
       pendingRef.current.add(msg.id);
+      const text = translateSourceText(msg);
       apiFetch(`${API}/translate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: msg.content, targetLang, messageId: msg.id }),
+        body: JSON.stringify({ text, targetLang, messageId: msg.id, chatId }),
       })
         .then((res) => res.ok ? res.json() : null)
         .then((data) => {
@@ -142,14 +127,5 @@ export function useMessageTranslation(
     }
   }, [messages, enabled, targetLang, currentUserId, translations]);
 
-  const toggleOriginal = useCallback((messageId: string) => {
-    setShowOriginalIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
-      return next;
-    });
-  }, []);
-
-  return { translations, showOriginalIds, toggleOriginal };
+  return { translations };
 }

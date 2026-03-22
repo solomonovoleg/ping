@@ -10,6 +10,7 @@ import { registerAdminContentIngestRoutes } from "./content-ingest/routes";
 import { registerOpsPlatformAdminRoutes } from "./ops/platform.admin-http";
 import { registerOpsReportsAdminRoutes } from "./ops/reports.admin-http";
 import { registerOpsTrafficShieldAdminRoutes } from "./ops/traffic-shield.admin-http";
+import { registerOpsDiskAdminRoutes } from "./ops/disk.admin-http";
 import { registerAdminModulesTelemetryRoutes } from "./telemetry/modules.admin-http";
 
 export function registerAdminRoutes(app: Express): void {
@@ -21,6 +22,7 @@ export function registerAdminRoutes(app: Express): void {
   registerOpsPlatformAdminRoutes(app);
   registerOpsReportsAdminRoutes(app);
   registerOpsTrafficShieldAdminRoutes(app);
+  registerOpsDiskAdminRoutes(app);
   registerAdminModulesTelemetryRoutes(app);
   registerAdminFeedRoutes(app);
   registerAdminReferralRoutes(app);

@@ -52,11 +52,23 @@ export interface IStorage {
     targetUserId: string,
     limit: number
   ): Promise<{ id: string; publicId: number; displayName: string | null; surname: string | null; avatarUrl: string | null }[]>;
-  /** Блокировка: пользователь blocker блокирует blocked */
-  addBlock(blockerId: string, blockedId: string): Promise<void>;
+  /** Блокировка: пользователь blocker блокирует blocked (флаги по умолчанию все true) */
+  addBlock(
+    blockerId: string,
+    blockedId: string,
+    flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+  ): Promise<void>;
   removeBlock(blockerId: string, blockedId: string): Promise<void>;
   isBlocked(blockerId: string, blockedId: string): Promise<boolean>;
-  /** ID пользователей, с которыми viewer в блоке (кто-то кого-то заблокировал) */
+  /** Флаги блокировки blocker → blocked; null если записи нет */
+  getBlockFlags(
+    blockerId: string,
+    blockedId: string,
+  ): Promise<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean } | null>;
+  /**
+   * ID пользователей, которых нужно скрыть из ленты: есть блокировка с тремя флагами true
+   * (полная блокировка) в любую сторону между viewer и этим пользователем.
+   */
   getBlockedRelationIds(viewerId: string): Promise<string[]>;
   getNextPublicId(): Promise<number>;
   createUser(user: InsertUser): Promise<User>;
@@ -106,6 +118,22 @@ export interface IStorage {
   /** ID участников чата (для обогащения DM именем собеседника). */
   getChatMemberIds(chatId: string): Promise<string[]>;
   getChatsForUser(userId: string): Promise<Chat[]>;
+  /** Персональные настройки списка чатов для пользователя (по chat_id). */
+  getChatMemberPrefsForUser(userId: string): Promise<
+    Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>
+  >;
+  upsertChatMemberPrefs(
+    userId: string,
+    chatId: string,
+    data: {
+      pinnedAt?: Date | null;
+      hiddenAt?: Date | null;
+      listSection?: string;
+    }
+  ): Promise<void>;
+  deleteChatMemberPrefs(userId: string, chatId: string): Promise<void>;
+  /** Удалить чат и связанные данные (сообщения, папки — каскадом в БД). */
+  deleteChatCascade(chatId: string): Promise<boolean>;
   /** Найти или создать личный чат между двумя пользователями. */
   getOrCreateDmChat(userId: string, otherUserId: string): Promise<Chat>;
   createChat(data: InsertChat): Promise<Chat>;
@@ -119,6 +147,8 @@ export interface IStorage {
   getUnreadCount(chatId: string, userId: string): Promise<number>;
   /** Непрочитанные в папке: folderId=null для основной папки (сообщения без folderId). */
   getUnreadCountByFolder(chatId: string, folderId: string | null, userId: string): Promise<number>;
+  /** Число сообщений с данным folder_id (в т.ч. основная папка — её uuid). */
+  getMessageCountByFolder(chatId: string, folderId: string): Promise<number>;
 
   getMessagesByChatId(chatId: string, limit?: number, beforeMessageId?: string, folderId?: string | null): Promise<Message[]>;
   /** Медиа-сообщения (image, video, voice, video_note) для панели «Медиафайлы». */
@@ -132,6 +162,7 @@ export interface IStorage {
   getMessage(chatId: string, messageId: string): Promise<Message | undefined>;
   deleteMessage(chatId: string, messageId: string): Promise<boolean>;
   updateMessage(chatId: string, messageId: string, content: string): Promise<Message | undefined>;
+  updateMessageTranscript(chatId: string, messageId: string, transcript: string): Promise<Message | undefined>;
 
   /** «Удалено для себя»: скрыть сообщение для пользователя. */
   addMessageHidden(userId: string, chatId: string, messageId: string): Promise<void>;

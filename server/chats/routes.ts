@@ -1,5 +1,7 @@
 import type { Express, Request, Response } from "express";
+import { dmByPublicIdLimiter } from "../auth/rate-limit";
 import { requireAuth, getUserId } from "../auth/session";
+import { noStorePrivateJson } from "../middleware/no-store-private-json";
 import {
   addMemberToGroup,
   ChatsServiceError,
@@ -12,6 +14,9 @@ import {
   getDmByPublicId,
   listChatFoldersForUser,
   listChatsForUser,
+  updateChatMemberPrefsForUser,
+  leaveChatForUser,
+  deleteChatForEveryoneForUser,
   markChatRead,
   removeMemberFromGroup,
   searchMessagesForUser,
@@ -26,28 +31,36 @@ function param(p: Record<string, string | string[] | undefined>, key: string): s
 }
 
 export function registerChatsRoutes(app: Express): void {
-  app.get("/api/chats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
-    const chats = await listChatsForUser(userId);
+    const hiddenRaw = req.query.hidden;
+    const hiddenOnly = hiddenRaw === "1" || hiddenRaw === "true";
+    const chats = await listChatsForUser(userId, { hiddenOnly });
     res.json(chats);
   });
 
-  app.get("/api/chats/dm-by-public-id/:publicId", requireAuth, async (req: Request, res: Response) => {
-    const userId = getUserId(req)!;
-    const publicIdNum = parseInt(param(req.params, "publicId"), 10);
-    const messagesLimit = req.query.limit != null ? Math.min(Number(req.query.limit), 200) : 0;
-    try {
-      const payload = await getDmByPublicId(userId, publicIdNum, messagesLimit);
-      return res.json(payload);
-    } catch (error) {
-      if (error instanceof ChatsServiceError) {
-        return res.status(error.status).json({ message: error.message });
+  app.get(
+    "/api/chats/dm-by-public-id/:publicId",
+    noStorePrivateJson,
+    requireAuth,
+    dmByPublicIdLimiter,
+    async (req: Request, res: Response) => {
+      const userId = getUserId(req)!;
+      const publicIdNum = parseInt(param(req.params, "publicId"), 10);
+      const messagesLimit = req.query.limit != null ? Math.min(Number(req.query.limit), 200) : 0;
+      try {
+        const payload = await getDmByPublicId(userId, publicIdNum, messagesLimit);
+        return res.json(payload);
+      } catch (error) {
+        if (error instanceof ChatsServiceError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+  );
 
-  app.get("/api/chats/:id", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats/:id", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     try {
@@ -62,7 +75,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.put("/api/chats/:id/read", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/chats/:id/read", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     const body = (req.body ?? {}) as { messageId?: string };
@@ -86,7 +99,7 @@ export function registerChatsRoutes(app: Express): void {
     res.status(201).json(chat);
   });
 
-  app.get("/api/search/messages", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/search/messages", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     if (!q) {
@@ -96,7 +109,7 @@ export function registerChatsRoutes(app: Express): void {
     res.json(list);
   });
 
-  app.get("/api/chats/:chatId/media", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats/:chatId/media", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "chatId");
     const folderId = typeof req.query.folderId === "string" && req.query.folderId ? req.query.folderId : null;
@@ -113,7 +126,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/chats/:chatId/links", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats/:chatId/links", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "chatId");
     const folderId = typeof req.query.folderId === "string" && req.query.folderId ? req.query.folderId : null;
@@ -130,7 +143,50 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/chats/:id", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/chats/:id/me", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const chatId = param(req.params, "id");
+    const body = (req.body ?? {}) as { pinned?: boolean; hidden?: boolean; listSection?: string };
+    try {
+      await updateChatMemberPrefsForUser(userId, chatId, body);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof ChatsServiceError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/chats/:id/me", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const chatId = param(req.params, "id");
+    try {
+      await leaveChatForUser(userId, chatId);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof ChatsServiceError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/chats/:id/for-all", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const chatId = param(req.params, "id");
+    try {
+      await deleteChatForEveryoneForUser(userId, chatId);
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof ChatsServiceError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/api/chats/:id", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     const { name, avatarUrl } = req.body ?? {};
@@ -149,7 +205,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/chats/:id/members", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/chats/:id/members", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     const newUserId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
@@ -164,7 +220,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/chats/:id/members/:userId", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/chats/:id/members/:userId", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const actorUserId = getUserId(req)!;
     const chatId = param(req.params, "id");
     const targetUserId = param(req.params, "userId");
@@ -179,7 +235,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/chats/:id/folders", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/chats/:id/folders", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     try {
@@ -193,7 +249,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/chats/:id/folders", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/chats/:id/folders", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const chatId = param(req.params, "id");
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
@@ -211,7 +267,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/chats/:chatId/folders/:folderId", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/chats/:chatId/folders/:folderId", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const folderId = param(req.params, "folderId");
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
@@ -229,7 +285,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/chats/:chatId/folders/:folderId", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/chats/:chatId/folders/:folderId", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const folderId = param(req.params, "folderId");
     try {
@@ -243,7 +299,7 @@ export function registerChatsRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/chats/start-dm", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/chats/start-dm", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
     const otherUserId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
     try {

@@ -11,6 +11,10 @@ export async function resolveMentionToUserId(
 ): Promise<string | null> {
   const m = mention.trim();
   if (!m) return null;
+  const lower = m.toLowerCase();
+  if (lower === "all" || lower === "everyone" || lower === "все" || lower === "всех") {
+    return null;
+  }
   if (/^\d+$/.test(m)) {
     const user = await storage.getUserByPublicId(parseInt(m, 10));
     return user && user.id !== excludeUserId && !user.deletedAt && !user.isBlocked ? user.id : null;

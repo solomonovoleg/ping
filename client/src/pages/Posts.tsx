@@ -1,6 +1,23 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessageSquare, Share2, Bookmark, Plus, PenSquare, Eye, MoreHorizontal, Trash2, Camera, ImageIcon, User, Pencil } from "lucide-react";
+import {
+  MessageSquare,
+  Share2,
+  Plus,
+  PenSquare,
+  Eye,
+  MoreHorizontal,
+  Trash2,
+  Camera,
+  ImageIcon,
+  User,
+  Pencil,
+  Check,
+  Link2,
+  Volume2,
+  VolumeX,
+  SmilePlus,
+} from "lucide-react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
@@ -8,7 +25,22 @@ import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
-import { fetchFeed, formatPostTime, addReaction, removeReaction, recordPostView, updatePost, deletePost, sharePostToUser, type FeedPost, type ReactionUser } from "@/lib/posts";
+import {
+  fetchFeed,
+  formatPostTime,
+  addReaction,
+  removeReaction,
+  recordPostView,
+  updatePost,
+  deletePost,
+  sharePostToUser,
+  savePost,
+  unsavePost,
+  type FeedPost,
+  type ReactionUser,
+} from "@/lib/posts";
+import { applyReactionOptimistic, updateFeedPostInCache } from "@/lib/feed-query-cache";
+import { createComment } from "@/lib/comments";
 import { PostMedia } from "@/components/PostMedia";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { startDm } from "@/lib/search";
@@ -41,6 +73,7 @@ import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 import { FeedHeader } from "@/features/feed/components/FeedHeader";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 import { playLikeActionSound } from "@/lib/send-sound";
+import { FeedScrollRootContext } from "@/contexts/FeedScrollRootContext";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -215,6 +248,87 @@ function FeedPostCaption({
   );
 }
 
+function FeedInlineCommentRow({ postId }: { postId: string }) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    const t = text.trim();
+    if (!t || !user) {
+      if (!user) toast({ title: "Войдите, чтобы комментировать", variant: "destructive" });
+      return;
+    }
+    setSending(true);
+    try {
+      const created = await createComment(postId, t);
+      setText("");
+      if (created?.id) {
+        updateFeedPostInCache(queryClient, postId, (p) => ({
+          ...p,
+          commentsCount: (p.commentsCount ?? 0) + 1,
+          latestComments: [
+            {
+              id: created.id,
+              postId: created.postId,
+              userId: created.userId,
+              text: created.text,
+              createdAt: created.createdAt,
+              user: created.user,
+              avatar: created.avatar,
+              likes: created.likes,
+            },
+            ...(p.latestComments ?? []),
+          ].slice(0, 2),
+        }));
+      }
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+      import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+    } catch (e) {
+      toast({ title: e instanceof Error ? e.message : "Не удалось отправить", variant: "destructive" });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <UserAvatar
+        avatarUrl={user?.avatarUrl ?? undefined}
+        displayName={[user?.displayName, user?.surname].filter(Boolean).join(" ") || "Вы"}
+        seed={user?.id ?? "me"}
+        size={28}
+        className="h-7 w-7 shrink-0 rounded-lg"
+      />
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
+          }
+        }}
+        placeholder="Комментировать…"
+        disabled={sending || !user}
+        className="min-h-[var(--uix-touch-min)] flex-1 rounded-full border border-border/50 bg-secondary/40 px-3 text-[13px] text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+        aria-label="Текст комментария"
+      />
+      <button
+        type="button"
+        onClick={() => void send()}
+        disabled={sending || !text.trim() || !user}
+        className="shrink-0 rounded-full bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-40 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]"
+      >
+        {sending ? "…" : "Ок"}
+      </button>
+    </div>
+  );
+}
+
 export default function Posts() {
   const [, setLocation] = useLocation();
   const { user } = useAuth();
@@ -229,6 +343,8 @@ export default function Posts() {
   const [editImageUrl, setEditImageUrl] = useState("");
   const [shatteringPostIds, setShatteringPostIds] = useState<Set<string>>(new Set());
   const [hashtagFilter, setHashtagFilter] = useState<string | null>(null);
+  /** Один пост в ленте с включённым звуком видео (остальные muted). */
+  const [feedSoundPostId, setFeedSoundPostId] = useState<string | null>(null);
   const [expandedPostIds, setExpandedPostIds] = useState<Set<string>>(new Set());
   const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(new Set());
   const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
@@ -442,16 +558,66 @@ export default function Posts() {
       if (emoji) await addReaction(postId, emoji);
       else await removeReaction(postId);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["posts"] });
+    onMutate: async ({ postId, emoji }) => {
+      await queryClient.cancelQueries({ queryKey: ["posts", "feed"] });
+      const previous = queryClient.getQueriesData({ queryKey: ["posts", "feed"] });
+      updateFeedPostInCache(queryClient, postId, (p) => applyReactionOptimistic(p, emoji));
+      return { previous };
     },
+    onError: (e, _vars, ctx) => {
+      ctx?.previous?.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+      toast({
+        title: e instanceof Error ? e.message : "Не удалось обновить реакцию",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+    },
+  });
+
+  const savePostMutation = useMutation({
+    mutationFn: async ({ postId, save }: { postId: string; save: boolean }) => {
+      if (save) await savePost(postId);
+      else await unsavePost(postId);
+    },
+    onMutate: async ({ postId, save }) => {
+      await queryClient.cancelQueries({ queryKey: ["posts", "feed"] });
+      const previous = queryClient.getQueriesData({ queryKey: ["posts", "feed"] });
+      updateFeedPostInCache(queryClient, postId, (p) => ({ ...p, isSaved: save }));
+      return { previous };
+    },
+    onError: (e, _v, ctx) => {
+      ctx?.previous?.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data);
+      });
+      toast({ title: e instanceof Error ? e.message : "Не удалось сохранить", variant: "destructive" });
+    },
+    onSuccess: (_d, { save }) => {
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+      toast({ title: save ? "Сохранено в профиль" : "Убрано из сохранённого" });
+    },
+  });
+
+  const shareToUserMutation = useMutation({
+    mutationFn: ({ postId, toUserId }: { postId: string; toUserId: string }) => sharePostToUser(postId, toUserId),
+    onSuccess: (data) => {
+      setSharePostId(null);
+      toast({ title: "Пост отправлен в чат" });
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+      setLocation(`/chat/${encodeURIComponent(data.chatId)}`);
+    },
+    onError: (e) =>
+      toast({ title: e instanceof Error ? e.message : "Не удалось отправить", variant: "destructive" }),
   });
 
   const updatePostMutation = useMutation({
     mutationFn: ({ postId, text, imageUrl, mediaUrls }: { postId: string; text: string; imageUrl?: string | null; mediaUrls?: string[] | null }) =>
       updatePost(postId, { text, imageUrl, mediaUrls }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
       setEditPost(null);
       toast({ title: "Пост обновлён" });
     },
@@ -817,7 +983,7 @@ export default function Posts() {
           className="min-w-0"
           scrollRef={feedScrollRef}
         >
-          
+          <FeedScrollRootContext.Provider value={feedScrollRef}>
           {/* Stories Section */}
           <div className="py-4 border-b border-border/50 bg-background/50">
             <div className="flex gap-4 overflow-x-auto hide-scrollbar uix-content-x items-center">
@@ -879,17 +1045,26 @@ export default function Posts() {
                           setMyAvatarMenu(true);
                         }}
                         className={cn(
-                          "absolute bottom-0 right-0 z-10 flex h-6 w-6 items-center justify-center rounded-full border-2 border-background text-white transition-colors",
-                          storyUploading ? "bg-amber-500" : "bg-primary hover:bg-primary/90 active:bg-primary/80"
+                          "absolute -bottom-1 -right-1 z-10 flex h-11 w-11 items-end justify-end border-0 bg-transparent p-0 transition-transform active:scale-95"
                         )}
                         aria-label="Открыть меню моей истории"
                         disabled={storyUploading}
                       >
-                        {storyUploading ? (
-                          <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        ) : (
-                          <Plus className="h-3.5 w-3.5" />
-                        )}
+                        <span
+                          className={cn(
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-background text-white shadow-md transition-colors",
+                            storyUploading ? "bg-amber-500" : "bg-primary hover:bg-primary/90 active:bg-primary/80"
+                          )}
+                        >
+                          {storyUploading ? (
+                            <span
+                              className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"
+                              aria-hidden
+                            />
+                          ) : (
+                            <Plus className="h-4 w-4" strokeWidth={2.75} aria-hidden />
+                          )}
+                        </span>
                       </button>
                     )}
                     {"isTrending" in story && story.isTrending && (
@@ -975,15 +1150,25 @@ export default function Posts() {
                   fallbackPath: "/posts",
                 });
                 const latestComments = Array.isArray(post.latestComments) ? post.latestComments : [];
-                const latestTwoComments = latestComments
-                  .slice(0, 2)
-                  .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-                const hasCaption = safeText.trim().length > 0;
+                const lastComment = [...latestComments].sort(
+                  (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                )[0];
+                const reactionTotal =
+                  post.reactions?.reduce((sum: number, r: { count: number }) => sum + r.count, 0) ?? 0;
+                const topThreeReactionEmojis = [...(post.reactions ?? [])]
+                  .filter((r) => r.count > 0)
+                  .sort((a, b) => b.count - a.count)
+                  .slice(0, 3)
+                  .map((r) => r.emoji);
+                const sharesCount = post.sharesCount ?? 0;
+                const mediaList = post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : [];
+                const postHasVideo = mediaList.some((u) => /\.(mp4|webm|mov)(\?|$)/i.test(u));
+                const feedVideoSoundOn = feedSoundPostId === post.id;
                 const article = (
-              <article className="uix-content-x py-[var(--uix-space-4)] border-b border-border/40 hover:bg-secondary/15 transition-colors duration-200 ease-out">
-                <div className="flex items-start justify-between gap-[var(--uix-space-3)] mb-[var(--uix-space-3)]">
+              <article className="overflow-x-hidden border-b border-border/40 transition-colors duration-200 ease-out hover:bg-secondary/15">
+                <div className="flex items-start justify-between gap-[var(--uix-space-3)] uix-content-x pb-[var(--uix-space-3)] pt-[var(--uix-space-4)]">
                   <div
-                    className="flex min-w-0 flex-1 items-center gap-[var(--uix-space-3)] cursor-pointer group"
+                    className="group flex min-w-0 flex-1 cursor-pointer items-center gap-[var(--uix-space-3)]"
                     onClick={() => setLocation(authorProfilePath)}
                   >
                     <UserAvatar
@@ -991,11 +1176,11 @@ export default function Posts() {
                       displayName={post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${post.author?.publicId ?? post.authorId}`}
                       seed={String(post.authorId)}
                       size={40}
-                      className="w-10 h-10 rounded-xl object-cover group-hover:opacity-80 transition-opacity flex-shrink-0"
+                      className="h-10 w-10 flex-shrink-0 rounded-xl object-cover transition-opacity group-hover:opacity-80"
                     />
                     <div className="min-w-0 flex-1">
                       <h3
-                        className="font-semibold text-[15px] leading-tight group-hover:text-primary transition-colors truncate"
+                        className="truncate text-[15px] font-semibold leading-tight transition-colors group-hover:text-primary"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLocation(postDetailPath);
@@ -1004,7 +1189,7 @@ export default function Posts() {
                         {post.channelName || (post.author ? [post.author.displayName, post.author.surname].filter(Boolean).join(" ") : null) || `ID ${post.author?.publicId ?? post.authorId}`}
                       </h3>
                       <p
-                        className="mt-[var(--uix-space-1)] uix-text-caption text-muted-foreground cursor-pointer hover:text-foreground"
+                        className="mt-[var(--uix-space-1)] uix-text-caption cursor-pointer text-muted-foreground hover:text-foreground"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLocation(postDetailPath);
@@ -1014,56 +1199,140 @@ export default function Posts() {
                       </p>
                     </div>
                   </div>
-                  <div className="relative shrink-0 pt-0.5">
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground transition-colors p-2 rounded-full hover:bg-secondary/80 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMenuPostId(menuPostId === post.id ? null : post.id);
-                      }}
-                      aria-label="Меню поста"
-                    >
-                      <MoreHorizontal className="w-5 h-5" />
-                    </button>
-                    {post.authorId === user?.id && menuPostId === post.id && (
-                      <div className="absolute right-0 top-full mt-[var(--uix-space-2)] py-[var(--uix-space-1)] bg-background border border-border/80 rounded-xl shadow-lg z-50 min-w-[168px] overflow-hidden">
-                        <button
-                          type="button"
-                          className="w-full px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-secondary/70 flex items-center gap-[var(--uix-space-2)] min-h-[44px]"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditPost(post);
-                            setEditText(post.text);
-                            setEditImageUrl(post.imageUrl ?? "");
-                            setMenuPostId(null);
-                          }}
-                        >
-                          <PenSquare className="w-4 h-4" />
-                          Редактировать
-                        </button>
-                        <button
-                          type="button"
-                          className="w-full px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-red-500/10 text-red-600 flex items-center gap-[var(--uix-space-2)] min-h-[44px]"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm("Удалить пост?")) {
-                              setShatteringPostIds((s) => new Set(s).add(post.id));
-                              setMenuPostId(null);
-                              deletePostMutation.mutate(post.id);
-                            }
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          Удалить пост
-                        </button>
-                      </div>
+                  <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                    {user && mediaList.length === 0 && (
+                      <button
+                        type="button"
+                        className="flex h-9 w-9 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-xl border border-border/50 bg-secondary/50 text-foreground transition-colors hover:bg-secondary"
+                        aria-label={post.isSaved ? "Убрать из сохранённого" : "Сохранить пост"}
+                        disabled={savePostMutation.isPending && savePostMutation.variables?.postId === post.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                          savePostMutation.mutate({ postId: post.id, save: !post.isSaved });
+                        }}
+                      >
+                        {post.isSaved ? <Check className="h-5 w-5 text-primary" strokeWidth={2.25} /> : <Plus className="h-5 w-5" />}
+                      </button>
                     )}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMenuPostId(menuPostId === post.id ? null : post.id);
+                        }}
+                        aria-label="Меню поста"
+                      >
+                        <MoreHorizontal className="h-5 w-5" />
+                      </button>
+                      {post.authorId === user?.id && menuPostId === post.id && (
+                        <div className="absolute right-0 top-full z-50 mt-[var(--uix-space-2)] min-w-[168px] overflow-hidden rounded-xl border border-border/80 bg-background py-[var(--uix-space-1)] shadow-lg">
+                          <button
+                            type="button"
+                            className="flex min-h-[44px] w-full items-center gap-[var(--uix-space-2)] px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-secondary/70"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditPost(post);
+                              setEditText(post.text);
+                              setEditImageUrl(post.imageUrl ?? "");
+                              setMenuPostId(null);
+                            }}
+                          >
+                            <PenSquare className="h-4 w-4" />
+                            Редактировать
+                          </button>
+                          <button
+                            type="button"
+                            className="flex min-h-[44px] w-full items-center gap-[var(--uix-space-2)] px-[var(--uix-space-3)] py-2.5 text-left text-[14px] text-red-600 hover:bg-red-500/10"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm("Удалить пост?")) {
+                                setShatteringPostIds((s) => new Set(s).add(post.id));
+                                setMenuPostId(null);
+                                deletePostMutation.mutate(post.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Удалить пост
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* Post Content */}
-                <div>
+                {mediaList.length > 0 && (
+                  <div className="relative w-full">
+                    <PostMedia
+                      mediaUrls={mediaList}
+                      layout={post.mediaLayout ?? null}
+                      edgeToEdge
+                      feedVideoAutoplay
+                      feedVideoSoundOn={feedVideoSoundOn}
+                      feedReelsInteraction={
+                        user
+                          ? {
+                              onDoubleTapFire: () => {
+                                void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) =>
+                                  triggerLightHaptic(),
+                                );
+                                playLikeActionSound();
+                                const mine = post.myReaction;
+                                reactionMutation.mutate({
+                                  postId: post.id,
+                                  emoji: mine === "🔥" ? null : "🔥",
+                                });
+                              },
+                            }
+                          : null
+                      }
+                    />
+                    {user ? (
+                      <div className="absolute right-[max(0.5rem,env(safe-area-inset-right))] top-2 z-10 flex items-center gap-1.5">
+                        {postHasVideo ? (
+                          <button
+                            type="button"
+                            className="flex h-8 w-8 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-sm backdrop-blur-sm transition-transform active:scale-90"
+                            aria-label={feedVideoSoundOn ? "Выключить звук видео" : "Включить звук видео"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                              setFeedSoundPostId((cur) => (cur === post.id ? null : post.id));
+                            }}
+                          >
+                            {feedVideoSoundOn ? (
+                              <Volume2 className="h-4 w-4 opacity-95" strokeWidth={2.25} aria-hidden />
+                            ) : (
+                              <VolumeX className="h-4 w-4 opacity-90" strokeWidth={2.25} aria-hidden />
+                            )}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-sm backdrop-blur-sm transition-transform active:scale-90"
+                          aria-label={post.isSaved ? "Убрать из сохранённого" : "Сохранить пост в профиль"}
+                          disabled={savePostMutation.isPending && savePostMutation.variables?.postId === post.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            savePostMutation.mutate({ postId: post.id, save: !post.isSaved });
+                          }}
+                        >
+                          {post.isSaved ? (
+                            <Check className="h-4 w-4 text-emerald-300" strokeWidth={2.5} />
+                          ) : (
+                            <Plus className="h-4 w-4" strokeWidth={2.5} />
+                          )}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                <div className="min-w-0 border-t border-border/25 uix-content-x py-[var(--uix-space-3)]">
                   <FeedPostCaption
                     postId={post.id}
                     text={safeText}
@@ -1071,163 +1340,169 @@ export default function Posts() {
                     onToggleExpand={() => togglePostExpand(post.id)}
                     onHashtagClick={(tag) => setHashtagFilter(tag)}
                   />
-                  <PostMedia
-                    mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
-                    layout={post.mediaLayout ?? null}
-                  />
-                </div>
 
-                {latestTwoComments.length > 0 && (
-                  <div className="mb-2.5 flex flex-col gap-1.5">
-                    {latestTwoComments.map((comment) => (
-                      <button
-                        key={comment.id}
-                        type="button"
-                        onClick={() => setActiveCommentPostId(post.id)}
-                        className="w-full text-left rounded-xl border border-border/50 bg-secondary/35 px-2.5 py-1.5 hover:bg-secondary/50 transition-colors"
-                        aria-label={`Открыть комментарии к посту. Комментарий: ${comment.user}`}
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-[12px] font-medium text-foreground/90 truncate">{comment.user}</span>
-                          <span className="text-[11px] text-muted-foreground shrink-0">{formatPostTime(comment.createdAt)}</span>
-                        </div>
-                        <p className="text-[13px] leading-snug text-foreground/85 line-clamp-1 break-words">{comment.text}</p>
-                      </button>
-                    ))}
-                    {post.commentsCount > latestTwoComments.length && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveCommentPostId(post.id)}
-                        className="self-start text-[12px] text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Ещё комментарии ({post.commentsCount})
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Post Actions */}
-                <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center gap-2 relative">
-                    {/* Reactions Pill */}
-                    <div
-                      title={
-                        post.reactionUsers && Object.keys(post.reactionUsers).length > 0
-                          ? Object.entries(post.reactionUsers)
-                              .flatMap(([emoji, users]) =>
-                                (users as ReactionUser[]).map((u) =>
-                                  [emoji, [u.displayName, u.surname].filter(Boolean).join(" ") || "ID"].join(" ")
-                                )
-                              )
-                              .join("; ") || undefined
-                          : undefined
-                      }
-                      className={cn(
-                        "flex items-center gap-1 px-3 py-1.5 rounded-full bg-secondary transition-colors cursor-pointer border active:scale-95 select-none",
-                        (post.myReaction ?? null)
-                          ? "bg-primary/10 border-primary/30 text-foreground"
-                          : "text-secondary-foreground hover:bg-secondary/80 border-border/30"
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
-                        if (post.myReaction) {
-                          reactionMutation.mutate({ postId: post.id, emoji: null });
-                        } else {
-                          setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
-                        }
-                      }}
-                    >
-                      {post.reactions?.map((reaction: { emoji: string; count: number }, i: number) => {
-                        if ((post.myReaction ?? null) === reaction.emoji) return null;
-                        return (
-                          <div key={i} className="flex items-center gap-1 pointer-events-none">
-                            <span className="text-base leading-none">{reaction.emoji}</span>
-                          </div>
-                        );
-                      })}
-                      {(post.myReaction ?? null) && (
-                        <div className="flex items-center gap-1 pointer-events-none">
-                          <span className="text-base leading-none">{post.myReaction}</span>
-                        </div>
-                      )}
-                      <span className="text-sm font-medium ml-1 pointer-events-none">
-                        {post.reactions?.reduce((sum: number, r: { count: number }) => sum + r.count, 0) ?? 0}
-                      </span>
-                    </div>
-                    
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
-                        setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
-                      }}
-                      className={cn(
-                        "flex items-center justify-center w-8 h-8 rounded-full bg-secondary transition-colors border",
-                        showReactionPicker === post.id 
-                          ? "text-primary border-primary/50 bg-primary/10" 
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 border-border/30"
-                      )}
-                      aria-label="Добавить реакцию"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                    
-                    {showReactionPicker === post.id && (
-                      <div className="absolute bottom-full left-0 mb-2 bg-background/95 backdrop-blur-xl border border-border shadow-lg rounded-full px-3 py-2 flex items-center gap-2 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
-                        {EMOJIS.map(emoji => (
-                          <button
-                            key={emoji}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
-                              playLikeActionSound();
-                              reactionMutation.mutate({ postId: post.id, emoji });
-                              setShowReactionPicker(null);
-                            }}
-                            className="text-2xl hover:scale-125 transition-transform active:scale-95"
-                            aria-label={`Реакция ${emoji}`}
+                  <div className="relative mt-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                        <button
+                          type="button"
+                          title={
+                            post.reactionUsers && Object.keys(post.reactionUsers).length > 0
+                              ? Object.entries(post.reactionUsers)
+                                  .flatMap(([emoji, users]) =>
+                                    (users as ReactionUser[]).map((u) =>
+                                      [emoji, [u.displayName, u.surname].filter(Boolean).join(" ") || "ID"].join(" ")
+                                    )
+                                  )
+                                  .join("; ") || undefined
+                              : undefined
+                          }
+                          className={cn(
+                            "inline-flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-xl border border-border/40 bg-secondary/25 px-2.5 py-2 text-left transition-transform active:scale-[0.99] sm:flex-none sm:max-w-[min(100%,240px)]",
+                            (post.myReaction ?? null) ? "border-primary/40 bg-primary/10" : ""
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            if (post.myReaction) {
+                              reactionMutation.mutate({ postId: post.id, emoji: null });
+                            } else {
+                              setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                            }
+                          }}
+                        >
+                          {topThreeReactionEmojis.map((emoji, i) => (
+                            <span key={`${emoji}-${i}`} className="text-[16px] leading-none">
+                              {emoji}
+                            </span>
+                          ))}
+                          {post.myReaction && !topThreeReactionEmojis.includes(post.myReaction) && (
+                            <span className="text-[16px] leading-none">{post.myReaction}</span>
+                          )}
+                          {topThreeReactionEmojis.length === 0 && !(post.myReaction ?? null) && (
+                            <SmilePlus className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={2} aria-hidden />
+                          )}
+                          <span
+                            className={cn(
+                              "text-[13px] font-semibold tabular-nums",
+                              topThreeReactionEmojis.length === 0 && !(post.myReaction ?? null)
+                                ? "text-muted-foreground"
+                                : "text-foreground/90"
+                            )}
                           >
-                            {emoji}
-                          </button>
-                        ))}
+                            {reactionTotal > 0 || (post.myReaction ?? null)
+                              ? reactionTotal
+                              : "Реакции"}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border/40 bg-background/90 shadow-sm min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] transition-colors",
+                            showReactionPicker === post.id ? "border-primary/45 text-primary" : "text-muted-foreground"
+                          )}
+                          aria-label="Выбрать реакцию"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            setShowReactionPicker(showReactionPicker === post.id ? null : post.id);
+                          }}
+                        >
+                          <Plus className="h-4 w-4" strokeWidth={2.25} />
+                        </button>
+                      </div>
+
+                      <div
+                        className="ml-auto flex shrink-0 items-center justify-end gap-0.5"
+                        style={{ paddingRight: "max(0px, env(safe-area-inset-right, 0px))" }}
+                      >
+                        <button
+                          type="button"
+                          className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]"
+                          title="Комментарии"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            setActiveCommentPostId(post.id);
+                          }}
+                        >
+                          <MessageSquare className="h-4 w-4 shrink-0 opacity-85" strokeWidth={2} aria-hidden />
+                          <span className="text-[12px] font-semibold tabular-nums text-foreground/85">{post.commentsCount}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]"
+                          title="Поделиться"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                            setMenuPostId(null);
+                            setSharePostId(post.id);
+                          }}
+                        >
+                          <Share2 className="h-4 w-4 shrink-0 opacity-85" strokeWidth={2} aria-hidden />
+                          <span className="text-[12px] font-semibold tabular-nums text-foreground/85">{sharesCount}</span>
+                        </button>
+                        <span
+                          className="flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 text-muted-foreground"
+                          title="Просмотры"
+                        >
+                          <Eye className="h-4 w-4 shrink-0 opacity-75" strokeWidth={2} aria-hidden />
+                          <span className="text-[12px] font-semibold tabular-nums text-foreground/70">{post.viewsCount ?? 0}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {showReactionPicker === post.id && (
+                      <div className="absolute bottom-full left-0 z-[60] mb-2 flex w-full max-w-[min(100%,360px)] justify-center sm:justify-start">
+                        <div className="flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 duration-200">
+                          {EMOJIS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                                playLikeActionSound();
+                                reactionMutation.mutate({ postId: post.id, emoji });
+                                setShowReactionPicker(null);
+                              }}
+                              className="flex h-10 w-10 items-center justify-center rounded-full text-2xl transition-transform hover:scale-110 active:scale-95"
+                              aria-label={`Реакция ${emoji}`}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
-                    
+                  </div>
+
+                  {lastComment ? (
                     <button
+                      type="button"
                       onClick={() => setActiveCommentPostId(post.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm font-medium border border-border/30 ml-auto"
+                      className="mt-3 w-full rounded-xl border border-border/40 bg-secondary/20 px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
+                      aria-label={`Последний комментарий от ${lastComment.user}`}
                     >
-                      <MessageSquare className="w-4 h-4" />
-                      {post.commentsCount}
-                    </button>
-                    {(post.viewsCount ?? 0) > 0 && (
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Eye className="w-3.5 h-3.5" />
-                        {post.viewsCount}
+                      <span className="text-[11px] font-medium text-muted-foreground">
+                        {lastComment.user} · {formatPostTime(lastComment.createdAt)}
                       </span>
-                    )}
-                  </div>
+                      <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-foreground/85">{lastComment.text}</p>
+                      {post.commentsCount > 1 && (
+                        <span className="mt-1 inline-block text-[11px] text-primary">Все комментарии ({post.commentsCount})</span>
+                      )}
+                    </button>
+                  ) : (
+                    <div className="mt-3 rounded-xl border border-dashed border-border/45 bg-secondary/12 px-3 py-2.5">
+                      <p className="text-[12px] leading-snug text-muted-foreground">
+                        Пока без комментариев — напишите первый, пост станет живее
+                      </p>
+                    </div>
+                  )}
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                      aria-label="Сохранить в избранное"
-                    >
-                      <Bookmark className="w-5 h-5" />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                      onClick={(e) => { e.stopPropagation(); setMenuPostId(null); setSharePostId(post.id); }}
-                      aria-label="Поделиться"
-                    >
-                      <Share2 className="w-5 h-5" />
-                    </button>
-                  </div>
+                  <FeedInlineCommentRow postId={post.id} />
                 </div>
-
               </article>
                 );
                 if (isShattering) {
@@ -1236,7 +1511,7 @@ export default function Posts() {
                     <ShatterEffect
                       onComplete={() => {
                         setShatteringPostIds((s) => { const n = new Set(s); n.delete(post.id); return n; });
-                        queryClient.invalidateQueries({ queryKey: ["posts"] });
+                        void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
                         toast({ title: "Пост удалён" });
                       }}
                       className="border-b border-border/50"
@@ -1283,6 +1558,7 @@ export default function Posts() {
               </>
             )}
           </div>
+          </FeedScrollRootContext.Provider>
         </PullToRefresh>
 
         {activeStoryIndex !== null && chainedStoryViewerModel && chainedStoryViewerModel.stories.length > 0 && (
@@ -1386,11 +1662,164 @@ export default function Posts() {
           </div>
         )}
 
-        <CommentsModal 
-          isOpen={activeCommentPostId !== null} 
-          onClose={() => setActiveCommentPostId(null)} 
-          postId={activeCommentPostId} 
+        <CommentsModal
+          isOpen={activeCommentPostId !== null}
+          onClose={() => setActiveCommentPostId(null)}
+          postId={activeCommentPostId}
+          postAuthorId={
+            activeCommentPostId ? feedPosts.find((p) => p.id === activeCommentPostId)?.authorId : undefined
+          }
         />
+
+        <AnimatePresence>
+          {sharePostId && (
+            <motion.div
+              className="fixed inset-0 z-[400] flex items-end bg-black/50 backdrop-blur-sm"
+              initial={prefersReducedMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }}
+              onClick={() => !shareToUserMutation.isPending && setSharePostId(null)}
+            >
+              <motion.div
+                className="mx-auto flex max-h-[min(72vh,640px)] w-full max-w-[480px] flex-col overflow-hidden rounded-t-[24px] border border-border/60 bg-background shadow-2xl"
+                initial={prefersReducedMotion ? false : { y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mx-auto mb-2 mt-3 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
+                <div className="flex items-center justify-between border-b border-border/40 px-4 pb-3 pt-1">
+                  <p className="text-base font-bold">Поделиться</p>
+                  <button
+                    type="button"
+                    className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-muted-foreground hover:bg-secondary"
+                    aria-label="Закрыть"
+                    disabled={shareToUserMutation.isPending}
+                    onClick={() => setSharePostId(null)}
+                  >
+                    <span className="text-lg leading-none">×</span>
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(12px,calc(env(safe-area-inset-bottom,0px)+12px))]">
+                  {(() => {
+                    const sp = feedPosts.find((p) => p.id === sharePostId);
+                    const shareUrl =
+                      sp != null
+                        ? `${window.location.origin}${buildProfilePostPath({
+                            postId: sp.id,
+                            isMe: sp.authorId === user?.id,
+                            publicId: sp.author?.publicId,
+                            userId: sp.authorId,
+                            fallbackPath: "/posts",
+                          })}`
+                        : "";
+                    const shareTitle = sp
+                      ? [sp.author?.displayName, sp.author?.surname].filter(Boolean).join(" ") || "Пост"
+                      : "Пост";
+
+                    const runNativeShare = async () => {
+                      try {
+                        if (navigator.share) {
+                          await navigator.share({ title: shareTitle, text: shareTitle, url: shareUrl });
+                          setSharePostId(null);
+                          return;
+                        }
+                        if (shareUrl && navigator.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(shareUrl);
+                          toast({ title: "Ссылка скопирована" });
+                          setSharePostId(null);
+                        }
+                      } catch (e) {
+                        if ((e as Error)?.name === "AbortError") return;
+                        toast({ title: "Не удалось поделиться", variant: "destructive" });
+                      }
+                    };
+
+                    const copyLink = async () => {
+                      if (!shareUrl) return;
+                      try {
+                        await navigator.clipboard.writeText(shareUrl);
+                        toast({ title: "Ссылка скопирована" });
+                        setSharePostId(null);
+                      } catch {
+                        toast({ title: "Не удалось скопировать", variant: "destructive" });
+                      }
+                    };
+
+                    if (!sp) {
+                      return (
+                        <p className="py-6 text-center text-sm text-muted-foreground">
+                          Пост не найден в ленте. Обновите страницу.
+                        </p>
+                      );
+                    }
+
+                    return (
+                      <div className="flex flex-col gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => void runNativeShare()}
+                          className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-xl border border-border/50 bg-secondary/40 px-4 py-3 text-left text-sm font-medium hover:bg-secondary/60"
+                        >
+                          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-primary">
+                            <Share2 className="h-5 w-5" />
+                          </span>
+                          <span>Системное меню (соцсети, приложения…)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void copyLink()}
+                          className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-xl border border-border/50 bg-secondary/25 px-4 py-3 text-left text-sm font-medium hover:bg-secondary/45"
+                        >
+                          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+                            <Link2 className="h-5 w-5" />
+                          </span>
+                          <span>Копировать ссылку на пост</span>
+                        </button>
+                        <p className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Отправить в Ping
+                        </p>
+                        {contactsForShare.filter((c) => c.id !== user?.id).length === 0 ? (
+                          <p className="text-sm text-muted-foreground">Нет контактов — добавьте людей в разделе «Контакты».</p>
+                        ) : (
+                          <ul className="flex flex-col gap-1 pb-2">
+                            {contactsForShare
+                              .filter((c) => c.id !== user?.id)
+                              .map((c) => (
+                                <li key={c.id}>
+                                  <button
+                                    type="button"
+                                    disabled={shareToUserMutation.isPending}
+                                    className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-secondary/60"
+                                    onClick={() =>
+                                      shareToUserMutation.mutate({ postId: sharePostId, toUserId: c.id })
+                                    }
+                                  >
+                                    <UserAvatar
+                                      avatarUrl={c.avatarUrl ?? undefined}
+                                      displayName={[c.displayName, c.surname].filter(Boolean).join(" ") || `ID ${c.publicId}`}
+                                      seed={c.id}
+                                      size={40}
+                                      className="h-10 w-10 rounded-xl"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                                      {[c.displayName, c.surname].filter(Boolean).join(" ") || `ID ${c.publicId}`}
+                                    </span>
+                                  </button>
+                                </li>
+                              ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Avatar long-press menu (Instagram-like bottom sheet) */}
         <AnimatePresence>

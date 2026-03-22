@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { POST_VIDEO_MAX_SECONDS, POST_VIDEO_MIN_SEGMENT_SECONDS } from "@shared/post-video";
 import type { PostVideoTrimUpload } from "@/lib/posts";
 import { bindPostVideoTrimDrag } from "./post-video-trim-drag";
 import { normalizePostVideoTrimRange } from "./post-video-trim-range";
@@ -7,9 +7,13 @@ import { normalizePostVideoTrimRange } from "./post-video-trim-range";
 export function usePostVideoTrim(options: {
   open: boolean;
   file: File | null;
+  /** Лимит выбранного фрагмента, сек. (пост 14, аватар 4). */
+  maxSegmentSeconds?: number;
   onConfirm: (trim: PostVideoTrimUpload) => void;
 }) {
   const { open, file, onConfirm } = options;
+  const cap = options.maxSegmentSeconds ?? POST_VIDEO_MAX_SECONDS;
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
@@ -18,9 +22,11 @@ export function usePostVideoTrim(options: {
   const [metaError, setMetaError] = useState<string | null>(null);
   const [durationSec, setDurationSec] = useState(0);
   const [startSec, setStartSec] = useState(0);
-  const [endSec, setEndSec] = useState(POST_VIDEO_MAX_SECONDS);
+  const [endSec, setEndSec] = useState(cap);
   const [playing, setPlaying] = useState(false);
-  const latestRangeRef = useRef({ s: 0, e: POST_VIDEO_MAX_SECONDS });
+  const latestRangeRef = useRef({ s: 0, e: cap });
+  const capRef = useRef(cap);
+  capRef.current = cap;
 
   const durationSecRef = useRef(durationSec);
   durationSecRef.current = durationSec;
@@ -34,9 +40,9 @@ export function usePostVideoTrim(options: {
       setMetaError(null);
       setDurationSec(0);
       setStartSec(0);
-      setEndSec(POST_VIDEO_MAX_SECONDS);
+      setEndSec(capRef.current);
       setPlaying(false);
-      latestRangeRef.current = { s: 0, e: POST_VIDEO_MAX_SECONDS };
+      latestRangeRef.current = { s: 0, e: capRef.current };
       setPreviewUrl(null);
       return;
     }
@@ -53,23 +59,33 @@ export function usePostVideoTrim(options: {
     };
   }, [open, file]);
 
+  useEffect(() => {
+    if (!open || !file) return;
+    setEndSec((e) => Math.min(e, cap));
+    latestRangeRef.current = {
+      s: latestRangeRef.current.s,
+      e: Math.min(latestRangeRef.current.e, cap),
+    };
+  }, [open, file, cap]);
+
   const onVideoLoaded = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     const d = v.duration;
+    const maxSeg = capRef.current;
     if (!Number.isFinite(d) || d <= 0) {
       setMetaError("Не удалось прочитать длительность видео");
       return;
     }
     setDurationSec(d);
-    if (d <= POST_VIDEO_MAX_SECONDS + 0.05) {
+    if (d <= maxSeg + 0.05) {
       setStartSec(0);
       setEndSec(d);
       latestRangeRef.current = { s: 0, e: d };
     } else {
       setStartSec(0);
-      setEndSec(POST_VIDEO_MAX_SECONDS);
-      latestRangeRef.current = { s: 0, e: POST_VIDEO_MAX_SECONDS };
+      setEndSec(maxSeg);
+      latestRangeRef.current = { s: 0, e: maxSeg };
     }
     setMetaError(null);
   }, []);
@@ -79,7 +95,7 @@ export function usePostVideoTrim(options: {
   }, []);
 
   const setRange = useCallback((s: number, e: number) => {
-    const [ns, ne] = normalizePostVideoTrimRange(s, e, durationSecRef.current);
+    const [ns, ne] = normalizePostVideoTrimRange(s, e, durationSecRef.current, capRef.current);
     latestRangeRef.current = { s: ns, e: ne };
     setStartSec(ns);
     setEndSec(ne);
@@ -122,7 +138,6 @@ export function usePostVideoTrim(options: {
   const onPointerDownHandle = useCallback(
     (kind: "L" | "R" | "M", e: ReactPointerEvent<HTMLElement>) => {
       if (metaError || durationSecRef.current <= 0) return;
-      if (durationSecRef.current <= POST_VIDEO_MAX_SECONDS + 0.05 && kind !== "M") return;
       e.preventDefault();
       e.stopPropagation();
       bindPostVideoTrimDrag({
@@ -154,14 +169,15 @@ export function usePostVideoTrim(options: {
 
   const handleConfirm = useCallback(() => {
     if (metaError || durationSec <= 0) return;
-    const [s, e] = normalizePostVideoTrimRange(startSec, endSec, durationSec);
+    const [s, e] = normalizePostVideoTrimRange(startSec, endSec, durationSec, cap);
     onConfirm({
       trimStartSec: Math.round(s * 1000) / 1000,
       trimDurationSec: Math.round((e - s) * 1000) / 1000,
     });
-  }, [metaError, durationSec, startSec, endSec, onConfirm]);
+  }, [metaError, durationSec, startSec, endSec, onConfirm, cap]);
 
-  const lockedShort = durationSec > 0 && durationSec <= POST_VIDEO_MAX_SECONDS + 0.05;
+  /** Без ручек только если ролик короче минимально допустимого фрагмента — иначе всегда можно сдвинуть начало/конец. */
+  const lockedShort = durationSec > 0 && durationSec <= POST_VIDEO_MIN_SEGMENT_SECONDS + 0.02;
   const leftPct = durationSec > 0 ? (startSec / durationSec) * 100 : 0;
   const widthPct = durationSec > 0 ? ((endSec - startSec) / durationSec) * 100 : 100;
 
@@ -185,5 +201,6 @@ export function usePostVideoTrim(options: {
     onPointerDownHandle,
     togglePlay,
     handleConfirm,
+    maxSegmentSeconds: cap,
   };
 }

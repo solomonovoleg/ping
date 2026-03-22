@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Mic, Video, X, Heading1, Heading2, Heading3, Sparkles, Eye, Plus, Files } from "lucide-react";
 import { useLocation } from "wouter";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -33,7 +33,12 @@ import { getTextareaCaretCoordinates } from "@/lib/textarea-caret";
 import { useCreatePostDraft } from "@/hooks/useCreatePostDraft";
 import { buildPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
 import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { extractMentions, MAX_POST_MENTIONS } from "@shared/schema/posts";
 import { CreatePostPulseMobile } from "@/pages/CreatePostPulseMobile";
+import { MentionPicker } from "@/features/chat/components/MentionPicker";
+import { buildMentionList } from "@/features/chat/components/mention-list";
+import type { ApiChatMember } from "@/features/chat/types";
+import { listContactsWithProfiles } from "@/lib/users";
 
 type MediaKind = "image" | "video" | "audio";
 
@@ -56,7 +61,7 @@ function detectKindFromFile(file: File): MediaKind | null {
   if (mime.startsWith("audio/")) return "audio";
   const ext = file.name.toLowerCase();
   if (/\.(png|jpe?g|gif|webp|heic|heif)$/.test(ext)) return "image";
-  if (/\.(mp4|mov|webm)$/.test(ext)) return "video";
+  if (/\.(mp4|mov|webm|m4v|3gp|3gpp)$/.test(ext)) return "video";
   if (/\.(mp3|m4a|aac|wav|ogg)$/.test(ext)) return "audio";
   return null;
 }
@@ -115,6 +120,10 @@ export default function CreatePost() {
   const [isPublishing, setIsPublishing] = useState(false);
   const [selectionToast, setSelectionToast] = useState<{ start: number; end: number; x?: number; y?: number } | null>(null);
   const [error, setError] = useState("");
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionStartPos, setMentionStartPos] = useState(0);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const isMobile = useIsMobile();
   const isNativePlatform = isNative();
   const useBottomSelectionBar = isNativePlatform || isMobile;
@@ -144,6 +153,54 @@ export default function CreatePost() {
         ? user.nickname.trim()
         : `@${user.nickname.trim()}`
       : user?.profileLink?.trim() || (user?.publicId != null ? `id${user.publicId}` : "");
+
+  const { data: mentionContacts = [] } = useQuery({
+    queryKey: ["contacts", "profiles", "mention-picker"],
+    queryFn: listContactsWithProfiles,
+    staleTime: 60_000,
+    enabled: !!user,
+  });
+  const mentionMembers: ApiChatMember[] = mentionContacts.map((c) => ({
+    id: c.id,
+    publicId: c.publicId,
+    displayName: c.displayName,
+    surname: c.surname,
+    avatarUrl: c.avatarUrl,
+  }));
+
+  const insertPostMention = useCallback(
+    (member: ApiChatMember) => {
+      const pid = member.publicId;
+      if (pid == null || !Number.isFinite(Number(pid))) {
+        toast({ title: "Нет публичного id у контакта", variant: "destructive" });
+        return;
+      }
+      const token = String(pid);
+      const tokens = extractMentions(text);
+      if (tokens.length >= MAX_POST_MENTIONS && !tokens.includes(token)) {
+        toast({ title: `Не больше ${MAX_POST_MENTIONS} упоминаний (@) в посте`, variant: "destructive" });
+        return;
+      }
+      if (tokens.includes(token)) {
+        toast({ title: "Этот контакт уже отмечен в тексте" });
+        return;
+      }
+      const insert = `@${token} `;
+      const end = textAreaRef.current?.selectionStart ?? text.length;
+      const start = mentionStartPos;
+      const next = `${text.slice(0, start)}${insert}${text.slice(end)}`.slice(0, MAX_CHARS);
+      setText(next);
+      setMentionOpen(false);
+      requestAnimationFrame(() => {
+        const ta = textAreaRef.current;
+        if (!ta) return;
+        ta.focus();
+        const p = Math.min(start + insert.length, next.length);
+        ta.setSelectionRange(p, p);
+      });
+    },
+    [text, toast, mentionStartPos],
+  );
 
   const { clearDraft } = useCreatePostDraft(
     MAX_CHARS,
@@ -228,7 +285,10 @@ export default function CreatePost() {
       for (const payload of acceptedFiles) {
         if (payload.kind === "video") {
           const trim = await requestVideoTrim(payload.file);
-          if (!trim) continue;
+          if (!trim) {
+            toast({ title: "Видео не добавлено — нажмите «Готово» в окне выбора фрагмента или закройте его, чтобы отменить" });
+            continue;
+          }
           const id = ++uploadIdRef.current;
           const preview = URL.createObjectURL(payload.file);
           setMediaItems((prev) =>
@@ -703,17 +763,72 @@ export default function CreatePost() {
           />
           <div className="flex-1 min-w-0">
             {!showPreview ? (
-              <div className="rounded-2xl border border-border/60 bg-background px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+              <div className="relative overflow-visible rounded-2xl border border-border/60 bg-background px-[var(--uix-space-3)] py-[var(--uix-space-3)]">
+                {mentionOpen && (
+                  <div className="absolute bottom-full left-0 right-0 z-30 mb-1 px-0">
+                    <MentionPicker
+                      members={mentionMembers}
+                      query={mentionQuery}
+                      selectedIndex={mentionSelectedIndex}
+                      onSelectedIndexChange={setMentionSelectedIndex}
+                      onSelect={(m) => insertPostMention(m)}
+                    />
+                  </div>
+                )}
                 <textarea
                   ref={textAreaRef}
                   value={text}
                   onChange={(e) => {
-                    setText(e.target.value.slice(0, MAX_CHARS));
+                    const value = e.target.value.slice(0, MAX_CHARS);
+                    const pos = e.target.selectionStart ?? value.length;
+                    setText(value);
                     setSelectionToast(null);
+                    const beforeCursor = value.slice(0, pos);
+                    const lastAt = beforeCursor.lastIndexOf("@");
+                    if (lastAt >= 0) {
+                      const afterAt = beforeCursor.slice(lastAt + 1);
+                      if (!/[\s\n]/.test(afterAt)) {
+                        setMentionOpen(true);
+                        setMentionQuery(afterAt);
+                        setMentionStartPos(lastAt);
+                        setMentionSelectedIndex(0);
+                      } else {
+                        setMentionOpen(false);
+                      }
+                    } else {
+                      setMentionOpen(false);
+                    }
                   }}
                   onSelect={handleTextSelection}
                   onKeyUp={handleTextSelection}
                   onPointerUp={handleTextSelection}
+                  onKeyDown={(e) => {
+                    if (!mentionOpen) return;
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setMentionOpen(false);
+                      return;
+                    }
+                    const rows = buildMentionList(mentionMembers, mentionQuery, { includeEveryone: false });
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      const maxIdx = Math.max(0, rows.length - 1);
+                      setMentionSelectedIndex((i) => Math.min(i + 1, maxIdx));
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setMentionSelectedIndex((i) => Math.max(0, i - 1));
+                      return;
+                    }
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      const selected = rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))];
+                      if (selected?.kind === "member") {
+                        e.preventDefault();
+                        insertPostMention(selected.member);
+                      }
+                    }
+                  }}
                   placeholder="Что у вас нового?"
                   aria-label="Текст поста"
                   className="w-full bg-transparent border-none focus:ring-0 resize-none min-h-[min(200px,42vh)] text-[17px] leading-relaxed outline-none placeholder:text-muted-foreground"
@@ -780,7 +895,21 @@ export default function CreatePost() {
                         <audio src={src} controls preload="metadata" className="w-full" />
                       </div>
                     ) : isVideo ? (
-                      <video src={src} className="w-full h-full object-cover" playsInline muted controls preload="metadata" />
+                      <video
+                        src={src}
+                        className="w-full h-full object-cover"
+                        playsInline
+                        muted
+                        preload="auto"
+                        onLoadedMetadata={(e) => {
+                          const v = e.currentTarget;
+                          try {
+                            if (v.readyState >= 1) v.currentTime = 0.001;
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                      />
                     ) : (
                       <img src={src} alt={`Медиа ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
                     )}

@@ -269,6 +269,11 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         isOpen={p.activeCommentPostId !== null}
         onClose={() => p.setActiveCommentPostId(null)}
         postId={p.activeCommentPostId}
+        postAuthorId={
+          p.activeCommentPostId
+            ? p.profilePosts.find((po) => po.id === p.activeCommentPostId)?.authorId
+            : undefined
+        }
       />
     </div>
   );
