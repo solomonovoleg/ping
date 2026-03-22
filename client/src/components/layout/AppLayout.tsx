@@ -21,7 +21,7 @@ import { usePreferPhoneChrome } from "@/hooks/use-prefer-phone-chrome";
 import { usePingokRemindersPoll } from "@/hooks/usePingokRemindersPoll";
 
 import feedIcon from "@/assets/images/feed-icon.png";
-import { NavPulseCenterLogoButton } from "@pingok-micro/NavPulseCenterLogoButton";
+import { NavPulseCenterLogoButton } from "@/components/layout/NavPulseCenterLogoButton";
 
 /** Логотип в центре полосы — файл `client/public/F-PING.png` (замените PNG при необходимости) */
 const PULSE_NAV_LOGO_SRC = "/F-PING.png?v=6";
