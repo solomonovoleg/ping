@@ -1,0 +1,5 @@
+# Локальные секреты и сборки микросервиса
+.env
+.env.local
+node_modules/
+dist/

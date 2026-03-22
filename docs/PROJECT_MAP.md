@@ -38,6 +38,7 @@ client/     React UI, страницы, features, hooks, API adapters (Vite)
 server/     Express API, WebSocket (calls, group-calls, realtime), upload, storage
 shared/     Схемы Drizzle, общие типы и константы (без runtime-логики приложения)
 EDGE/       Отдельный microservice для gamification и game logic (Express + TS)
+ПИНГОК МИКРО/  Отдельный процесс голосового NLU/оверлея (Express), см. README; `npm run dev:pingok-micro`
 docs/       Продуктовые и архитектурные документы, гайды
 scripts/    Деплой, миграции, сиды
 ios/        Capacitor / Xcode
@@ -170,7 +171,7 @@ android/    Capacitor / Gradle
 | `scripts/` | `deploy.sh`, `run-migrations.cjs`, сиды, миграции данных |
 | `ios/`, `android/` | Нативные оболочки Capacitor |
 | `uploads/` | Локальные файлы (не коммитить медиа) |
-| `ПИНГОК МИКРО/` | Отдельный микросервис голосовых команд: `server/` (Express, NLU-заглушка), `client/` (оверлей + long-press логотипа), `shared/` типы; `npm run dev:pingok-micro` |
+| `ПИНГОК МИКРО/` | Микросервис голосовых команд **в репозитории**: `server/` (Express, NLU), `client/` (оверлей + long-press логотипа), `shared/` типы; `npm run dev:pingok-micro`; секреты только в `.env` (см. `.gitignore` внутри каталога) |
 | `EDGE/` | Отдельный микросервис геймификации: модульные `rules/service/routes`, свой запуск `npm run dev:edge`, UIX-подбор `EDGE/docs/GAMIFICATION_UIX_GITHUB.md`, **спека движка кампаний** `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` |
 
 База данных (смысл таблиц, слой storage): `docs/DB.md`.
@@ -259,6 +260,8 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | 2026-03 | `EDGE/`, `server/edge/`, `client/src/lib/edge-gamification.ts` | Новый изолированный EDGE микросервис (gamification/game logic) + тонкий адаптер `/api/edge/*` в основной платформе; модуль `companion` с состоянием персонажа, заданиями и лидербордом |
 | 2026-03 | `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` | Архитектура движка: кампании, surfaces, задания (EDGE + platform), лидерборд, призы/итоги, Board создателя, эволюция под новые UI (каталог) |
 | 2026-03 | `client/src/features/edge-companion/`, `client/src/pages/EdgeCompanion.tsx`, `client/src/pages/Posts.tsx` | Новый UIX-слой EDGE: карточка интерактивного персонажа в ленте и полноценный экран погружения `/edge/companion` |
+| 2026-03 | `useChatMessages.ts`, `Chats.tsx`, `ChatMessageRow.tsx`, `message-delivery-status.ts`, `lib/external-video.ts`, `ExternalVideoEmbedCard.tsx`, `server/chats/service.ts` | Чат: стартовый скролл к первому непрочитанному (`myLastReadAt`), единые галочки доставки/прочтения для текста/аудио/кружка; превью YouTube/RuTube/Яндекс по тапу; список чатов: бейдж непрочитанных и сортировка по последнему сообщению |
+| 2026-03 | `ПИНГОК МИКРО/` (включён в git), `ПИНГОК МИКРО/.gitignore`, корневой `.gitignore` | Микросервис голоса/оверлея версионируется в репо; `.env` в каталоге не коммитится |
 
 ---
 
