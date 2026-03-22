@@ -1,4 +1,4 @@
-import type { PingokMicroParseResponse } from "@pingok-micro-shared/command-types";
+import type { PingokMicroParseResponse } from "@shared/pingok-micro/command-types";
 import { storage } from "../storage";
 import { sendChatMessage, MessagesServiceError } from "../messages/service";
 import {
