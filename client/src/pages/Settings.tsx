@@ -60,6 +60,17 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { useToast } from "@/hooks/use-toast";
 
 const ADMIN_ROLES = ["moderator", "admin", "super_admin"];
+
+/** Вторая витрина «создатель» внизу настроек (как у Олега). Поменяй путь/текст под свой публичный id. */
+const CREATOR_SECOND_CARD = {
+  profilePath: "/profile/5",
+  title: "Создатель Александр",
+  subtitle: "Профиль участника id5",
+  /** Пока нет отдельного PNG — логотип приложения; можно положить `creator-aleks.png` в `client/public/` и сменить src */
+  avatarSrc: "/F-PING.png",
+  avatarAlt: "Создатель Александр",
+} as const;
+
 type MediaPermissionState = PermissionState | "unknown";
 
 export default function Settings() {
@@ -908,6 +919,30 @@ export default function Settings() {
                 <div className="min-w-0 text-left">
                   <p className="text-sm font-medium text-foreground truncate">Создатель Олег Соломнов</p>
                   <p className="text-xs text-muted-foreground truncate">Профиль участника id2</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
+            </button>
+          </div>
+
+          {/* Второй создатель — та же витрина, что у Олега */}
+          <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm mt-2">
+            <button
+              type="button"
+              onClick={() => setLocation(CREATOR_SECOND_CARD.profilePath)}
+              className="w-full flex items-center justify-between gap-3 p-3.5 hover:bg-secondary/50 transition-colors duration-75 active:scale-[0.99]"
+              aria-label={`Открыть профиль: ${CREATOR_SECOND_CARD.title}`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <img
+                  src={CREATOR_SECOND_CARD.avatarSrc}
+                  alt={CREATOR_SECOND_CARD.avatarAlt}
+                  className="w-10 h-10 shrink-0 rounded-xl object-contain bg-transparent"
+                  loading="lazy"
+                />
+                <div className="min-w-0 text-left">
+                  <p className="text-sm font-medium text-foreground truncate">{CREATOR_SECOND_CARD.title}</p>
+                  <p className="text-xs text-muted-foreground truncate">{CREATOR_SECOND_CARD.subtitle}</p>
                 </div>
               </div>
               <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
