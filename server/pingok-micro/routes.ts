@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { requireAuth, getUserId } from "../auth/session";
-import { parsePingokCommandHeuristic } from "@shared/pingok-micro/parse-heuristic";
-import type { PingokMicroParseRequest } from "@shared/pingok-micro/command-types";
+import { parsePingokCommandHeuristic } from "@pingok-micro-shared/parse-heuristic";
+import type { PingokMicroParseRequest } from "@pingok-micro-shared/command-types";
 import {
   looksLikeGlobalMemorySearchIntent,
   tryGlobalMemorySearch,
