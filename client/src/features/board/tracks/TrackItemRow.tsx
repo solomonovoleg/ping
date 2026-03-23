@@ -6,6 +6,7 @@ import { memo, useRef, useCallback } from "react";
 import { Check, Trash2 } from "lucide-react";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { formatMessageTime } from "@/features/chat/utils/format";
+import { formatMessageContentPreview } from "@/features/chat/utils/message-content-preview";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import type { TrackItem as TrackItemType } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
@@ -20,14 +21,6 @@ export type TrackItemRowProps = {
   onOpenChat?: (chatId: string, messageId?: string) => void;
   onOpenCallHistory?: (callId: string) => void;
 };
-
-function formatContentPreview(content: string, type: string): string {
-  if (type === "text") return content.slice(0, 120) + (content.length > 120 ? "…" : "");
-  if (type === "voice") return "Голосовое сообщение";
-  if (type === "image") return "Фото";
-  if (type === "video" || type === "video_note") return "Видео";
-  return "Сообщение";
-}
 
 function TrackItemRowInner({ item, onDone, onRemove, onOpenChat, onOpenCallHistory }: TrackItemRowProps) {
   const isDone = !!item.doneAt;
@@ -101,7 +94,7 @@ function TrackItemRowInner({ item, onDone, onRemove, onOpenChat, onOpenCallHisto
         title={item.sourceType === "message" && onOpenChat ? "Удерживайте, чтобы перейти к сообщению в чате" : undefined}
       >
         <p className={cn("text-[15px] leading-snug break-words", isDone && "line-through")}>
-          {formatContentPreview(item.content, item.type)}
+          {formatMessageContentPreview(item.type, item.content, 120)}
         </p>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[12px] text-muted-foreground">
           {item.sourceType === "message" && onOpenChat && item.chatId ? (

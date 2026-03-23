@@ -1,5 +1,13 @@
 import { API, apiFetch } from "@/lib/api-base";
 import { normalizeFeedPost, type FeedPost } from "@/lib/posts";
+import {
+  BlockPresetCatalog,
+  UserBlockSubmitter,
+  UserUnblockSubmitter,
+  type UserBlockFlags,
+} from "@/features/user-blocking";
+
+export type { UserBlockFlags };
 
 export type PublicProfile = {
   id: string;
@@ -17,8 +25,21 @@ export type PublicProfile = {
   hideFromSearch: boolean;
   bio: string | null;
   canMessage: boolean;
+  /** Собеседник (владелец профиля) ограничил вас; `note` — опциональный текст с его стороны. */
+  blockedByProfileOwner?: {
+    restrictChat: boolean;
+    restrictProfile: boolean;
+    restrictSocial: boolean;
+    note: string | null;
+  } | null;
   isInMyContacts?: boolean;
   isFollowing?: boolean;
+  /** Этот пользователь подписан на меня (чужой профиль). */
+  isFollowedByTarget?: boolean;
+  /** Взаимная подписка (чужой профиль). */
+  isMutualFollow?: boolean;
+  /** Вы заблокировали этого пользователя (чужой профиль). */
+  isBlockedByMe?: boolean;
   isMe: boolean;
   followersCount: number;
   followingCount: number;
@@ -92,6 +113,36 @@ export async function fetchProfilePage(
   };
 }
 
+/** Сводка для экрана «Статистика» в своём профиле (ответ GET /api/users/me/profile-analytics). */
+export type MyProfileAnalytics = {
+  profileVisits: {
+    total: number;
+    uniqueVisitors: number;
+    todayTotal: number;
+    todayUnique: number;
+  };
+  postViews: { totalRecords: number; uniqueViewers: number };
+  storyViews: { totalRecords: number; uniqueViewers: number };
+  newFollowers: { today: number; last7Days: number };
+  activityOnMyPosts: {
+    reactionsLast7Days: number;
+    commentsLast7Days: number;
+    sharesLast7Days: number;
+  };
+};
+
+export async function fetchMyProfileAnalytics(): Promise<MyProfileAnalytics> {
+  const res = await apiFetch(`${API}/users/me/profile-analytics`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data.message as string) ?? "Не удалось загрузить статистику");
+  }
+  return res.json() as Promise<MyProfileAnalytics>;
+}
+
 export async function addContact(contactUserId: string): Promise<void> {
   const res = await apiFetch(`${API}/contacts`, {
     method: "POST",
@@ -162,7 +213,7 @@ export async function followUser(userId: string): Promise<void> {
   }
 }
 
-/** Отписаться */
+/** Отписаться (снять свою подписку на пользователя). */
 export async function unfollowUser(userId: string): Promise<void> {
   const res = await apiFetch(`${API}/users/${encodeURIComponent(userId)}/follow`, {
     method: "DELETE",
@@ -174,46 +225,33 @@ export async function unfollowUser(userId: string): Promise<void> {
   }
 }
 
-/** Ограничения при блокировке (false = не ограничивать в этой области). По умолчанию на сервере все true. */
-export type UserBlockFlags = {
-  restrictProfile: boolean;
-  restrictChat: boolean;
-  restrictSocial: boolean;
-};
-
-/** Готовые наборы для UI «как в Телеграме» */
-export const USER_BLOCK_PRESETS = {
-  full: { restrictProfile: true, restrictChat: true, restrictSocial: true } satisfies UserBlockFlags,
-  /** Только личка: не может писать вам */
-  chatOnly: { restrictProfile: false, restrictChat: true, restrictSocial: false } satisfies UserBlockFlags,
-  /** Только лента/посты: не может комментировать и ставить реакции */
-  socialOnly: { restrictProfile: false, restrictChat: false, restrictSocial: true } satisfies UserBlockFlags,
-} as const;
-
-/** Заблокировать пользователя с выбранными ограничениями */
-export async function setUserBlock(targetUserId: string, flags: UserBlockFlags): Promise<void> {
-  const res = await apiFetch(`${API}/users/${encodeURIComponent(targetUserId)}/block`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(flags),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error((data.message as string) ?? "Не удалось заблокировать");
-  }
-}
-
-/** Снять блокировку */
-export async function removeUserBlock(targetUserId: string): Promise<void> {
-  const res = await apiFetch(`${API}/users/${encodeURIComponent(targetUserId)}/block`, {
+/** Убрать пользователя из своих подписчиков (он перестаёт быть подписан на меня). */
+export async function removeMyFollower(followerUserId: string): Promise<void> {
+  const res = await apiFetch(`${API}/users/me/followers/${encodeURIComponent(followerUserId)}`, {
     method: "DELETE",
     credentials: "include",
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error((data.message as string) ?? "Не удалось снять блокировку");
+    throw new Error((data.message as string) ?? "Не удалось убрать подписчика");
   }
+}
+
+/** Готовые наборы для UI (см. `features/user-blocking`). */
+export const USER_BLOCK_PRESETS = BlockPresetCatalog.apiPresets;
+
+/** Заблокировать пользователя с выбранными ограничениями и опциональным комментарием для собеседника. */
+export async function setUserBlock(
+  targetUserId: string,
+  flags: UserBlockFlags,
+  note?: string | null,
+): Promise<void> {
+  return UserBlockSubmitter.submit(targetUserId, flags, note);
+}
+
+/** Снять блокировку */
+export async function removeUserBlock(targetUserId: string): Promise<void> {
+  return UserUnblockSubmitter.submit(targetUserId);
 }
 
 export type FollowUser = ContactUser;

@@ -7,6 +7,7 @@ export type LinkPreview = {
   image: string | null;
   title: string | null;
   description: string | null;
+  embedUrl?: string | null;
 };
 
 const cache = new Map<string, LinkPreview | null>();

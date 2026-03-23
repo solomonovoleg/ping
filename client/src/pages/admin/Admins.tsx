@@ -113,7 +113,6 @@ export default function AdminAdmins() {
                 <TableRow>
                   <TableHead>ID</TableHead>
                   <TableHead>Имя</TableHead>
-                  <TableHead>Телефон</TableHead>
                   <TableHead>Роль</TableHead>
                   <TableHead className="w-40">Изменить роль</TableHead>
                 </TableRow>
@@ -125,7 +124,6 @@ export default function AdminAdmins() {
                     <TableCell>
                       {[u.displayName, u.surname].filter(Boolean).join(" ") || "—"}
                     </TableCell>
-                    <TableCell>{u.phone}</TableCell>
                     <TableCell>
                       <span className="font-medium">{u.platformRole}</span>
                     </TableCell>
@@ -159,14 +157,14 @@ export default function AdminAdmins() {
           <DialogHeader>
             <DialogTitle>Добавить админа</DialogTitle>
             <DialogDescription>
-              Найдите пользователя по имени или телефону и назначьте роль (moderator, admin, super_admin).
+              Найдите пользователя по имени, нику или ID и назначьте роль (moderator, admin, super_admin).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="relative">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Поиск по имени, телефону..."
+                placeholder="Поиск по имени, @нику, ID…"
                 value={addSearch}
                 onChange={(e) => setAddSearch(e.target.value)}
                 className="pl-8"
@@ -204,7 +202,7 @@ export default function AdminAdmins() {
                           onClick={() => handleAddAdmin(u.id)}
                           disabled={addLoading || adminIds.has(u.id)}
                         >
-                          {[u.displayName, u.surname].filter(Boolean).join(" ") || u.phone} (ID: {u.publicId})
+                          {[u.displayName, u.surname].filter(Boolean).join(" ") || `ID ${u.publicId}`}
                           {adminIds.has(u.id) && (
                             <span className="ml-2 text-muted-foreground text-xs">— уже админ</span>
                           )}

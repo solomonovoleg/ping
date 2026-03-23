@@ -63,7 +63,7 @@ export default function PulseProfileDevPreview() {
             onFollowersClick={() => {}}
             onFollowingClick={() => {}}
             actionRow={
-              <ProfileMePulseActions onEdit={() => setLocation("/profile/edit")} onShare={() => {}} />
+              <ProfileMePulseActions onEdit={() => setLocation("/profile/edit")} onShare={() => {}} onStats={() => {}} />
             }
             onHighlightNew={() => {}}
             mutualFollowers={{

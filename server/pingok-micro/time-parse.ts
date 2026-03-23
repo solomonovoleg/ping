@@ -227,14 +227,59 @@ export function parseVoiceDmCommand(raw: string): ParsedDm {
   if (mThat) {
     return { nameQuery: collapseSpaces(mThat[1]), messageText: collapseSpaces(mThat[2]) };
   }
-  const mShort = /^(?:напиши|написать|отправь(?:те)?|передай)\s+(\S+)\s+([\s\S]{2,})$/i.exec(s);
-  if (mShort) {
-    return { nameQuery: collapseSpaces(mShort[1]), messageText: collapseSpaces(mShort[2]) };
+  const mDash =
+    /^(?:напиши|написать|отправь(?:те)?|скажи|передай)\s+(.+?)\s*[—–\-:,]\s+([\s\S]{2,})$/i.exec(s);
+  if (mDash) {
+    return { nameQuery: collapseSpaces(mDash[1]), messageText: collapseSpaces(mDash[2]) };
+  }
+  const stripped = s.replace(
+    /^(?:напиши|написать|отправь(?:те)?|скажи|передай)\s+/i,
+    "",
+  ).trim();
+  const words = stripped.split(/\s+/).filter(Boolean);
+  if (words.length === 2) {
+    return { nameQuery: collapseSpaces(words[0]!), messageText: collapseSpaces(words[1]!) };
+  }
+  if (words.length === 3) {
+    return {
+      nameQuery: collapseSpaces(`${words[0]} ${words[1]}`),
+      messageText: collapseSpaces(words[2]!),
+    };
+  }
+  if (words.length >= 4) {
+    return {
+      nameQuery: collapseSpaces(words.slice(0, 2).join(" ")),
+      messageText: collapseSpaces(words.slice(2).join(" ")),
+    };
   }
   return {
     error:
-      "Скажите так: «Напиши Ивану что я задержусь» или «Напиши Мария привет».",
+      "Скажите так: «Напиши Ивану что я задержусь», «Напиши Мария Иванова — привет» или «Напиши Оле спасибо».",
   };
+}
+
+/** Задача в трек: «запиши в трек дневник — купить масло», «в трек работа: сделать отчёт». */
+export type ParsedTrackTask = { trackName: string; itemText: string };
+
+export function parseVoiceTrackTaskCommand(raw: string): ParsedTrackTask | null {
+  const s = stripIntentPrefix(raw).trim();
+  if (!/(?:\bтрек\b|в\s+трек)/i.test(s)) return null;
+
+  const m1 =
+    /^(?:запиши|добавь|поставь|создай)\s+(?:в\s+)?трек\s+(.+?)\s*[—–\-:]\s*([\s\S]{2,})$/i.exec(s);
+  if (m1) {
+    return { trackName: collapseSpaces(m1[1]), itemText: collapseSpaces(m1[2]) };
+  }
+  const m2 = /^в\s+трек\s+(.+?)\s*[—–\-:]\s*([\s\S]{2,})$/i.exec(s);
+  if (m2) {
+    return { trackName: collapseSpaces(m2[1]), itemText: collapseSpaces(m2[2]) };
+  }
+  const m3 =
+    /^(?:запиши|добавь|поставь)\s+в\s+трек\s+(.+?)\s+([\s\S]{3,})$/i.exec(s);
+  if (m3) {
+    return { trackName: collapseSpaces(m3[1]), itemText: collapseSpaces(m3[2]) };
+  }
+  return null;
 }
 
 export type ParsedVoiceCall =
@@ -265,6 +310,55 @@ function cleanupCallTarget(raw: string): string {
 
 function detectCallMedia(raw: string): "audio" | "video" {
   return /(?:^|\s)(?:по\s+видео|видео|видеозвон|видеозвонок|video)(?=\s|$)/i.test(raw) ? "video" : "audio";
+}
+
+/** «Перенеси звонок на …», «передвинь звонок с Марией на …» */
+export function looksLikeVoiceCallReschedule(raw: string): boolean {
+  const s = raw.toLowerCase();
+  return (
+    /(?:перенеси|перенести|передвинь|передвинуть|сдвинь|сдвинуть)/i.test(s) &&
+    /звон/i.test(s)
+  );
+}
+
+export function looksLikeVoiceCallCancel(raw: string): boolean {
+  const s = raw.toLowerCase();
+  return (
+    /(?:отмени|отменить|убери|убрать)\s+(?:запланированн(?:ый|ого)\s+)?звон/i.test(s) ||
+    /(?:отмени|отменить)\s+план\s+на\s+звон/i.test(s)
+  );
+}
+
+/** «отмени звонок с Марией» → имя; иначе null (ближайший активный). */
+export function parseVoiceCallCancelNameQuery(raw: string): string | null {
+  const s = stripIntentPrefix(raw);
+  const m = /звон(?:ок)?\s+с\s+([\s\S]{2,})$/i.exec(s);
+  if (m?.[1]) return collapseSpaces(m[1]);
+  return null;
+}
+
+export type ParsedCallReschedule = { nameQuery: string | null; timePhrase: string };
+
+export function parseVoiceCallRescheduleFragment(raw: string): ParsedCallReschedule | { error: string } {
+  let s = stripIntentPrefix(raw);
+  s = collapseSpaces(
+    s.replace(
+      /^(?:перенеси|перенести|передвинь|передвинуть|сдвинь|сдвинуть)\s+(?:мой|наш)?\s*звон(?:ок)?\s*/i,
+      "",
+    ),
+  );
+  const mWith = /^с\s+(.+?)\s+на\s+([\s\S]+)$/i.exec(s);
+  if (mWith) {
+    return { nameQuery: collapseSpaces(mWith[1]), timePhrase: collapseSpaces(mWith[2]) };
+  }
+  const mOn = /^на\s+([\s\S]+)$/i.exec(s);
+  if (mOn) {
+    return { nameQuery: null, timePhrase: collapseSpaces(mOn[1]) };
+  }
+  if (!s.trim()) {
+    return { error: "Скажите, например: «перенеси звонок на завтра в 10» или «перенеси звонок с Иваном на через час»." };
+  }
+  return { nameQuery: null, timePhrase: s };
 }
 
 export function parseVoiceCallCommand(raw: string): ParsedVoiceCall {

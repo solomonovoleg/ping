@@ -109,6 +109,29 @@ export async function getCachedMediaObjectUrl(url: string): Promise<string | nul
   return registerObjectUrl(normalized, row.blob);
 }
 
+/** Удалить весь локальный кэш медиа (IndexedDB + object URLs). Не трогает очередь исходящих сообщений. */
+export async function clearMediaOfflineCache(): Promise<{ clearedRows: number } | null> {
+  const db = await openDb();
+  if (!db) return null;
+  const tx = db.transaction(STORE, "readwrite");
+  const store = tx.objectStore(STORE);
+  const rows = ((await idbReq(store.getAll())) as MediaCacheRow[] | null) ?? [];
+  const clearedRows = rows.length;
+  for (const row of rows) {
+    const objectUrl = objectUrlBySource.get(row.url);
+    if (objectUrl) {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        /* ignore */
+      }
+      objectUrlBySource.delete(row.url);
+    }
+    await idbReq(store.delete(row.url));
+  }
+  return { clearedRows };
+}
+
 export async function ensureMediaCached(url: string): Promise<string | null> {
   const normalized = normalizeUrl(url);
   if (!normalized || normalized.startsWith("blob:") || normalized.startsWith("data:")) {

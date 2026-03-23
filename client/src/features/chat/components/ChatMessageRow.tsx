@@ -6,10 +6,11 @@ import { Clock, AlertCircle, Reply as ReplyIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
-import { formatMessageTime, parseMessageDate } from "../utils/format";
+import { formatMessageTime, isOutgoingMessageReadByPeer } from "../utils/format";
 import { buildProfilePath } from "@/lib/profile-route";
 import { extractFirstUrl } from "@/lib/link-preview";
 import { parseExternalVideoUrl } from "@/lib/external-video";
+import { isLikelyStoryVideoUrl } from "@/lib/story-media";
 import { LinkPreviewCard } from "./LinkPreviewCard";
 import { ExternalVideoEmbedCard } from "./ExternalVideoEmbedCard";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -729,8 +730,7 @@ function ChatMessageRowInner({
                         ? null
                         : (() => {
                             const t = formatMessageTime(msg.createdAt);
-                            const isRead =
-                              lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
+                            const isRead = isOutgoingMessageReadByPeer(msg.createdAt, lastReadAt);
                             return isRead ? `${t} ✓✓` : `${t} ✓`;
                           })()
                     }
@@ -762,6 +762,7 @@ function ChatMessageRowInner({
                 let payload: {
                   storyId?: string;
                   mediaUrl?: string;
+                  thumbnailUrl?: string;
                   authorId?: string;
                   authorName?: string;
                   authorAvatar?: string;
@@ -773,18 +774,46 @@ function ChatMessageRowInner({
                 } catch {
                   payload = { replyText: msg.content };
                 }
-                const previewImage = payload.mediaUrl ? resolveUrl(payload.mediaUrl) : "";
+                const mediaRaw = payload.mediaUrl ? resolveUrl(payload.mediaUrl) : "";
+                const thumbRaw = payload.thumbnailUrl ? resolveUrl(payload.thumbnailUrl) : "";
+                const isVideo = isLikelyStoryVideoUrl(mediaRaw);
+                const posterSrc = thumbRaw || (!isVideo ? mediaRaw : "");
                 const authorName = payload.authorName || "История";
                 return (
-                  <div className="max-w-[240px] rounded-[10px] overflow-hidden border border-border/50 bg-muted/30 dark:bg-white/5">
-                    {previewImage && (
-                      <img src={previewImage} alt="" className="w-full max-h-[200px] object-cover" loading="lazy" decoding="async" />
+                  <div className="max-w-[min(240px,72vw)] rounded-[12px] overflow-hidden border border-border/50 bg-muted/30 dark:bg-white/5">
+                    {mediaRaw && (
+                      <div className="relative w-full aspect-[9/16] bg-black/40">
+                        {isVideo ? (
+                          <video
+                            src={mediaRaw}
+                            className="absolute inset-0 h-full w-full object-cover"
+                            muted
+                            playsInline
+                            preload="metadata"
+                            poster={posterSrc || undefined}
+                            aria-label="Превью сториз"
+                          />
+                        ) : (
+                          <img
+                            src={posterSrc || mediaRaw}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        )}
+                      </div>
                     )}
-                    <div className="p-2">
-                      <p className="text-[11px] text-muted-foreground">Ответ на сториз</p>
+                    <div className="p-2.5">
+                      <p className="text-[11px] text-muted-foreground">Репост сториз</p>
                       <p className="text-[13px] font-medium mt-0.5">{authorName}</p>
+                      {payload.storyTimeLabel && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5">{payload.storyTimeLabel}</p>
+                      )}
                       {payload.replyText && (
-                        <p className="text-[13px] line-clamp-3 text-foreground/90 mt-1">{payload.replyText}</p>
+                        <p className="text-[13px] leading-snug whitespace-pre-wrap break-words text-foreground/90 mt-2 border-t border-border/40 pt-2">
+                          {payload.replyText}
+                        </p>
                       )}
                       {payload.authorId && (
                         <button
@@ -792,7 +821,7 @@ function ChatMessageRowInner({
                           className="mt-2 text-xs text-primary font-medium hover:underline"
                           onClick={() => onOpenProfile(payload.authorId!)}
                         >
-                          Открыть профиль автора
+                          Профиль автора
                         </button>
                       )}
                     </div>
@@ -859,8 +888,8 @@ function ChatMessageRowInner({
                       <button type="button" className="text-[10px] font-medium underline underline-offset-1 hover:opacity-100 opacity-90" onClick={(e) => { e.stopPropagation(); onRetry(msg); }}>Повторить</button>
                     </span>
                   );
-                  const isRead = lastReadAt && parseMessageDate(msg.createdAt) <= parseMessageDate(lastReadAt);
-                  const title = isRead && lastReadAt ? `Просмотрено в ${formatMessageTime(lastReadAt)}` : "Доставлено";
+                  const isRead = isOutgoingMessageReadByPeer(msg.createdAt, lastReadAt);
+                  const title = isRead && lastReadAt ? `Прочитано · ${formatMessageTime(lastReadAt)}` : "Доставлено";
                   const checkGlow = vibeTextBubble
                     ? "drop-shadow-[0_0_4px_rgba(255,255,255,0.45)]"
                     : pulseTextShell && pulseMobileDm === "dark" && isMe

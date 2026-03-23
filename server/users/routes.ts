@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { contactsPhoneMatchLimiter, profilePatchLimiter } from "../auth/rate-limit";
+import { contactsPhoneMatchLimiter, dataExportLimiter, profilePatchLimiter } from "../auth/rate-limit";
 import { requireAuth, getUserId } from "../auth/session";
 import {
   addContact,
@@ -12,6 +12,7 @@ import {
   listContacts,
   matchContactsFromPhoneBook,
   normalizeProfileIdParam,
+  removeMyFollower,
   savePushToken,
   searchUsersForViewer,
   unfollowUser,
@@ -19,6 +20,8 @@ import {
   updateMyProfile,
   UsersServiceError,
 } from "./service";
+import { getMyProfileAnalytics } from "./profile-analytics";
+import { buildUserDataExport } from "./privacy-export";
 
 function respondServiceError(res: Response, error: unknown): boolean {
   if (error instanceof UsersServiceError) {
@@ -26,6 +29,29 @@ function respondServiceError(res: Response, error: unknown): boolean {
     return true;
   }
   return false;
+}
+
+function parseUserBlockBody(b: unknown): {
+  flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>;
+  note?: string | null;
+} {
+  if (!b || typeof b !== "object") return {};
+  const o = b as Record<string, unknown>;
+  const hasFlagKey = ["restrictProfile", "restrictChat", "restrictSocial"].some((k) => k in o);
+  const flags = hasFlagKey
+    ? {
+        restrictProfile: o.restrictProfile === true,
+        restrictChat: o.restrictChat === true,
+        restrictSocial: o.restrictSocial === true,
+      }
+    : undefined;
+  let note: string | null | undefined = undefined;
+  if ("note" in o) {
+    if (o.note === null || o.note === "") note = null;
+    else if (typeof o.note === "string") note = o.note.trim().slice(0, 500);
+    else note = null;
+  }
+  return { flags, note };
 }
 
 export function registerUsersRoutes(app: Express): void {
@@ -45,6 +71,35 @@ export function registerUsersRoutes(app: Express): void {
     const token = typeof req.body?.token === "string" ? req.body.token.trim() : null;
     await savePushToken(userId, token);
     res.json({ ok: true });
+  });
+
+  app.get("/api/users/me/profile-analytics", requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const payload = await getMyProfileAnalytics(userId);
+    res.json(payload);
+  });
+
+  /** JSON со своими данными (профиль, связи, чаты, избранные сообщения, посты) — для прозрачности и переноса. */
+  app.get("/api/users/me/data-export", requireAuth, dataExportLimiter, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    try {
+      const payload = await buildUserDataExport(userId);
+      if (!payload) {
+        res.status(404).json({ message: "Пользователь не найден" });
+        return;
+      }
+      const stub = userId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 12) || "me";
+      const filename = `ping-data-export-${stub}.json`;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      );
+      res.send(`${JSON.stringify(payload, null, 2)}\n`);
+    } catch (e) {
+      console.error("[users/data-export]", e);
+      res.status(500).json({ message: "Не удалось сформировать выгрузку. Попробуйте позже." });
+    }
   });
 
   app.patch("/api/users/me", requireAuth, profilePatchLimiter, async (req: Request, res: Response) => {
@@ -114,6 +169,18 @@ export function registerUsersRoutes(app: Express): void {
     }
   });
 
+  app.delete("/api/users/me/followers/:followerId", requireAuth, async (req: Request, res: Response) => {
+    const ownerId = getUserId(req)!;
+    const followerId = Array.isArray(req.params.followerId) ? req.params.followerId[0] : req.params.followerId;
+    try {
+      await removeMyFollower(ownerId, followerId ?? "");
+      res.json({ ok: true });
+    } catch (error) {
+      if (respondServiceError(res, error)) return;
+      throw error;
+    }
+  });
+
   app.get("/api/users/:userId/followers", requireAuth, async (req: Request, res: Response) => {
     const targetUserId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     if (!targetUserId) {
@@ -142,16 +209,8 @@ export function registerUsersRoutes(app: Express): void {
     const blockerId = getUserId(req)!;
     const blockedId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     try {
-      const b = req.body;
-      const flags =
-        b && typeof b === "object"
-          ? {
-              restrictProfile: (b as { restrictProfile?: unknown }).restrictProfile !== false,
-              restrictChat: (b as { restrictChat?: unknown }).restrictChat !== false,
-              restrictSocial: (b as { restrictSocial?: unknown }).restrictSocial !== false,
-            }
-          : undefined;
-      await blockUser(blockerId, blockedId ?? "", flags);
+      const { flags, note } = parseUserBlockBody(req.body);
+      await blockUser(blockerId, blockedId ?? "", flags, note);
       res.json({ ok: true });
     } catch (error) {
       if (respondServiceError(res, error)) return;

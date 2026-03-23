@@ -14,6 +14,10 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { UserAvatar } from "@/components/UserAvatar";
 import { PostMedia } from "@/components/PostMedia";
+import { PostExternalVideoEmbed } from "@/components/PostExternalVideoEmbed";
+import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
+import { extractFirstExternalVideoUrl, isExternalVideoOnlyCaption } from "@/lib/post-external-video";
+import { parseExternalVideoUrl } from "@/lib/external-video";
 import {
   fetchPost,
   formatPostTime,
@@ -28,6 +32,7 @@ import {
 } from "@/lib/posts";
 import { applyReactionOptimistic } from "@/lib/feed-query-cache";
 import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
+import { buildEdgeCompanionOpenHref } from "@/features/edge-companion/edge-companion-navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import CommentsModal from "@/components/CommentsModal";
 import { ListEmptyState } from "@/components/ui/empty";
@@ -131,6 +136,16 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
     return `${window.location.origin}${path}`;
   }, [post, user?.id]);
 
+  const postBodyForEmbed = post?.text ?? "";
+  const primaryExternalVideoUrl = useMemo(
+    () => extractFirstExternalVideoUrl(postBodyForEmbed),
+    [postBodyForEmbed],
+  );
+  const maskExternalEmbed = useMemo(
+    () => (primaryExternalVideoUrl ? parseExternalVideoUrl(primaryExternalVideoUrl) : null),
+    [primaryExternalVideoUrl],
+  );
+
   const handleShare = async () => {
     if (!post || !shareUrl) return;
     try {
@@ -198,7 +213,8 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
 
   const authorName = [post.author.displayName, post.author.surname].filter(Boolean).join(" ") || `ID ${post.author.publicId}`;
   const postBody = post.text ?? "";
-  const hasCaption = postBody.trim().length > 0;
+  const hasCaption =
+    postBody.trim().length > 0 && !isExternalVideoOnlyCaption(postBody, primaryExternalVideoUrl);
   const reactionTotal = post.reactions?.reduce((sum, r) => sum + r.count, 0) ?? 0;
   const topThreeReactionEmojis = [...(post.reactions ?? [])]
     .filter((r) => r.count > 0)
@@ -289,14 +305,30 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
           </button>
         </div>
 
-        <div className={cn("flex flex-col min-w-0 mb-[var(--uix-space-4)]", hasCaption && "gap-[var(--uix-space-3)]")}>
-          {hasCaption && (
-            <p className="text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap">{postBody}</p>
+        <div
+          className={cn(
+            "flex flex-col min-w-0 mb-[var(--uix-space-4)]",
+            (hasCaption || primaryExternalVideoUrl) && "gap-[var(--uix-space-3)]",
           )}
+        >
+          {hasCaption ? (
+            <p className="text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap">
+              <PostCaptionInlineParts
+                text={postBody}
+                maskExternalEmbed={maskExternalEmbed}
+                onHashtagClick={() => {}}
+                linkClassName="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
+                hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
+              />
+            </p>
+          ) : null}
+          {primaryExternalVideoUrl ? (
+            <PostExternalVideoEmbed url={primaryExternalVideoUrl} className="rounded-xl" autoplayInViewport />
+          ) : null}
           <PostMedia
             mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
             layout={post.mediaLayout ?? null}
-            className={hasCaption ? "!mt-0" : undefined}
+            className={hasCaption || primaryExternalVideoUrl ? "!mt-0" : undefined}
           />
           {post.edgeId ? (
             <EdgeCompanionFeedCard
@@ -313,7 +345,12 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
                   });
                   return;
                 }
-                setLocation(`/edge/companion?edgeId=${encodeURIComponent(post.edgeId!)}`);
+                setLocation(
+                  buildEdgeCompanionOpenHref(
+                    post.edgeId!,
+                    `/profile/${encodeURIComponent(userId)}/post/${encodeURIComponent(postId)}`,
+                  ),
+                );
               }}
             />
           ) : null}

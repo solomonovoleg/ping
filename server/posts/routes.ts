@@ -144,6 +144,8 @@ export function registerPostsRoutes(app: Express): void {
     }
     try {
       await recordPostView(postId, userId);
+      const { scheduleEdgeTaskAfterPostAction } = await import("./edge-task-hook");
+      scheduleEdgeTaskAfterPostAction(userId, postId, "view_post");
       res.status(204).end();
     } catch (e) {
       console.error("Post view error:", e);

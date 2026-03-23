@@ -185,7 +185,6 @@ export default function AdminUsers() {
                   <TableRow>
                     <TableHead>ID</TableHead>
                     <TableHead>Имя</TableHead>
-                    <TableHead>Телефон</TableHead>
                     <TableHead>Пригласил</TableHead>
                     <TableHead>Статус</TableHead>
                     <TableHead className="text-right">Действия</TableHead>
@@ -198,7 +197,6 @@ export default function AdminUsers() {
                       <TableCell>
                         {[u.displayName, u.surname].filter(Boolean).join(" ") || "—"}
                       </TableCell>
-                      <TableCell>{u.phone}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {u.referralCount != null ? u.referralCount : "—"}
                       </TableCell>
@@ -378,7 +376,7 @@ export default function AdminUsers() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {actionUser &&
-                `${[actionUser.displayName, actionUser.surname].filter(Boolean).join(" ") || actionUser.phone} (ID: ${actionUser.publicId})`}
+                `${[actionUser.displayName, actionUser.surname].filter(Boolean).join(" ") || "Без имени"} · публичный ID ${actionUser.publicId}`}
               {actionType === "ban" && (
                 <div className="mt-2">
                   <label className="text-sm font-medium">Причина (необязательно)</label>

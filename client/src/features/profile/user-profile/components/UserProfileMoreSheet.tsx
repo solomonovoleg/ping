@@ -1,4 +1,4 @@
-import { Copy, Settings } from "lucide-react";
+import { Copy, Settings, UserCheck, UserX } from "lucide-react";
 import { userProfileRu } from "../i18n.ru";
 
 export function UserProfileMoreSheet({
@@ -7,12 +7,20 @@ export function UserProfileMoreSheet({
   isMe,
   onCopyLink,
   onOpenSettings,
+  onBlockUser,
+  isBlockedByMe,
+  onUnblockUser,
 }: {
   open: boolean;
   onClose: () => void;
   isMe: boolean;
   onCopyLink: () => void;
   onOpenSettings: () => void;
+  /** Чужой профиль: открыть сценарий блокировки */
+  onBlockUser?: () => void;
+  /** Вы заблокировали этого пользователя */
+  isBlockedByMe?: boolean;
+  onUnblockUser?: () => void;
 }) {
   const m = userProfileRu.moreSheet;
   if (!open) return null;
@@ -50,6 +58,30 @@ export function UserProfileMoreSheet({
           >
             <Settings className="h-4 w-4 shrink-0" aria-hidden />
             {m.settings}
+          </button>
+        ) : isBlockedByMe && onUnblockUser ? (
+          <button
+            type="button"
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-secondary min-h-[var(--uix-touch-min)]"
+            onClick={() => {
+              onClose();
+              onUnblockUser();
+            }}
+          >
+            <UserCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            {m.unblockUser}
+          </button>
+        ) : onBlockUser ? (
+          <button
+            type="button"
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-destructive hover:bg-destructive/10 min-h-[var(--uix-touch-min)]"
+            onClick={() => {
+              onClose();
+              onBlockUser();
+            }}
+          >
+            <UserX className="h-4 w-4 shrink-0" aria-hidden />
+            {m.blockUser}
           </button>
         ) : null}
         <button

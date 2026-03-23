@@ -12,9 +12,10 @@ import {
   usePrefersReducedMotion,
 } from "@/lib/motion";
 
-import type { StoryViewerProps } from "./story-viewer/types";
+import type { Story, StoryViewerProps } from "./story-viewer/types";
 export type { Story, StoryViewerProps } from "./story-viewer/types";
 
+import { isNavigatorShareCancelled } from "@/lib/navigator-share";
 import { DOUBLE_TAP_MS, STORY_SOUND_PREF_KEY } from "./story-viewer/constants";
 import { getInitialStorySoundMuted } from "./story-viewer/story-sound-pref";
 import { normalizeStorySlideId, viewsWordRu } from "./story-viewer/format";
@@ -26,6 +27,33 @@ const H_SWIPE_START_PX = 16;
 const H_SWIPE_COMMIT_PX = 58;
 const V_SWIPE_START_PX = 14;
 const V_SWIPE_CLOSE_COMMIT_PX = 84;
+
+/** Снимок сториз, к которой привязано поле ответа (не меняется при автопереходе/свайпе). */
+type StoryReplyBind = {
+  storyId: string;
+  authorId: string;
+  image: string;
+  thumbnailUrl?: string;
+  userName: string;
+  userAvatar: string;
+  time: string;
+};
+
+function captureReplyBindFromStory(story: Story | undefined): StoryReplyBind | null {
+  if (!story) return null;
+  const storyId = normalizeStorySlideId(story.id) ?? "";
+  const authorId = story.authorId ?? "";
+  if (!storyId || !authorId) return null;
+  return {
+    storyId,
+    authorId,
+    image: story.image ?? "",
+    ...(story.thumbnailUrl ? { thumbnailUrl: story.thumbnailUrl } : {}),
+    userName: story.userName ?? "",
+    userAvatar: story.userAvatar ?? "",
+    time: story.time ?? "",
+  };
+}
 
 export default function StoryViewer({
   stories,
@@ -52,6 +80,9 @@ export default function StoryViewer({
   const [progress, setProgress] = useState(0);
   const [paused, setPaused] = useState(false);
   const [replyText, setReplyText] = useState("");
+  const [replyFocused, setReplyFocused] = useState(false);
+  /** К какой сториз относится черновик ответа (фиксируется при фокусе или первом символе). */
+  const [replyBind, setReplyBind] = useState<StoryReplyBind | null>(null);
   const [sendingReply, setSendingReply] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -110,6 +141,24 @@ export default function StoryViewer({
     !!currentStoryAuthorId &&
     !isOwnCurrentStory &&
     (viewerUserId ? true : canReply);
+
+  const canReplyToBind =
+    !!onReply &&
+    !!replyBind &&
+    !!viewerUserId &&
+    replyBind.authorId !== viewerUserId &&
+    (viewerUserId ? true : canReply);
+
+  /** Пока пишешь ответ — нельзя уйти на другую сториз (таймер, видео, свайп, тап по краям). */
+  const replyNavigationBlocked =
+    replyBind !== null && (replyFocused || replyText.trim().length > 0);
+
+  /** Держим на экране ту сториз, которой отвечаем, пока активен черновик. */
+  useEffect(() => {
+    if (!replyBind || !replyNavigationBlocked) return;
+    const idx = stories.findIndex((s) => normalizeStorySlideId(s.id) === replyBind.storyId);
+    if (idx >= 0 && idx !== currentIndex) setCurrentIndex(idx);
+  }, [replyBind, replyNavigationBlocked, stories, currentIndex]);
 
   const canLikeCurrentStory =
     !!onToggleLike &&
@@ -276,22 +325,51 @@ export default function StoryViewer({
     return false;
   }, [currentIndex, stories]);
 
+  /** Явный жест «другая сториз» — черновик ответа сбрасывается (передумал писать). */
+  const discardReplyDraft = useCallback(() => {
+    setReplyText("");
+    setReplyBind(null);
+    setReplyFocused(false);
+    setReplyError(null);
+    setActionError(null);
+  }, []);
+
+  const safeGoNext = useCallback(() => {
+    if (replyNavigationBlocked) discardReplyDraft();
+    goNext();
+  }, [discardReplyDraft, goNext, replyNavigationBlocked]);
+
+  const safeGoPrev = useCallback(() => {
+    if (replyNavigationBlocked) discardReplyDraft();
+    goPrev();
+  }, [discardReplyDraft, goPrev, replyNavigationBlocked]);
+
+  const safeGoNextAuthor = useCallback(() => {
+    if (replyNavigationBlocked) discardReplyDraft();
+    return goNextAuthor();
+  }, [discardReplyDraft, goNextAuthor, replyNavigationBlocked]);
+
+  const safeGoPrevAuthor = useCallback(() => {
+    if (replyNavigationBlocked) discardReplyDraft();
+    return goPrevAuthor();
+  }, [discardReplyDraft, goPrevAuthor, replyNavigationBlocked]);
+
   useEffect(() => {
-    if (paused || isVideoStory || !stories.length) return;
+    if (paused || isVideoStory || !stories.length || replyNavigationBlocked) return;
     const interval = 60;
     const duration = 5000;
     const step = interval / duration;
     const t = window.setInterval(() => {
       setProgress((p) => {
         if (p + step >= 1) {
-          goNext();
+          safeGoNext();
           return 0;
         }
         return p + step;
       });
     }, interval);
     return () => window.clearInterval(t);
-  }, [goNext, isVideoStory, paused, stories.length, currentIndex]);
+  }, [isVideoStory, paused, replyNavigationBlocked, safeGoNext, stories.length, currentIndex]);
 
   const onStoryVideoTimeUpdate = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget;
@@ -300,36 +378,53 @@ export default function StoryViewer({
   }, []);
 
   const onStoryVideoEnded = useCallback(() => {
-    goNext();
-  }, [goNext]);
+    if (replyNavigationBlocked) {
+      const v = storyVideoRef.current;
+      if (v) {
+        try {
+          v.pause();
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    safeGoNext();
+  }, [replyNavigationBlocked, safeGoNext]);
 
   const submitStoryReply = useCallback(() => {
     const text = replyText.trim();
-    const storyId = normalizeStorySlideId(currentStory?.id) ?? "";
-    const authorId = currentStory?.authorId ?? "";
-    if (!text || !storyId || !authorId || !onReply || sendingReply) return;
+    const bind = replyBind ?? captureReplyBindFromStory(currentStory);
+    if (!bind) return;
+    if (!text || !onReply || sendingReply) return;
+    if (!viewerUserId || bind.authorId === viewerUserId) return;
     setSendingReply(true);
     setReplyError(null);
+    setActionError(null);
     Promise.resolve(
       onReply({
-        storyId,
-        authorId,
+        storyId: bind.storyId,
+        authorId: bind.authorId,
         text,
         story: {
-          id: storyId,
-          image: currentStory?.image ?? "",
-          userName: currentStory?.userName ?? "",
-          userAvatar: currentStory?.userAvatar ?? "",
-          time: currentStory?.time ?? "",
+          id: bind.storyId,
+          image: bind.image,
+          ...(bind.thumbnailUrl ? { thumbnailUrl: bind.thumbnailUrl } : {}),
+          userName: bind.userName,
+          userAvatar: bind.userAvatar,
+          time: bind.time,
         },
       })
     )
-      .then(() => setReplyText(""))
+      .then(() => {
+        setReplyText("");
+        setReplyBind(null);
+      })
       .catch((err: unknown) =>
         setReplyError(err instanceof Error ? err.message : "Failed to send reply")
       )
       .finally(() => setSendingReply(false));
-  }, [currentStory, onReply, replyText, sendingReply]);
+  }, [currentStory, onReply, replyBind, replyText, sendingReply, viewerUserId]);
 
   const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter" || e.shiftKey) return;
@@ -407,9 +502,9 @@ export default function StoryViewer({
     if (intent === "swipe-x") {
       if (absX < H_SWIPE_COMMIT_PX || absX < absY * 1.1) return;
       if (dx < 0) {
-        if (!goNextAuthor()) goNext();
+        if (!safeGoNextAuthor()) safeGoNext();
       } else {
-        if (!goPrevAuthor()) goPrev();
+        if (!safeGoPrevAuthor()) safeGoPrev();
       }
       return;
     }
@@ -440,11 +535,11 @@ export default function StoryViewer({
 
     lastTapRef.current = { at: now, x: e.clientX, y: e.clientY };
     if (x <= rect.width * 0.32) {
-      goPrev();
+      safeGoPrev();
       return;
     }
     if (x >= rect.width * 0.68) {
-      goNext();
+      safeGoNext();
     }
   };
 
@@ -486,9 +581,10 @@ export default function StoryViewer({
         .then(() => {
           if (closeSheet) setShowActions(false);
         })
-        .catch((err: unknown) =>
-          setActionError(err instanceof Error ? err.message : "Failed to share story")
-        )
+        .catch((err: unknown) => {
+          if (isNavigatorShareCancelled(err)) return;
+          setActionError(err instanceof Error ? err.message : "Failed to share story");
+        })
         .finally(() => setActionsBusy(false));
     },
     [actionsBusy, currentStory?.id, currentStory?.image, currentStory?.time, currentStory?.userName, onShareStory]
@@ -719,19 +815,51 @@ export default function StoryViewer({
           </div>
         ) : (
           <div className="flex items-end gap-2">
-            <div className="flex min-h-[var(--uix-touch-min)] flex-1 items-center rounded-[26px] border border-white/20 bg-white/10 px-4 py-3 backdrop-blur-xl">
+            <div className="flex min-h-[var(--uix-touch-min)] flex-1 flex-col gap-1 rounded-[26px] border border-white/20 bg-white/10 px-4 py-3 backdrop-blur-xl">
+              {replyBind && replyNavigationBlocked ? (
+                <p className="text-[11px] leading-tight text-white/80">
+                  Ответ для{" "}
+                  <span className="font-semibold text-white">{replyBind.userName || "автора"}</span>
+                </p>
+              ) : null}
+              <div className="flex w-full min-w-0 flex-1 items-center">
               <input
                 value={replyText}
                 onChange={(e) => {
-                  setReplyText(e.target.value);
+                  const v = e.target.value;
+                  setReplyText(v);
                   if (replyError) setReplyError(null);
+                  if (actionError) setActionError(null);
+                  if (v.trim() && !replyBind && canReplyCurrentStory) {
+                    const next = captureReplyBindFromStory(currentStory);
+                    if (next) setReplyBind(next);
+                  }
+                }}
+                onFocus={() => {
+                  setReplyFocused(true);
+                  setActionError(null);
+                  if (!replyBind && canReplyCurrentStory) {
+                    const next = captureReplyBindFromStory(currentStory);
+                    if (next) setReplyBind(next);
+                  }
+                }}
+                onBlur={() => {
+                  setReplyFocused(false);
+                  if (!replyText.trim()) setReplyBind(null);
                 }}
                 onKeyDown={handleReplyKeyDown}
-                placeholder={canReplyCurrentStory ? "Send message..." : "Replies unavailable"}
-                disabled={!canReplyCurrentStory || sendingReply}
-                className="w-full bg-transparent text-sm text-white placeholder:text-white/65 outline-none disabled:cursor-not-allowed disabled:text-white/65"
+                placeholder={
+                  replyBind
+                    ? `Сообщение для ${replyBind.userName || "…"}`
+                    : canReplyCurrentStory
+                      ? "Сообщение…"
+                      : "Ответ недоступен"
+                }
+                disabled={(!replyBind ? !canReplyCurrentStory : !canReplyToBind) || sendingReply}
+                className="w-full min-w-0 bg-transparent text-sm text-white placeholder:text-white/65 outline-none disabled:cursor-not-allowed disabled:text-white/65"
+                aria-label={replyBind ? `Ответ на сториз ${replyBind.userName || ""}` : "Ответ на сториз"}
               />
-              {canReplyCurrentStory && replyText.trim() ? (
+              {(replyBind ? canReplyToBind : canReplyCurrentStory) && replyText.trim() ? (
                 <button
                   type="button"
                   aria-label="Send reply"
@@ -745,6 +873,7 @@ export default function StoryViewer({
                   <Send size={14} />
                 </button>
               ) : null}
+              </div>
             </div>
 
             <button

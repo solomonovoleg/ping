@@ -25,6 +25,29 @@ function extractOgMeta(html: string): { image?: string; title?: string; descript
   return result;
 }
 
+function extractVkEmbedUrl(html: string): string | null {
+  const patterns = [
+    /https?:\\\/\\\/vk\.com\\\/video_ext\.php\?[^"'\\\s<]+/gi,
+    /https?:\/\/vk\.com\/video_ext\.php\?[^"'\s<]+/gi,
+    /\/\/vk\.com\/video_ext\.php\?[^"'\s<]+/gi,
+  ];
+  for (const pattern of patterns) {
+    const m = html.match(pattern);
+    if (!m?.length) continue;
+    for (const raw of m) {
+      let candidate = raw;
+      candidate = candidate.replace(/\\\//g, "/");
+      candidate = candidate.replace(/&amp;/gi, "&");
+      candidate = candidate.replace(/\\u0026/gi, "&");
+      if (candidate.startsWith("//")) candidate = `https:${candidate}`;
+      if (!/^https?:\/\/vk\.com\/video_ext\.php\?/i.test(candidate)) continue;
+      if (!/[?&]oid=-?\d+/i.test(candidate) || !/[?&]id=\d+/i.test(candidate)) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export function registerLinkPreviewRoutes(app: import("express").Express): void {
   app.get("/api/link-preview", requireAuth, linkPreviewLimiter, async (req: Request, res: Response) => {
     const url = typeof req.query.url === "string" ? req.query.url.trim() : "";
@@ -57,13 +80,17 @@ export function registerLinkPreviewRoutes(app: import("express").Express): void 
       const text = await resp.text();
       const body = text.slice(0, MAX_BODY_LENGTH);
       const meta = extractOgMeta(body);
-      if (!meta.image && !meta.title && !meta.description) {
-        return res.json({ image: null, title: null, description: null });
+      const host = parsed.hostname.replace(/^www\./i, "").replace(/^m\./i, "").toLowerCase();
+      const isVkHost = host === "vk.com" || host === "vk.ru";
+      const embedUrl = isVkHost ? extractVkEmbedUrl(body) : null;
+      if (!meta.image && !meta.title && !meta.description && !embedUrl) {
+        return res.json({ image: null, title: null, description: null, embedUrl: null });
       }
       res.json({
         image: meta.image ?? null,
         title: meta.title ?? null,
         description: meta.description ?? null,
+        embedUrl: embedUrl ?? null,
       });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {

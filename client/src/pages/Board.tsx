@@ -1,4 +1,4 @@
-import { LayoutDashboard, Plus, Star, Clock, ChevronLeft, List, Captions } from "lucide-react";
+import { LayoutDashboard, Plus, Star, Clock, ChevronLeft, List, Captions, Sparkles } from "lucide-react";
 import { getCallHistory } from "@/lib/call-history";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -122,15 +122,25 @@ export default function Board() {
               </div>
             </TapScaleButton>
 
-            <div className="bg-card rounded-3xl p-5 border border-border/50 shadow-sm aspect-square flex flex-col items-center justify-center text-center gap-3 col-span-2 border-dashed">
-              <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
-                <Plus className="w-6 h-6 text-muted-foreground" />
+            <TapScaleButton
+              type="button"
+              onClick={() => setLocation("/board/edge")}
+              haptic
+              subtle
+              className="rounded-3xl p-5 border border-primary/20 bg-gradient-to-br from-violet-500/15 to-fuchsia-500/10 shadow-sm col-span-2 flex flex-col items-stretch text-left min-h-[var(--uix-touch-min)]"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-6 h-6 text-primary" aria-hidden />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-base text-foreground">EDGE кампании</h3>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    Персонаж в ленте, призы, мои кампании
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-medium text-[15px]">Добавить виджет</h3>
-                <p className="text-sm text-muted-foreground mt-1">Настройте свой борд</p>
-              </div>
-            </div>
+            </TapScaleButton>
           </div>
         </div>
 

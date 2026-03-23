@@ -1,6 +1,19 @@
 import type { Express, Request, Response } from "express";
+import type { User } from "@shared/schema";
 import { storage } from "../../storage";
 import { writeAuditLog } from "../audit";
+
+function adminUserJson(u: User) {
+  const {
+    password: _pw,
+    phone: _ph,
+    phoneCipher: _pc,
+    phoneLookupHash: _lh,
+    fcmToken: _fc,
+    ...safe
+  } = u as User & { password?: string };
+  return safe;
+}
 
 type ReqWithAdmin = Request & { adminUserId: string };
 
@@ -19,7 +32,7 @@ export function registerAdminUsersRoutes(app: Express): void {
       const result = await storage.listUsersForAdmin({ limit, offset, search, includeDeleted });
       const referralCounts = await storage.getReferralCountsForUserIds(result.users.map((u) => u.id));
       const usersWithReferrals = result.users.map((u) => ({
-        ...u,
+        ...adminUserJson(u),
         referralCount: referralCounts[u.id] ?? 0,
       }));
       res.json({ users: usersWithReferrals, total: result.total });
@@ -36,8 +49,7 @@ export function registerAdminUsersRoutes(app: Express): void {
       res.status(404).json({ message: "Пользователь не найден" });
       return;
     }
-    const { password: _p, ...safe } = user;
-    res.json(safe);
+    res.json(adminUserJson(user));
   });
 
   app.patch("/api/admin/users/:id", async (req: Request, res: Response) => {
@@ -80,8 +92,7 @@ export function registerAdminUsersRoutes(app: Express): void {
         details: { fields: Object.keys(data) },
         ip: req.ip,
       });
-      const { password: _p, ...safe } = updated;
-      res.json(safe);
+      res.json(adminUserJson(updated));
     } catch (e) {
       console.error("admin user update", e);
       res.status(500).json({ message: "Ошибка обновления профиля" });

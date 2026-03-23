@@ -28,6 +28,7 @@
 8. [Правила модулей и размер файлов](#правила-модулей-и-размер-файлов)
 9. [Журнал модулей (дополнять при появлении нового)](#журнал-модулей-дополнять-при-появлении-нового)
 10. [Связанная документация](#связанная-документация)
+11. [Миграции и деплой (сводка)](#миграции-и-деплой-сводка)
 
 ---
 
@@ -37,7 +38,7 @@
 client/     React UI, страницы, features, hooks, API adapters (Vite)
 server/     Express API, WebSocket (calls, group-calls, realtime), upload, storage
 shared/     Схемы Drizzle, общие типы и константы (без runtime-логики приложения)
-EDGE/       Отдельный microservice для gamification и game logic (Express + TS)
+EDGE/       Микросервис геймификации (Express + TS): `EDGE/server/index.ts` → `dist/edge.cjs`; PM2 только при `EDGE_PM2_ENABLED=1`
 ПИНГОК МИКРО/  Отдельный процесс голосового NLU/оверлея (Express), см. README; `npm run dev:pingok-micro`
 docs/       Продуктовые и архитектурные документы, гайды
 scripts/    Деплой, миграции, сиды
@@ -72,19 +73,22 @@ android/    Capacitor / Gradle
 | Групповые звонки | `features/group-call/` | Комната, mesh, UI (`ui/pulse-ai/`), транскрипты, WS URL, флаги |
 | Профиль (оболочка PULSE) | `features/profile/pulse-profile/` | `PulseProfileLayout`, тема, layout-блоки |
 | Профиль (экран пользователя) | `features/profile/user-profile/` | `useUserProfilePage`, `hooks/`, `model/`, `components/`, `components/profile-pins/` (закреплённое), `i18n.ru.ts` |
+| Блокировка пользователя (клиент) | `features/user-blocking/` | Пресеты и API `UserBlockSubmitter`, диалог `UserBlockAlertDialog`, полоса «заблокированы» `BlockedByPeerComposer`; точки входа: чат, профиль, контекст-меню комментария |
 | Лента | `features/feed/` | Компоненты ленты (напр. `FeedHeader`) |
 | Посты (обрезка видео и др.) | `features/posts/` | Например `video-trim/` |
 | Доска / треки | `features/board/tracks/` | Треки, модалки |
 | История звонков в борде | `features/board/call-history/` | Список/деталь, связка с треками |
 | Уведомления | `features/notifications/` | Колокол, хуки непрочитанного |
 | Админ ops (клиент) | `features/admin-ops/` | Секции платформы, трафик, отчёты, API диска, публичные бары — см. `api.ts`, `i18n.ru.ts` |
-| EDGE companion (клиент) | `features/edge-companion/` | UIX-карточка EDGE в ленте + компоненты интерактива персонажа для отдельной страницы |
+| EDGE companion (клиент) | `features/edge-companion/` | Лента: `EdgeCompanionFeedCard` → `EdgeCompanionFeedHero` + `EdgeFeedSurfacePager` + **`feed-delight/`** (вход карточки, подсказка свайпа, аура/тап-всплеск в ленте, акцент CTA — только UI); полный экран: Embla в `companion-surfaces/`; `edge-feed-play-state.ts`, `edge-companion-navigation.ts` |
+| Настройки — данные | `features/settings/` | Карточка «Данные и память»: кэш медиа, сохранённые сообщения, скачивание JSON (`SettingsDataMemoryCard`); экран `/settings/data` |
 
 ### Прочее на клиенте
 
 | Путь | Назначение |
 |------|------------|
 | `components/story-viewer/` + `StoryViewer.tsx` | Просмотр сториз, портал |
+| `components/PostExternalVideoEmbed.tsx`, `PostCaptionInlineParts.tsx`, `lib/post-external-video.ts` | Посты: внешнее видео по ссылке в тексте — превью у видимой карточки (IntersectionObserver), iframe только по тапу; метка провайдера вместо длинного URL |
 | `pages/admin/` | Страницы админки, в т.ч. `Disk.tsx` (статистика диска) |
 
 Подробнее про профиль: `client/src/features/profile/user-profile/README.md`.
@@ -103,7 +107,7 @@ android/    Capacitor / Gradle
 | Домен | Папка | Назначение |
 |--------|--------|------------|
 | Авторизация | `auth/` | Сессии, вход |
-| Пользователи | `users/` | Профили, подписки, блоки, контакты |
+| Пользователи | `users/` | Профили, подписки, блоки, контакты; `edge-follow-hook.ts` — EDGE XP за первую подписку на автора кампании |
 | Закреплённое в профиле | `profile-pins/` | Папки и элементы (пост/сториз), обложки — `routes.ts`, `service.ts` |
 | Чаты | `chats/` | Чаты, участники, чтение |
 | Сообщения | `messages/` | Лента сообщений, отправка, редактирование |
@@ -113,8 +117,9 @@ android/    Capacitor / Gradle
 | ПИНГОК МИКРО (API) | `pingok-micro/` | `routes.ts`: parse, memory-search, **execute**, send-dm, **start-call**; `time-parse.ts`, `execute-service.ts` |
 | Напоминания (Пингок) | `reminders/` | `GET /api/reminders/due`, `POST /api/reminders/:id/dismiss` |
 | Service Chat | `service-chat/` | Хост-сообщения: шаблоны цепочек after-read, рассылки, локальная/глобальная обратная связь |
-| EDGE adapter | `edge/` | Лёгкая интеграция отдельного EDGE-сервиса: прокси `/api/edge/*` без нагрузки на core-модули |
-| Посты | `posts/` | Лента, CRUD, просмотры |
+| EDGE adapter | `edge/` | Прокси `/api/edge/*`; participant task/follow-reward; **creator:** `GET /api/edge/my-campaigns`, `POST/GET/PATCH /api/edge/creator/campaigns` (+ `:edgeId`) |
+| Посты | `posts/` | Лента, CRUD, просмотры; `edge-task-hook.ts` — фоновый EDGE XP за view/react/share при `edge_id` |
+| Лента (ранг + снапшот) | `feed/`, `feed-worker/` | `feed/config.ts`, `rank-global-public-feed.ts`, `load-global-feed-page.ts`, `snapshot-store.ts`; воркер пересчитывает `feed_global_snapshot`, API читает готовый порядок |
 | Комментарии | `comments/` | Комментарии к постам |
 | Реакции | `reactions/` | Реакции на посты |
 | Сториз | `stories/` | Сториз, просмотры |
@@ -128,7 +133,7 @@ android/    Capacitor / Gradle
 | Превью ссылок | `link-preview/` | Разбор URL |
 | Перевод | `translate/` | Перевод сообщений |
 | Vibe чата | `vibe/` | Темы/вайб чата |
-| Админка | `admin/` | Дашборд, пользователи, аудит, feed, ingest; подпапки `admin/dashboard`, `admin/users`, … |
+| Админка | `admin/` | Дашборд, пользователи, аудит, feed, ingest; **парсер ВК** — UI `features/admin-vk-parser/`, прокси `admin/vk-parser`, микросервис **`PARSER/`** |
 | Ops (платформа) | `admin/ops/` | Публичные/админские HTTP для платформы, отчёты, traffic shield, **диск** (`disk-stats.service.ts`, `disk.admin-http`) — см. `server/admin/ops/README.md` |
 
 ### Загрузки файлов
@@ -156,6 +161,7 @@ android/    Capacitor / Gradle
 | `schema/` | Таблицы Drizzle и zod/insert-схемы: `users`, `chats`, `messages`, `posts`, `stories`, `profile-pins`, `user-reminders`, `voice-tasks`, `service-chat`, `notifications`, `tracks`, `platform-settings`, `content-reports`, … |
 | `schema/index.ts` | Реэкспорт схем |
 | `constants.ts` | Общие константы |
+| `edge-task-preset-config.ts` | Пресеты заданий EDGE: типы и парсинг `taskPresets` / `verify` (платформа + EDGE) |
 | `call-signaling.ts`, `ws-call-handshake.ts` | Контракты звонков |
 | `chat-vibe-types.ts`, `post-media-layout.ts`, `post-video.ts` | Общие типы/утилиты для UI и API |
 
@@ -168,7 +174,7 @@ android/    Capacitor / Gradle
 | Путь | Назначение |
 |------|------------|
 | `docs/` | Все `.md` гайды; **карта проекта — этот файл** |
-| `scripts/` | `deploy.sh`, `backup-project.sh` (`npm run backup` → `backups/*.tar.gz`), `run-migrations.cjs`, сиды, миграции данных |
+| `scripts/` | `deploy.sh`, `backup-project.sh` (`npm run backup` → `backups/*.tar.gz`), **`run-migrations.cjs`** (цепочка основной БД — см. **`docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md`**), сиды, `migrate-*.cjs` |
 | `ios/`, `android/` | Нативные оболочки Capacitor |
 | `uploads/` | Локальные файлы (не коммитить медиа) |
 | `ПИНГОК МИКРО/` | Микросервис голосовых команд **в репозитории**: `server/` (Express, NLU), `client/` (`PingokMicroOverlay`: STT, parse, поиск в памяти, лента, remind/plan/task, сообщение, звонок; `NavPulseCenterLogoButton` — long-press в `AppLayout`, реэкспорт из `@pingok-micro`, **не заглушать**), `shared/` типы; `npm run dev:pingok-micro`; секреты только в `.env` (см. `.gitignore` внутри каталога) |
@@ -260,11 +266,56 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | 2026-03 | `EDGE/`, `server/edge/`, `client/src/lib/edge-gamification.ts` | Новый изолированный EDGE микросервис (gamification/game logic) + тонкий адаптер `/api/edge/*` в основной платформе; модуль `companion` с состоянием персонажа, заданиями и лидербордом |
 | 2026-03 | `EDGE/docs/EDGE_ENGINE_ARCHITECTURE.md` | Архитектура движка: кампании, surfaces, задания (EDGE + platform), лидерборд, призы/итоги, Board создателя, эволюция под новые UI (каталог) |
 | 2026-03 | `client/src/features/edge-companion/`, `client/src/pages/EdgeCompanion.tsx`, `client/src/pages/Posts.tsx` | EDGE в ленте: блок кампании в теле поста (`posts.edge_id`), те же метрики что у обычного поста; `MeasuredFeedItem` + `recordPostView` при скролле; экран `/edge/companion` |
-| 2026-03 | `GET /api/edge/companion/campaign-config`, `client/src/lib/edge-gamification.ts` | Клиент `fetchEdgeCompanionCampaignConfig`; пока без внешнего EDGE — ответ-заглушка с `isStub: true` и честным текстом на экране Companion |
+| 2026-03 | `GET /api/edge/companion/campaign-config`, `client/src/lib/edge-gamification.ts` | Клиент `fetchEdgeCompanionCampaignConfig`; прокси на EDGE, без upstream — `503` (`edge_upstream_not_configured` / `edge_companion_unavailable`) |
+| 2026-03 | `docs/EDGE_MICROSERVICE_PLAN.md` | План выноса EDGE в отдельный микросервис (`EDGE/`, своя БД, роутеры по подпапкам, файлы ≤200 строк, билд в `dist/edge.cjs`, PM2, прокси с платформы) |
+| 2026-03 | `docs/EDGE_PRODUCT_SPEC.md` | Продукт EDGE: тип интерактивного контента на борде; типы (персонаж, рулетка, каталог, квиз, квест, челлендж); создатель/участники; задания (персонаж/глобальные/коммерческие); баллы, лидерборд, гибкие призы и выдача в ЛС через платформу |
+| 2026-03 | `EDGE/campaign/*`, `EDGE/migrations/0003_edge_prize_winners.sql`, `POST /v1/campaign/draw`, `server/admin/edge-prize.routes.ts` | Розыгрыш: случайные победители среди участников (исключая уже награждённых по `gift_key`), `edge_prize_winners`; платформа `POST /api/admin/edge/draw-prize` + ЛС победителям |
+| 2026-03 | `client/src/features/edge-companion/edge-uix.ts` | Токены поверхностей EDGE Companion: `EDGE_CARD`, `EDGE_INSET`, чипы и кнопки в стиле `--uix-*` / `primary`, без «радужных» градиентов вне системы |
+| 2026-03 | `EDGE/participant/leaderboard` + `interact`, `client/.../EdgeLeaderboardCard.tsx` | Лидерборд по XP (JOIN participants + character_states), ранг «я» через `ROW_NUMBER`; действия `play`/`pet` (+XP/+happy, кулдаун 4 ч в `extra`); прокси `/api/edge/participant/leaderboard`, `/interact` |
+| 2026-03 | `EDGE/participant/character-rules.ts`, `repo.ts`, `service.ts` | Логика персонажа: decay happy, mood, streak по `extra.lastFedYmd`, `careDeadlineAt`; платформа без заглушек — только прокси или 503 |
+| 2026-03 | `EDGE/` (`server/`, `config/`, `health/`, `companion/`, `participant/`, `middleware/`, `db/`, `migrations/`), `dist/edge.cjs`, `server/edge/upstream-client.ts` | Микросервис; БД: `edge_campaigns`, `edge_participants`, `edge_character_states`; API участника; платформа: `GET/POST /api/edge/participant/*` (requireAuth) + прокси; UI Companion: `EdgeParticipantPetCard`, `EdgePetVisualCluster`, `EdgePetStatsPanel`, `edge-pet-display-helpers.ts` |
+| 2026-03 | `docs/EDGE_DATABASE.md` | Отдельная БД EDGE, миграции, поле `public_id` = `posts.edge_id` |
 | 2026-03 | `migrations/0023_posts_edge_id.sql`, `scripts/migrate-posts-edge-id.cjs`, `server/posts/service.ts` + `routes.ts` | Колонка `edge_id`, `parsePostEdgeId`, выдача в ленте/деталке/сохранённых; `POST /api/posts` принимает `edgeId` |
+| 2026-03 | `EDGE/migrations/0004_edge_task_grants.sql`, `EDGE/tasks/`, `POST /v1/participant/task`, `server/edge/call-participant-task.ts`, `server/posts/edge-task-hook.ts`, `server/reactions/routes.ts` | Задания ленты: идемпотентный XP за просмотр/реакцию/шаринг поста с `edge_id`; прокси `POST /api/edge/participant/task` |
+| 2026-03 | `EDGE/tasks/preset-tasks-parse.ts`, `apply-preset-task.ts`, `taskPresets` в `campaign-config`, `BoardEdgeNew` (ключи `game_*`/`global_*`/`commercial_*`), `EdgePresetTasksCard.tsx`, `postEdgeParticipantTask` | Пресеты из мастера: XP по `config_json.taskPresets`, дедуп `edge_task_grants`, срок от `joined_at`, UI «Получить XP» в Companion |
+| 2026-03 | `shared/edge-task-preset-config.ts`, `server/edge/verify-preset-platform.ts`, `companion-preset-from-response.ts`, поле `verify` в пресетах, `creatorPlatformUserId` в campaign-config | Проверка пресетов: платформа (follow / react / comment к посту с `edge_id`), EDGE (min level/xp/streak); без проверки — `verify.type: honor` |
+| 2026-03 | `EDGE/participant/game-script-metrics.ts`, `shared/edge-task-preset-config.ts` (`edge_game_*`, `ping_*`), `BoardEdgeNew` (скрипты по scope), `EdgeParticipantPetCard` (tap/toilet/calm) | Скрипты заданий: счётчики за UTC-день и серия заходов в `character.extra`; глобальные проверки PING (рефералы, посты, профиль, комменты, реакции); UI мастера и компаньона |
+| 2026-03 | `docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md`, `scripts/run-migrations.cjs` (+ `migrate-users-columns.cjs`) | Единая памятка: три контура миграций; в цепочку добавлен пропущенный скрипт колонок `users` (модерация) |
+| 2026-03 | `EDGE/follow-reward/`, `follow_creator`, `POST /v1/participant/follow-reward`, `server/edge/call-follow-reward.ts`, `server/users/edge-follow-hook.ts`, `storage.addFollow` → boolean | Награда за подписку: XP при первой подписке на создателя кампании с `follow_reward_enabled`; прокси `POST /api/edge/participant/follow-reward` |
+| 2026-03 | `client/src/features/edge-companion/edge-companion-navigation.ts`, `docs/EDGE_PRODUCT_SPEC.md` §8, `AGENTS.md` | EDGE как пост: соц.метрики платформы; Companion `back` → лента или страница поста в профиле |
+| 2026-03 | `EDGE/companion/campaign-ui-config.ts`, `companionUi` в campaign-config, `client/.../companion-surfaces/*`, Embla pager | Полноэкранный Companion: свайп-разделы, порядок из `config_json.companion.surfaceOrder`, статья/итоги в JSON |
+| 2026-03 | `EdgeCompanionFeedHero.tsx`, `EdgeFeedSurfacePager.tsx`, `EdgeFeedCharacterSlide.tsx`, `render-feed-slide.tsx`, `edge-feed-play-state.ts` | EDGE в посте: горизонтальные экраны как у companion; новичок (нули + призыв) vs прогресс; CTA «Начать игру» / «Вернуться в игру»; `touch-pan-x` + capture `stopPropagation` чтобы не цеплять свайп вкладок с краёв |
+| 2026-03 | `client/src/features/edge-companion/feed-delight/*`, `feed-delight/index.ts`, `index.css` (`.edge-feed-*`) | Полировка UI: entrance карточки (`variant=feed`), `build-swipe-hint` + строка под точками в ленте и в `CompanionSurfacePager`, аура/«Ещё тап!»/подарок в ленте, пульс CTA; `EdgeCompanionFeedCard` default `feed`, `banner` без entrance; `ARCHITECTURE.md` |
+| 2026-03 | `EdgeCompanionCharacterHero.tsx`, `EdgeParticipantPetCard.tsx`, `/edge/:edgeId`, `edge-companion-navigation.ts` | Companion: короткий URL `/edge/{edgeId}?back=` + редирект с `/edge/companion?edgeId=`; экран персонажа без карточек у метрик; облако — одна фраза настроения; одна оранжевая CTA + «Ещё действия» (меню) |
+| 2026-03 | `EDGE/companion/prize-results-repo.ts`, `build-results-live.ts`, `resultsLive` в campaign-config; `EDGE/campaign/companion-config-update.ts`, `POST /v1/campaign/companion-config`; `server/admin/edge-companion-admin.routes.ts`; `client/.../admin/EdgeCompanion.tsx` | Итоги розыгрыша из `edge_prize_winners`; админка JSON для `companion` |
 | 2026-03 | `useChatMessages.ts`, `Chats.tsx`, `ChatMessageRow.tsx`, `message-delivery-status.ts`, `lib/external-video.ts`, `ExternalVideoEmbedCard.tsx`, `server/chats/service.ts` | Чат: стартовый скролл к первому непрочитанному (`myLastReadAt`), единые галочки доставки/прочтения для текста/аудио/кружка; превью YouTube/RuTube/Яндекс по тапу; список чатов: бейдж непрочитанных и сортировка по последнему сообщению |
+| 2026-03 | `EDGE/creator/` (`campaign-mutate-repo`, `merge-creator-config`, `POST/PATCH/GET` campaigns), `BoardEdgeNew.tsx` (мастер), `edge-creator.ts`, `server/edge/routes.ts` | Создание/редактирование кампании с Борда; `companion.character` + PNG в Companion; пост с `?edgeId=` |
+| 2026-03 | `EDGE/follow-reward/follow-dm-config.ts`, `server/users/edge-follow-dm-sender.ts`, `call-follow-reward.ts` | Авто-ЛС подписчику от создателя по `followRewardDm` после первого follow |
+| 2026-03 | `EDGE/campaign/draw-eligible.ts`, `prize-rules-parse.ts`, `gifts-parse` quantity, `companion/interact-lock.ts` | Розыгрыш: топ-N пул, first/random, лимит призов; блокировка interact по статусу/дате |
 | 2026-03 | `ПИНГОК МИКРО/` (включён в git), `ПИНГОК МИКРО/.gitignore`, корневой `.gitignore` | Микросервис голоса/оверлея версионируется в репо; `.env` в каталоге не коммитится |
 | 2026-03 | `script/build.ts` → `dist/pingok-micro.cjs`, `ecosystem.config.cjs`, `scripts/deploy.sh`, `docs/DEPLOY.md` | Деплой: второй процесс PM2 `pingok-micro` (порт 3091), переменные `PINGOK_MICRO_*` из deploy.env; nginx-префикс для SPA |
+| 2026-03 | `client/src/features/user-blocking/`, `server/users/routes.ts` (`note` + явные флаги), `server/chats/service.ts` (`blockedByOther`), `server/calls/ws.ts` (отказ звонка при `restrictChat`), `CommentsModal`, `UserProfile`, `ChatDetail` | Блокировка: пресеты чат/соц/полная, опциональный комментарий для заблокированного; после блока из DM — вопрос «удалить чат у себя»; у заблокированного — плашка и отключены композер и звонки |
+| 2026-03 | **`PARSER/`** (`server/index`, `http/v1-router`, `storage/repo`, `parser/*`, `migrations/`), `dist/parser.cjs`, `server/parser/proxy.ts`, `server/internal/parser-publish.ts`, `shared/schema/vk-parser.ts`, `admin/vk-parser` | Микросервис парсера ВК (отдельный процесс, порт `PARSER_PORT`); платформа: прокси админки + `POST /internal/parser/publish` (секрет `PARSER_SERVICE_SECRET`); БД общая с платформой; `PARSER_UPSTREAM_URL` на платформе |
+| 2026-03 | `client/src/features/admin-vk-parser/`, `pages/admin/VkParser.tsx` | UI админки парсера ВК: карточки, диалоги, хуки данных/мутаций; страница — re-export; UIX: скелетоны, AlertDialog удаления, keepPreviousData + баннер обновления, a11y, TapScale + хаптик на CTA; очередь: `VkParserQueueAnimatedList` (`AnimatePresence` + `motion.li`, `prefers-reduced-motion` → статический список) |
+| 2026-03 | `PARSER/parser/admin-service-bindings.ts`, `admin-service-items.ts`, `admin-service-run.ts`, `parser/service.ts` | Админ-логика парсера разнесена; `service.ts` только re-export для `http/v1-router` |
+| 2026-03 | `client/src/features/settings/`, `client/src/pages/SettingsData.tsx`, `client/src/lib/user-data-export.ts`, `server/users/privacy-export.ts`, `GET /api/users/me/data-export`, `dataExportLimiter` | Экран `/settings/data`; выгрузка JSON (профиль, подписки, чаты с участниками, избранные сообщения, посты до лимита, id сохранённых постов); клиент скачивает файл с `Content-Disposition` |
+| 2026-03 | `migrations/0030_dm_scheduled_calls.sql`, `shared/schema/dm-scheduled-calls.ts`, `server/storage/*`, `server/pingok-micro/execute-service.ts`, `server/chats/routes.ts` (`GET/POST .../pingok-scheduled-call`), `client/src/features/pingok/`, `client/src/lib/pingok-scheduled-call.ts` | Пингок: при однозначном контакте запланированный звонок — строка `dm_scheduled_calls`, баннер в `ChatDetail` (личка), скрытие у себя или у обоих, автоскрытие через 5 мин после времени; тост «скоро звонок» в окне чата в интервале за 5 мин до события; голосовая задача «в трек … — …» пишет в существующий трек (скрытый групповой чат `__pingok_track_src`) |
+| 2026-03 | `server/pingok-micro/time-parse.ts` (перенос/отмена звонка), `execute-service.ts`, `routes.ts` (`confirm-schedule-call`, `scheduled-calls-pre-window`), `usePingokScheduledCallsPreEventPoll.tsx` | Пингок «как у колонок»: перенос/отмена запланированного звонка голосом; выбор контакта при нескольких совпадениях при планировании; глобальный тост за 5 мин до звонка; синхронизация `user_reminders` при переносе |
+| 2026-03 | `migrations/0031_feed_global_snapshot.sql`, `server/feed/*`, `server/feed-worker/index.ts`, `dist/feed-worker.cjs`, `ecosystem.config.cjs` (`FEED_WORKER_PM2_ENABLED`) | Глобальная лента: воркер пишет снапшот порядка в `feed_global_snapshot`; `GET /api/posts` без hashtag/q читает готовый список + фильтр блокировок, без ранжирования на запросе; fallback при отсутствии/протухшем снапшоте |
+| 2026-03 | `client/src/components/PostExternalVideoEmbed.tsx`, `PostCaptionInlineParts.tsx`, `lib/post-external-video.ts`, `lib/external-video.ts` (VK), `Posts.tsx`, `PostDetail.tsx`, `UserProfilePostsContent.tsx`, `ExternalVideoEmbedCard.tsx` | Посты: первая ссылка YouTube/RuTube/VK/Яндекс в тексте — полноширинная карточка 16:9 с превью (YouTube — постер CDN; остальное — ленивый `GET /api/link-preview` у видимой карточки), iframe после тапа; только ссылка — без дублирующей подписи; VK — кнопка «Смотреть в ВКонтакте» без iframe |
+| 2026-03 | `client/src/features/call/call-ice-config.ts`, `scripts/pre-deploy-check.sh`, `docs/CALLS_TURN_SETUP.md` | WebRTC TURN: `getIceServers()` из `VITE_TURN_*` (креды только пара username+credential); pre-deploy — напоминание без TURN и предупреждение при неполной паре кредов; анонимный TURN без предупреждения |
+| 2026-03 | `server/calls/ws.ts` (`closeExistingCallSocketsForUser`, очередь `messageChain` на сокет), `client/src/lib/realtime-socket-transport.ts`, `docs/CALLS_RELIABILITY.md` | Звонки: один `/calls` WS на пользователя; сериализация входящих сообщений (иначе `call.offer` до завершения async `call.invite` → сессии нет, SDP теряется); клиент — `wsRef`/двойной сокет; сводка инвариантов |
+| 2026-03 | `server/service-chat/service.ts` (`processServiceChatQueue`) | Service-chat: исправлен `UPDATE … FROM due JOIN …` — в PostgreSQL нельзя ссылаться на алиас **целевой** строки `UPDATE` внутри цепочки `FROM`; join к `thread`/`steps` через `service_chat_step_states base` |
+| 2026-03 | `client/src/lib/call-audio-route.ts`, `CallModal.tsx`, `call-controller.ts`, `ios/.../CallAudioRoutePlugin.swift`, `android/.../CallAudioRoutePlugin.java` | Голосовой звонок в приложении: по умолчанию громкая связь, кнопка переключения на разговорный динамик (Capacitor-плагин `CallAudioRoute`); в браузере кнопка скрыта |
+| 2026-03 | `server/calls/session.ts` (`findRingingSessionBetween`), `server/calls/ws.ts`, `docs/CALLS_EDGE_CASES.md` | Invite после await: защита от двух почти одновременных `call.invite` между парой A↔B; документ по краевым сценариям звонка |
+| 2026-03 | `server/calls/session.ts`, `server/calls/ws.ts`, `client/src/lib/realtime-socket-transport.ts`, `client/src/features/call/call-controller.ts`, `client/src/components/CallModal.tsx`, `docs/CALLS_1TO1_RELEASE_CHECKLIST.md` | Hardening 1:1: идемпотентный lifecycle `hangup/cancel`, call-route для multi-socket, reconnect backoff+jitter+circuit-breaker, фиксированные статусы UI и единый pre-release чеклист |
+| 2026-03 | `docs/ENV_REFERENCE.md`, `scripts/deploy.sh` (`build_server_env`), `.env.example`, `deploy.env.example` | Аудит env: справочник; в серверный `.env` при деплое добавлены ранее «терявшиеся» ключи (сессия, пул PG, AI Search, FEED*, PARSER*, DISK*, ADMIN_CONTENT*, EDGE_PRIZE_*, VOICE_MESSAGE_ASR_LANGUAGE и др.); исправлено имя `VITE_CALLS_ACCEPT_TIMEOUT_MS` в `.env.example` |
+
+---
+
+## Миграции и деплой (сводка)
+
+Полный порядок миграций **основной БД**, **EDGE**, **PARSER**, что делает `deploy` / `server-setup.sh`, и чеклист после многих PR — в **`docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md`**.
 
 ---
 
@@ -272,6 +323,7 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 
 | Документ | Зачем |
 |----------|--------|
+| `docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md` | Три контура миграций + порядок `run-migrations.cjs` + чеклист |
 | `docs/ARCHITECTURE.md` | Короткий индекс ссылок |
 | `docs/API_AUTH_AND_PUBLIC.md` | Авторизация (cookie + Bearer), публичные API, PATCH/PUT |
 | `docs/DEV_HANDOFF_CURSOR.md` | Handoff для разработчиков |
@@ -279,7 +331,13 @@ cd client/src && wc -l $(find . \( -name '*.ts' -o -name '*.tsx' \)) | sort -n -
 | `docs/QUALITY_CHECKLIST.md`, `docs/UIX_SPECIALIST_GUIDE.md` | Качество UI |
 | `docs/CHAT_DETAIL_RULES.md` | Контракт хуков чата |
 | `docs/DEPLOY_RULES.md` | Деплой |
+| `docs/CALLS_TURN_SETUP.md` | Coturn / TURN для звонков (`VITE_TURN_*`, проверка бандла) |
+| `docs/CALLS_RELIABILITY.md` | Звонки 1:1: инварианты (один WS на пользователя, порядок accept/offer), чеклист регрессий |
+| `docs/CALLS_EDGE_CASES.md` | Звонки 1:1: дубли сокетов/хуков, glare, обрыв связи, перезагрузка страницы |
+| `docs/CALLS_1TO1_RELEASE_CHECKLIST.md` | Smoke/regression чеклист 1:1 перед релизом (happy path, redial, glare, ws drop, multi-tab) |
+| `docs/ENV_REFERENCE.md` | Сводка `VITE_*` / серверных env, что копирует `deploy.sh` в `.env` на VPS |
 | `docs/DB.md` | БД и storage |
+| `docs/EDGE_PRODUCT_SPEC.md`, `docs/EDGE_MICROSERVICE_PLAN.md`, `docs/EDGE_DATABASE.md`, `docs/EDGE_FUNCTIONAL_ROADMAP.md` | Продукт, план, БД и пошаговый функционал EDGE |
 | `AGENTS.md` | Контекст репозитория для агентов |
 
 ---

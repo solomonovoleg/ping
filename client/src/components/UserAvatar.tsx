@@ -34,11 +34,10 @@ function isVideoAvatarUrl(url: string): boolean {
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
 }
 
-function getVideoAvatarPosterUrl(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed || !isVideoAvatarUrl(trimmed)) return undefined;
-  return trimmed.replace(/\.(mp4|webm|mov|m4v)(\?[^#]*)?$/i, ".jpg$2");
-}
+/**
+ * Раньше подставляли poster = тот же путь с .jpg (ожидали кадр на CDN) — на проде такого файла часто нет → 404 в консоли.
+ * Пока API не отдаёт отдельный thumbnailUrl для видео-аватара, poster не задаём: первый кадр подтянет сам <video>.
+ */
 
 export type UserAvatarProps = {
   /** URL картинки аватара; если нет — показывается векторный аватар по умолчанию */
@@ -83,7 +82,6 @@ export function UserAvatar({
   const [videoError, setVideoError] = useState(false);
   const resolvedUrl = avatarUrl?.trim() ? resolveUrl(avatarUrl.trim()) : "";
   const isVideo = resolvedUrl ? isVideoAvatarUrl(resolvedUrl) : false;
-  const posterUrl = resolvedUrl ? getVideoAvatarPosterUrl(resolvedUrl) : undefined;
   const reducedMotion = usePrefersReducedMotion();
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -153,7 +151,6 @@ export function UserAvatar({
         playsInline
         loop={!reducedMotion && !useSeamlessAvatarLoop}
         preload={videoPreload}
-        poster={posterUrl}
         aria-label={ariaLabel}
         onError={() => setVideoError(true)}
       />

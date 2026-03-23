@@ -23,7 +23,12 @@ export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   publicId: integer("public_id").notNull().unique(),
-  phone: text("phone").notNull().unique(),
+  /** Устаревшее хранение в открытом виде; при PHONE_AT_REST_SECRET — null, см. phone_cipher + phone_lookup_hash */
+  phone: text("phone"),
+  /** HMAC-SHA256 по нормализованному номеру — только для точного поиска / логина / match-phones */
+  phoneLookupHash: varchar("phone_lookup_hash", { length: 64 }),
+  /** AES-256-GCM, не отдаётся в API */
+  phoneCipher: text("phone_cipher"),
   password: text("password").notNull(),
   displayName: text("display_name"),
   surname: text("surname"),
@@ -72,6 +77,10 @@ export const users = pgTable("users", {
   pinnedPostId: varchar("pinned_post_id"),
   /** Кто видит профиль: all | followers */
   profileVisibility: varchar("profile_visibility", { length: 20 }).notNull().default("all"),
+  /** Кто может писать вам в личку (новый диалог): all | followers | mutual */
+  dmPolicy: varchar("dm_policy", { length: 20 }).notNull().default("all"),
+  /** Кто может добавлять вас в группы: all | followers | mutual (followers = вы подписаны на инициатора) */
+  groupAddMePolicy: varchar("group_add_me_policy", { length: 20 }).notNull().default("all"),
   /** Показывать ли статус «в сети» всем или только подписчикам */
   showOnlineTo: varchar("show_online_to", { length: 20 }).notNull().default("all"),
   /** Атмосфера чата: включена ли адаптивная тема для DM */
@@ -83,10 +92,22 @@ export const users = pgTable("users", {
 
 export const insertUserSchema = createInsertSchema(users).pick({
   phone: true,
+  phoneLookupHash: true,
+  phoneCipher: true,
   password: true,
   publicId: true,
   invitedById: true,
 });
+
+/** Регистрация: либо plaintext phone (dev / без секрета), либо пара hash+cipher (прод с PHONE_AT_REST_SECRET). */
+export type InsertUser = {
+  password: string;
+  publicId: number;
+  invitedById?: string | null;
+  phone?: string | null;
+  phoneLookupHash?: string | null;
+  phoneCipher?: string | null;
+};
 
 export const updateProfileSchema = createInsertSchema(users).pick({
   displayName: true,
@@ -104,6 +125,8 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   status: true,
   pinnedPostId: true,
   profileVisibility: true,
+  dmPolicy: true,
+  groupAddMePolicy: true,
   showOnlineTo: true,
   pushEnabled: true,
   referralLimit: true,
@@ -111,6 +134,5 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   vibeShareWithPartner: true,
 }).partial();
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type UpdateProfile = z.infer<typeof updateProfileSchema>;

@@ -1,18 +1,23 @@
 /**
- * Отмечает сообщения прочитанными, когда они становятся видимыми в viewport.
- * Отправляет PUT /chats/:id/read с messageId — сервер обновляет lastReadAt и уведомляет отправителя (две галочки).
+ * Отмечает прочтение только когда входящее сообщение реально попало в зону просмотра (не край экрана / не 10% пузыря).
+ * PUT /chats/:id/read с messageId — сервер двигает last_read у читателя; у отправителя две галочки по otherMember.lastReadAt.
  */
 import { useEffect, useRef } from "react";
 import { API, apiFetch } from "@/lib/api-base";
-import { emitChatListUpdate } from "@/features/chat/realtime-events";
+import { emitChatListUpdate, emitChatPendingUnreadClear } from "@/features/chat/realtime-events";
 
-const READ_DEBOUNCE_MS = 400;
-const OBSERVER_ROOT_MARGIN = "50px 0px";
+const READ_DEBOUNCE_MS = 550;
+/** Без раздувания root — не отмечаем прочитанным то, что ещё «за кадром» */
+const OBSERVER_ROOT_MARGIN = "0px 0px";
+/** Доля площади сообщения в корне скролла, чтобы считать «увидел» (строже, чем threshold 0.1) */
+const MIN_VISIBLE_RATIO = 0.5;
+/** Не двигаем курсор чтения по служебным плашкам */
+const SKIP_READ_ADVANCE_TYPES = new Set(["system", "missed_call"]);
 
 export function useMessageReadOnVisible(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
   chatId: string,
-  messages: { id: string; createdAt: string; senderId?: string | null }[],
+  messages: { id: string; createdAt: string; senderId?: string | null; type?: string }[],
   currentUserId?: string | null
 ) {
   const lastSentRef = useRef<string | null>(null);
@@ -32,6 +37,7 @@ export function useMessageReadOnVisible(
         m.id,
         {
           ...m,
+          type: m.type ?? "text",
           createdAtMs: Date.parse(m.createdAt),
         },
       ])
@@ -52,6 +58,7 @@ export function useMessageReadOnVisible(
         body: JSON.stringify({ messageId }),
       })
         .then(() => {
+          emitChatPendingUnreadClear({ chatId });
           setTimeout(() => emitChatListUpdate(), 250);
         })
         .catch(() => {
@@ -73,6 +80,7 @@ export function useMessageReadOnVisible(
         const id = visibleList[i];
         const m = messageById.get(id);
         if (!m) continue;
+        if (SKIP_READ_ADVANCE_TYPES.has(m.type)) continue;
         if (currentUserId && m.senderId === currentUserId) continue;
         if (!Number.isFinite(m.createdAtMs)) continue;
         if (!newest || m.createdAtMs > newest.createdAtMs) newest = m;
@@ -85,7 +93,8 @@ export function useMessageReadOnVisible(
         for (const e of entries) {
           const id = (e.target as HTMLElement).getAttribute("data-message-id");
           if (!id) continue;
-          if (e.isIntersecting) {
+          const ratio = e.intersectionRatio;
+          if (e.isIntersecting && ratio >= MIN_VISIBLE_RATIO) {
             visibleIdsRef.current.add(id);
           } else {
             visibleIdsRef.current.delete(id);
@@ -94,7 +103,11 @@ export function useMessageReadOnVisible(
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(flushVisible, READ_DEBOUNCE_MS);
       },
-      { root: container, rootMargin: OBSERVER_ROOT_MARGIN, threshold: 0.1 }
+      {
+        root: container,
+        rootMargin: OBSERVER_ROOT_MARGIN,
+        threshold: [0, 0.1, 0.25, 0.35, 0.5, 0.65, 0.8, 1],
+      }
     );
 
     const observedEls = new WeakSet<Element>();

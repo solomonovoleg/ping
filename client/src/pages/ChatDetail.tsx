@@ -39,6 +39,7 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { NAME_MAX_LENGTH } from "@shared/schema";
 import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
 import type { ApiChat, ApiMessage, MessageListItem } from "@/features/chat";
+import type { ApiChatMember } from "@/features/chat/types";
 import { EMOJIS, formatLastSeen, buildMessageListItems, isUuid } from "@/features/chat";
 import { ChatMessageRow } from "@/features/chat/components/ChatMessageRow";
 import { useChatMessages } from "@/features/chat/hooks/useChatMessages";
@@ -59,7 +60,7 @@ import { resolveUrl } from "@/lib/api-base";
 import { GroupChatParticipantsSheet } from "@/features/chat/components/GroupChatParticipantsSheet";
 import { ChatMediaLinksSheet } from "@/features/chat/components/ChatMediaLinksSheet";
 import { MentionPicker } from "@/features/chat/components/MentionPicker";
-import { buildMentionList } from "@/features/chat/components/mention-list";
+import { buildMentionList, memberDisplayName } from "@/features/chat/components/mention-list";
 import { MediaViewer } from "@/components/MediaViewer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AddToTrackModal } from "@/features/board/tracks";
@@ -72,6 +73,8 @@ import {
   ChatComposerSttButton,
   ChatComposerSttPhaseOverlay,
 } from "@/features/chat/components/ChatComposerSttButton";
+import { PingokDmScheduledCallBanner } from "@/features/pingok/PingokDmScheduledCallBanner";
+import { BlockedByPeerComposer } from "@/features/user-blocking";
 import { PULSE_THEME_ACCENTS } from "@/lib/chat-vibe-themes";
 import { PulseDmComposerMedia } from "@/features/chat/components/pulse/PulseDmComposerMedia";
 import {
@@ -138,10 +141,12 @@ function ChatDetailView({
     setMessages,
     loading,
     error,
+    initialRemoteMessagesResolved,
     setError,
     hasMoreMessages,
     loadingMoreMessages,
     loadChatAndMessages,
+    refreshChatMetadata,
     loadOlderMessages,
     scrollContainerRef,
     messagesEndRef,
@@ -425,6 +430,22 @@ function ChatDetailView({
   }, [chatId]);
   const groupAvatarInputRef = useRef<HTMLInputElement>(null);
   const mentionPickerRef = useRef<HTMLDivElement>(null);
+  const commitMentionInsertion = useCallback(
+    (mentionText: string) => {
+      const spanEnd = mentionStartPos + 1 + mentionQuery.length;
+      const newCursor = send.insertMentionAtPosition(mentionStartPos, spanEnd, mentionText);
+      setMentionOpen(false);
+      pendingCursorRef.current = newCursor;
+      triggerLightHaptic();
+      requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
+    },
+    [mentionStartPos, mentionQuery, send],
+  );
+  useEffect(() => {
+    if (!mentionOpen || chat?.type !== "group") return;
+    if ((chat.members?.length ?? 0) > 0) return;
+    refreshChatMetadata();
+  }, [mentionOpen, chat?.type, chat?.members?.length, refreshChatMetadata]);
   const [uploadingGroupAvatar, setUploadingGroupAvatar] = useState(false);
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
     if (typeof document === "undefined") return false;
@@ -459,6 +480,13 @@ function ChatDetailView({
       video: boolean,
       avatarUrl?: string | null,
     ) => {
+      if (chat?.type === "dm" && chat.blockedByOther?.restrictChat) {
+        toast({
+          title: "Собеседник ограничил вам звонки и сообщения",
+          variant: "destructive",
+        });
+        return;
+      }
       if (groupCallCtx.active) {
         toast({ title: "Сначала завершите групповой созвон", variant: "destructive" });
         return;
@@ -469,7 +497,7 @@ function ChatDetailView({
           : { kind: "dm" as const };
       startCall(otherUserId, otherDisplayName, cid, video, avatarUrl, messageContext);
     },
-    [groupCallCtx.active, startCall, toast, chat?.type, currentFolderId],
+    [groupCallCtx.active, startCall, toast, chat?.type, chat?.blockedByOther?.restrictChat, currentFolderId],
   );
 
   const scrollToBottom = useCallback((smooth = true) => {
@@ -719,13 +747,17 @@ function ChatDetailView({
     displayName && displayName !== "Диалог"
       ? (displayName.length > HEADER_NAME_MAX_LENGTH ? displayName.slice(0, HEADER_NAME_MAX_LENGTH) + "…" : displayName)
       : null;
-  const callerDisplayName = user ? [user.displayName, user.surname].filter(Boolean).join(" ") || user.phone || "Абонент" : "Абонент";
+  const callerDisplayName = user
+    ? [user.displayName, user.surname].filter(Boolean).join(" ") || `ID ${user.publicId}`
+    : "Абонент";
   const trimmedComposerText = send.message.trim();
   const isCanvasPrefix = trimmedComposerText.startsWith("!");
   const showCanvasCommandOption = trimmedComposerText === "!";
   const isCanvasMode = isCanvasPrefix && trimmedComposerText.length > 1;
 
   const isDm = chat?.type === "dm";
+  const blockedByPeerDm = isDm && chat?.blockedByOther?.restrictChat === true;
+  const blockedByPeerNote = chat?.blockedByOther?.note ?? null;
   const senderNamesMap = useMemo(() => {
     const map = new Map<string, string>();
     if (user?.id) map.set(user.id, "Вы");
@@ -739,6 +771,24 @@ function ChatDetailView({
     }
     return map;
   }, [chat?.members, user?.id]);
+  /** Участники для @: с сервера; если список пуст (кэш/офлайн) — добираем id из истории сообщений. */
+  const mentionMembersForPicker = useMemo((): ApiChatMember[] => {
+    if (chat?.type !== "group") return [];
+    const fromApi = chat.members ?? [];
+    if (fromApi.length > 0) return fromApi;
+    const byId = new Map<string, ApiChatMember>();
+    for (const msg of messages) {
+      if (!msg.senderId || msg.type === "system" || msg.type === "missed_call") continue;
+      if (byId.has(msg.senderId)) continue;
+      byId.set(msg.senderId, {
+        id: msg.senderId,
+        displayName: null,
+        surname: null,
+        avatarUrl: null,
+      });
+    }
+    return Array.from(byId.values());
+  }, [chat?.type, chat?.members, messages]);
   const messageListItems = useMemo(() => buildMessageListItems(messages), [messages]);
   const nextVoiceByMessageId = useMemo(() => {
     const map = new Map<string, string>();
@@ -1003,11 +1053,13 @@ function ChatDetailView({
             <>
               <button
                 type="button"
+                disabled={blockedByPeerDm}
                 className={cn(
                   "flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full p-2 transition-colors",
                   pulseDmMobileChrome && "text-white/45 hover:bg-white/[0.07]",
                   pulseDmLightMobileChrome && "text-slate-500 hover:bg-indigo-500/10",
                   !headerPulseMobileDm && "text-primary/85 hover:bg-primary/10",
+                  blockedByPeerDm && "opacity-40 pointer-events-none",
                 )}
                 onClick={() =>
                   startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, false, chat.otherMember?.avatarUrl)
@@ -1018,11 +1070,13 @@ function ChatDetailView({
               </button>
               <button
                 type="button"
+                disabled={blockedByPeerDm}
                 className={cn(
                   "flex min-h-[40px] min-w-[40px] items-center justify-center rounded-full p-2 transition-colors",
                   pulseDmMobileChrome && "text-white/45 hover:bg-white/[0.07]",
                   pulseDmLightMobileChrome && "text-slate-500 hover:bg-indigo-500/10",
                   !headerPulseMobileDm && "text-primary/85 hover:bg-primary/10",
+                  blockedByPeerDm && "opacity-40 pointer-events-none",
                 )}
                 onClick={() =>
                   startCallUnlessInGroup(chat.otherMember!.id, displayName, chatId, true, chat.otherMember?.avatarUrl)
@@ -1148,6 +1202,7 @@ function ChatDetailView({
               isGroupAdmin={chat.myRole === "admin"}
               targetUserId={null}
               targetDisplayName={null}
+              onRefreshChatMeta={refreshChatMetadata}
               onDone={() => setShowGroupMenu(false)}
               onNavigateAway={() => setLocation("/chats")}
             />
@@ -1190,6 +1245,8 @@ function ChatDetailView({
               isGroupAdmin={false}
               targetUserId={chat.otherMember?.id ?? null}
               targetDisplayName={displayName}
+              myBlockOfOther={chat.myBlockOfOther}
+              onRefreshChatMeta={refreshChatMetadata}
               onDone={() => setShowChatThemeMenu(false)}
               onNavigateAway={() => setLocation("/chats")}
             />
@@ -1300,7 +1357,8 @@ function ChatDetailView({
         }}
       >
         <ChatDetailOlderMessagesLoadingRow loading={loadingMoreMessages} />
-        <ChatDetailMessagesEmptyState show={messages.length === 0 && !loading} />
+        {isDm ? <PingokDmScheduledCallBanner chatId={chatId} /> : null}
+        <ChatDetailMessagesEmptyState show={messages.length === 0 && !loading && initialRemoteMessagesResolved} />
         {(() => {
           const pulseDmMobileKind = isDm && isMobile ? (isDarkTheme ? ("dark" as const) : ("light" as const)) : null;
           return messageListItems.map((item, idx) => {
@@ -1339,7 +1397,7 @@ function ChatDetailView({
               <div key={msg.id} data-message-id={msg.id} data-created-at={msg.createdAt} className="flex justify-center my-2">
                 <div className="bg-secondary/50 text-muted-foreground text-[12px] px-4 py-2 rounded-xl flex flex-col items-center gap-2">
                   <span>{iAmCallee ? "Пропущенный звонок" : "Звонок не принят"}</span>
-                  {iAmCallee && callerId && (
+                  {iAmCallee && callerId && !blockedByPeerDm && (
                     <button
                       type="button"
                       className="text-primary font-medium hover:underline"
@@ -1747,13 +1805,17 @@ onClick={() => actions.setForwardingMessage(null)}
         />
         {/* overflow-visible: иначе обрезается ChatComposerSttPhaseOverlay над строкой ввода */}
         <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-0 overflow-visible">
-          <ChatDetailComposerReplyDraftStrips
-            replyingTo={send.replyingTo}
-            onCancelReply={() => send.setReplyingTo(null)}
-            draftRestoredHint={draftRestoredHint}
-            onDismissDraftHint={() => setDraftRestoredHint(false)}
-          />
-        {pulseDmMediaActive ? (
+          {!blockedByPeerDm ? (
+            <ChatDetailComposerReplyDraftStrips
+              replyingTo={send.replyingTo}
+              onCancelReply={() => send.setReplyingTo(null)}
+              draftRestoredHint={draftRestoredHint}
+              onDismissDraftHint={() => setDraftRestoredHint(false)}
+            />
+          ) : null}
+        {blockedByPeerDm ? (
+          <BlockedByPeerComposer note={blockedByPeerNote} />
+        ) : pulseDmMediaActive ? (
           <PulseDmComposerMedia
             accentColor={dmPulseAccent}
             reducedMotion={reducedMotion}
@@ -1864,13 +1926,20 @@ onClick={() => actions.setForwardingMessage(null)}
               onChange={(e) => {
                 const value = e.target.value;
                 const pos = e.target.selectionStart ?? value.length;
+                if (e.nativeEvent && "isComposing" in e.nativeEvent && (e.nativeEvent as InputEvent).isComposing) {
+                  send.setMessage(value);
+                  setDraftRestoredHint(false);
+                  if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
+                  requestAnimationFrame(syncComposerHeight);
+                  return;
+                }
                 send.setMessage(value);
                 setDraftRestoredHint(false);
                 if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
                 requestAnimationFrame(syncComposerHeight);
                 if (chat?.type === "group") {
                   const beforeCursor = value.slice(0, pos);
-                  const lastAt = beforeCursor.lastIndexOf("@");
+                  const lastAt = Math.max(beforeCursor.lastIndexOf("@"), beforeCursor.lastIndexOf("\uFF20"));
                   if (lastAt >= 0) {
                     const afterAt = beforeCursor.slice(lastAt + 1);
                     if (!/[\s\n]/.test(afterAt)) {
@@ -1902,7 +1971,7 @@ onClick={() => actions.setForwardingMessage(null)}
                   }
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
-                    const rows = buildMentionList(chat?.members ?? [], mentionQuery, { includeEveryone: true });
+                    const rows = buildMentionList(mentionMembersForPicker, mentionQuery, { includeEveryone: true });
                     const maxIdx = Math.max(0, rows.length - 1);
                     setMentionSelectedIndex((i) => Math.min(i + 1, maxIdx));
                     return;
@@ -1912,23 +1981,34 @@ onClick={() => actions.setForwardingMessage(null)}
                     setMentionSelectedIndex((i) => Math.max(0, i - 1));
                     return;
                   }
-                  if (e.key === "Enter" && mentionQuery !== undefined) {
-                    const rows = buildMentionList(chat?.members ?? [], mentionQuery, { includeEveryone: true });
-                    const selected = rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))];
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    const rows = buildMentionList(mentionMembersForPicker, mentionQuery, { includeEveryone: true });
+                    const selected =
+                      rows.length > 0
+                        ? rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))]
+                        : undefined;
                     if (selected) {
                       e.preventDefault();
-                      const cursorPos = messageInputRef.current?.selectionStart ?? send.message.length;
-                      let mentionText: string;
                       if (selected.kind === "everyone") {
-                        mentionText = `@all `;
+                        commitMentionInsertion(`@all `);
                       } else {
                         const m = selected.member;
-                        const name = [m.displayName, m.surname].filter(Boolean).join(" ") || `ID ${m.publicId ?? ""}`;
-                        mentionText = `@[${name}](${m.publicId ?? m.id}) `;
+                        commitMentionInsertion(`@[${memberDisplayName(m)}](${m.publicId ?? m.id}) `);
                       }
-                      const newCursor = send.insertMentionAtPosition(mentionStartPos, cursorPos, mentionText);
-                      setMentionOpen(false);
-                      pendingCursorRef.current = newCursor;
+                      return;
+                    }
+                  }
+                  if (e.key === "Tab" && !e.shiftKey) {
+                    const rows = buildMentionList(mentionMembersForPicker, mentionQuery, { includeEveryone: true });
+                    const selected = rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))];
+                    e.preventDefault();
+                    if (selected) {
+                      if (selected.kind === "everyone") {
+                        commitMentionInsertion(`@all `);
+                      } else {
+                        const m = selected.member;
+                        commitMentionInsertion(`@[${memberDisplayName(m)}](${m.publicId ?? m.id}) `);
+                      }
                     }
                     return;
                   }
@@ -2163,14 +2243,16 @@ onClick={() => actions.setForwardingMessage(null)}
           )}
         </div>
         )}
-        <ChatDetailComposerSpellFooter
-          spellUndo={spellUndo}
-          onSpellUndo={handleSpellUndo}
-          effectiveSpellCheck={effectiveSpellCheck}
-          spellErrors={spellErrors}
-          onSpellReplace={handleSpellReplace}
-          suggestionsClassName={cn(headerPulseMobileDm && "chat-composer-spell-suggestions")}
-        />
+        {!blockedByPeerDm ? (
+          <ChatDetailComposerSpellFooter
+            spellUndo={spellUndo}
+            onSpellUndo={handleSpellUndo}
+            effectiveSpellCheck={effectiveSpellCheck}
+            spellErrors={spellErrors}
+            onSpellReplace={handleSpellReplace}
+            suggestionsClassName={cn(headerPulseMobileDm && "chat-composer-spell-suggestions")}
+          />
+        ) : null}
         </div>
         {(send.voiceError || send.voiceRecorderError) && (
           <p className="text-[10px] text-destructive mt-0.5">{send.voiceError ?? send.voiceRecorderError}</p>

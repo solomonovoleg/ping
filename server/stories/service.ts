@@ -1,9 +1,83 @@
 import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
-import { getDb } from "../db";
+import { getDb, ensureUserColumns, ensureStoriesFeedBoostColumns } from "../db";
 import { stories, users, storyViews, storyLikes } from "@shared/schema";
 
 const STORY_DEFAULT_EXPIRES_HOURS = 24;
 const STORY_ALLOWED_EXPIRES_HOURS = [24, 46, 56] as const;
+
+/** Буст от лайка — короче (меньше «веса» в ленте). */
+export const STORY_FEED_LIKE_BOOST_MS = 5 * 60 * 1000;
+/** Буст от ответа на сториз в чате — дольше и сильнее влияет на порядок. */
+export const STORY_FEED_REPLY_BOOST_MS = 15 * 60 * 1000;
+
+const DEFAULT_STORIES_FEED_AUTHOR_LIMIT = 18;
+
+type StoryFeedRow = {
+  createdAt: Date;
+  feedBoostLikeAt: Date | null;
+  feedBoostReplyAt: Date | null;
+};
+
+function authorFeedRankMs(authorStories: StoryFeedRow[], nowMs: number): number {
+  let latestCreated = 0;
+  let bestLikeBoost = 0;
+  let bestReplyBoost = 0;
+  for (const s of authorStories) {
+    const c = s.createdAt?.getTime?.() ?? 0;
+    if (c > latestCreated) latestCreated = c;
+    const lk = s.feedBoostLikeAt?.getTime?.() ?? 0;
+    if (lk > 0 && nowMs < lk + STORY_FEED_LIKE_BOOST_MS && lk > bestLikeBoost) bestLikeBoost = lk;
+    const rp = s.feedBoostReplyAt?.getTime?.() ?? 0;
+    if (rp > 0 && nowMs < rp + STORY_FEED_REPLY_BOOST_MS && rp > bestReplyBoost) bestReplyBoost = rp;
+  }
+  return Math.max(latestCreated, bestLikeBoost, bestReplyBoost);
+}
+
+/** Новый лайк (не дубль). */
+export async function touchStoryFeedBoostLike(storyId: string): Promise<void> {
+  await ensureStoriesFeedBoostColumns();
+  const db = getDb();
+  const now = new Date();
+  await db
+    .update(stories)
+    .set({ feedBoostLikeAt: now })
+    .where(and(eq(stories.id, storyId), gt(stories.expiresAt, now)));
+}
+
+/** Ответ на сториз в личке. */
+export async function touchStoryFeedBoostReply(storyId: string): Promise<void> {
+  await ensureStoriesFeedBoostColumns();
+  const db = getDb();
+  const now = new Date();
+  await db
+    .update(stories)
+    .set({ feedBoostReplyAt: now })
+    .where(and(eq(stories.id, storyId), gt(stories.expiresAt, now)));
+}
+
+export type StoriesFeedPageResult = {
+  authors: {
+    authorId: string;
+    author: { id: string; publicId: number; displayName: string | null; avatarUrl: string | null };
+    latestStoryAt: string | null;
+    hasUnseen: boolean;
+    unseenCount: number;
+    stories: {
+      id: string;
+      authorId: string;
+      mediaUrl: string;
+      thumbnailUrl: string | null;
+      createdAt: string;
+      expiresAt: string;
+      viewsCount: number;
+      likesCount: number;
+      isViewed: boolean;
+      isLiked: boolean;
+    }[];
+  }[];
+  nextOffset: number;
+  hasMore: boolean;
+};
 
 export type StoryRow = {
   id: string;
@@ -163,13 +237,21 @@ export async function listStoryViewers(storyId: string, requesterId: string) {
   }));
 }
 
-export async function getStoriesFeed(viewerId: string) {
+export async function getStoriesFeedPage(
+  viewerId: string,
+  opts?: { limit?: number; offset?: number },
+): Promise<StoriesFeedPageResult> {
+  await ensureUserColumns();
+  await ensureStoriesFeedBoostColumns();
   await cleanupExpiredStories();
   const { storage } = await import("../storage");
   const followingIds = await storage.listFollowingIds(viewerId);
   const blockedRelationIds = await storage.getBlockedRelationIds(viewerId);
   const db = getDb();
   const now = new Date();
+  const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_STORIES_FEED_AUTHOR_LIMIT, 1), 40);
+  const offset = Math.max(opts?.offset ?? 0, 0);
+
   const rows = await db
     .select({
       id: stories.id,
@@ -178,6 +260,8 @@ export async function getStoriesFeed(viewerId: string) {
       thumbnailUrl: stories.thumbnailUrl,
       createdAt: stories.createdAt,
       expiresAt: stories.expiresAt,
+      feedBoostLikeAt: stories.feedBoostLikeAt,
+      feedBoostReplyAt: stories.feedBoostReplyAt,
       authorDisplayName: users.displayName,
       authorAvatarUrl: users.avatarUrl,
       authorPublicId: users.publicId,
@@ -248,51 +332,71 @@ export async function getStoriesFeed(viewerId: string) {
     for (const row of likedByMe) likedStoryIdSet.add(row.storyId);
   }
 
-  return Array.from(byAuthor.entries())
-    .map(([authorId, data]) => {
-      const authorStories = data.stories;
-      const latestCreatedAt = authorStories[0]?.createdAt?.getTime?.() ?? 0;
-      const storyPayload = authorStories.map((s) => {
-        const createdAtIso = s.createdAt?.toISOString?.() ?? String(s.createdAt);
-        const expiresAtIso = s.expiresAt?.toISOString?.() ?? String(s.expiresAt);
-        const viewsCount = viewsCountByStoryId.get(s.id) ?? 0;
-        const likesCount = likesCountByStoryId.get(s.id) ?? 0;
-        const isViewed = viewedStoryIdSet.has(s.id);
-        const isLiked = likedStoryIdSet.has(s.id);
-        return {
-          id: s.id,
-          authorId: s.authorId,
-          mediaUrl: s.mediaUrl,
-          thumbnailUrl: s.thumbnailUrl ?? null,
-          createdAt: createdAtIso,
-          expiresAt: expiresAtIso,
-          viewsCount,
-          likesCount,
-          isViewed,
-          isLiked,
-        };
-      });
-      const unseenCount = authorId === viewerId ? 0 : storyPayload.filter((s) => !s.isViewed).length;
-      const totalViews = storyPayload.reduce((sum, s) => sum + s.viewsCount, 0);
-      const activityScore = totalViews * 2 + storyPayload.length;
+  const nowMs = Date.now();
+  type RowSort = StoriesFeedPageResult["authors"][number] & {
+    feedRankMs: number;
+    seenBucket: number;
+  };
+
+  const withRank: RowSort[] = Array.from(byAuthor.entries()).map(([authorId, data]) => {
+    const authorStories = data.stories;
+    const latestCreatedAt = authorStories[0]?.createdAt?.getTime?.() ?? 0;
+    const feedRankMs = authorFeedRankMs(authorStories, nowMs);
+    const storyPayload = authorStories.map((s) => {
+      const createdAtIso = s.createdAt?.toISOString?.() ?? String(s.createdAt);
+      const expiresAtIso = s.expiresAt?.toISOString?.() ?? String(s.expiresAt);
+      const viewsCount = viewsCountByStoryId.get(s.id) ?? 0;
+      const likesCount = likesCountByStoryId.get(s.id) ?? 0;
+      const isViewed = viewedStoryIdSet.has(s.id);
+      const isLiked = likedStoryIdSet.has(s.id);
       return {
-        authorId,
-        author: data.author,
-        latestStoryAt: latestCreatedAt > 0 ? new Date(latestCreatedAt).toISOString() : null,
-        hasUnseen: unseenCount > 0,
-        unseenCount,
-        activityScore,
-        stories: storyPayload,
+        id: s.id,
+        authorId: s.authorId,
+        mediaUrl: s.mediaUrl,
+        thumbnailUrl: s.thumbnailUrl ?? null,
+        createdAt: createdAtIso,
+        expiresAt: expiresAtIso,
+        viewsCount,
+        likesCount,
+        isViewed,
+        isLiked,
       };
-    })
-    .sort((a, b) => {
-      const byTime =
-        Date.parse(b.latestStoryAt ?? "1970-01-01T00:00:00.000Z") -
-        Date.parse(a.latestStoryAt ?? "1970-01-01T00:00:00.000Z");
-      if (byTime !== 0) return byTime;
-      if (b.activityScore !== a.activityScore) return b.activityScore - a.activityScore;
-      return b.unseenCount - a.unseenCount;
     });
+    const unseenCount = authorId === viewerId ? 0 : storyPayload.filter((s) => !s.isViewed).length;
+    const hasUnseen = unseenCount > 0;
+    /** 0: «я» или есть непросмотренные чужие; 1: чужой аккаунт и всё просмотрено — в конец. */
+    const seenBucket = authorId === viewerId ? 0 : hasUnseen ? 0 : 1;
+    return {
+      authorId,
+      author: data.author,
+      latestStoryAt: latestCreatedAt > 0 ? new Date(latestCreatedAt).toISOString() : null,
+      hasUnseen,
+      unseenCount,
+      stories: storyPayload,
+      feedRankMs,
+      seenBucket,
+    };
+  });
+
+  withRank.sort((a, b) => {
+    if (a.seenBucket !== b.seenBucket) return a.seenBucket - b.seenBucket;
+    if (a.seenBucket === 0 && b.seenBucket === 0) {
+      const aSelf = a.authorId === viewerId ? 0 : 1;
+      const bSelf = b.authorId === viewerId ? 0 : 1;
+      if (aSelf !== bSelf) return aSelf - bSelf;
+    }
+    if (b.feedRankMs !== a.feedRankMs) return b.feedRankMs - a.feedRankMs;
+    if (b.unseenCount !== a.unseenCount) return b.unseenCount - a.unseenCount;
+    return a.authorId.localeCompare(b.authorId);
+  });
+
+  const total = withRank.length;
+  const slice = withRank.slice(offset, offset + limit);
+  const authors = slice.map(({ feedRankMs: _fr, seenBucket: _sb, ...rest }) => rest);
+  const nextOffset = offset + authors.length;
+  const hasMore = nextOffset < total;
+
+  return { authors, nextOffset, hasMore };
 }
 
 export async function deleteOwnStory(storyId: string, userId: string): Promise<void> {
@@ -359,7 +463,14 @@ export async function likeStory(storyId: string, userId: string): Promise<{ like
   if (!story) throw new StoriesServiceError(404, "Сториз не найден");
   if (story.expiresAt <= new Date()) throw new StoriesServiceError(410, "Сториз уже истёк");
   if (story.authorId === userId) throw new StoriesServiceError(400, "Нельзя лайкнуть свой сториз");
-  await db.insert(storyLikes).values({ storyId, userId }).onConflictDoNothing();
+  const inserted = await db
+    .insert(storyLikes)
+    .values({ storyId, userId })
+    .onConflictDoNothing()
+    .returning({ storyId: storyLikes.storyId });
+  if (inserted.length > 0) {
+    await touchStoryFeedBoostLike(storyId);
+  }
   const likesCount = await getStoryLikesCount(storyId);
   return { likesCount, isLiked: true };
 }

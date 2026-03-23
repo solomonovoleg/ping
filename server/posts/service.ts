@@ -16,6 +16,7 @@ import {
   users,
 } from "@shared/schema";
 import { getFeedAlgoConfig } from "../feed/config";
+import { loadGlobalPublicFeedPageInline, tryLoadGlobalPublicFeedPage } from "../feed/load-global-feed-page";
 import type { PostMediaLayout } from "@shared/post-media-layout";
 import { loadLatestCommentsByPostIds } from "./load-latest-comments";
 
@@ -290,6 +291,8 @@ export async function sharePostToUser(postId: string, fromUserId: string, toUser
     type: "post_share",
     content: previewContent,
   });
+  const { scheduleEdgeTaskAfterPostAction } = await import("./edge-task-hook");
+  scheduleEdgeTaskAfterPostAction(fromUserId, postId, "share_post");
   return { chatId: chat.id };
 }
 
@@ -379,6 +382,13 @@ export async function listPostsForViewer(params: {
       if (!isFollower) {
         rows = rows.filter((r) => (r.visibility ?? "public").toLowerCase() === "public");
       }
+    }
+  } else if (!hashtagParam && !qParam) {
+    const fromSnap = await tryLoadGlobalPublicFeedPage(viewerId, limit, offset);
+    if (fromSnap !== null) {
+      rows = fromSnap as FeedRow[];
+    } else {
+      rows = (await loadGlobalPublicFeedPageInline(viewerId, limit, offset)) as FeedRow[];
     }
   } else {
     const blockedIds = await storage.getBlockedRelationIds(viewerId);

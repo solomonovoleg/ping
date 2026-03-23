@@ -1,7 +1,9 @@
 import type { User, InsertUser, UpdateProfile } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { normalizePhone, normalizedPhonesFromSearchQuery } from "../auth/phone";
+import { isPhoneAtRestEnabled, phoneLookupHash } from "../auth/phone-at-rest";
 
-const INITIAL_PUBLIC_ID = 100;
+const INITIAL_PUBLIC_ID = 241095;
 
 export interface UsersStore {
   get(id: string): User | undefined;
@@ -29,11 +31,22 @@ export function createUsersStore(): UsersStore {
   let nextPublicId = INITIAL_PUBLIC_ID;
 
   function matchesQuery(u: User, q: string): boolean {
-    const lower = q.toLowerCase().trim();
-    if (!lower) return false;
-    if (u.phone.toLowerCase().includes(lower) || u.phone.replace(/\D/g, "").includes(lower.replace(/\D/g, ""))) return true;
-    if (String(u.publicId) === lower || String(u.publicId).startsWith(lower)) return true;
-    if (u.nickname && u.nickname.toLowerCase().includes(lower)) return true;
+    const trimmed = q.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    for (const normalizedQ of normalizedPhonesFromSearchQuery(trimmed)) {
+      if (u.phone && u.phone === normalizedQ) return true;
+      if (isPhoneAtRestEnabled() && u.phoneLookupHash) {
+        try {
+          if (phoneLookupHash(normalizedQ) === u.phoneLookupHash) return true;
+        } catch {
+          /* */
+        }
+      }
+    }
+    if (/^\d+$/u.test(trimmed) && u.publicId === parseInt(trimmed, 10)) return true;
+    const nickNeedle = trimmed.replace(/^@+/u, "").toLowerCase();
+    if (nickNeedle && u.nickname && u.nickname.toLowerCase().includes(nickNeedle)) return true;
     const name = [u.displayName, u.surname].filter(Boolean).join(" ").toLowerCase();
     if (name && name.includes(lower)) return true;
     return false;
@@ -44,7 +57,20 @@ export function createUsersStore(): UsersStore {
       return users.get(id);
     },
     getByPhone(phone: string) {
-      return Array.from(users.values()).find((u) => u.phone === phone);
+      if (phone === "admin") return Array.from(users.values()).find((u) => u.phone === "admin");
+      const normalized = normalizePhone(phone);
+      if (!normalized) return undefined;
+      for (const u of users.values()) {
+        if (u.phone === normalized) return u;
+        if (isPhoneAtRestEnabled() && u.phoneLookupHash) {
+          try {
+            if (phoneLookupHash(normalized) === u.phoneLookupHash) return u;
+          } catch {
+            /* */
+          }
+        }
+      }
+      return undefined;
     },
     getByPublicId(publicId: number) {
       return Array.from(users.values()).find((u) => u.publicId === publicId);
@@ -92,6 +118,8 @@ export function createUsersStore(): UsersStore {
       if (data.pushEnabled !== undefined) (user as User).pushEnabled = data.pushEnabled;
       if (data.vibeEnabled !== undefined) (user as User).vibeEnabled = data.vibeEnabled;
       if (data.vibeShareWithPartner !== undefined) (user as User).vibeShareWithPartner = data.vibeShareWithPartner;
+      if (data.dmPolicy !== undefined) (user as User).dmPolicy = data.dmPolicy;
+      if (data.groupAddMePolicy !== undefined) (user as User).groupAddMePolicy = data.groupAddMePolicy;
       if ((data as { referralLimit?: number | null }).referralLimit !== undefined) {
         const v = (data as { referralLimit?: number | null }).referralLimit;
         (user as User).referralLimit = v == null ? null : v;
@@ -114,14 +142,24 @@ export function createUsersStore(): UsersStore {
       let list = Array.from(users.values());
       if (!opts.includeDeleted) list = list.filter((u) => !(u as User).deletedAt);
       if (opts.search?.trim()) {
-        const q = opts.search.trim().toLowerCase();
+        const raw = opts.search.trim();
+        const q = raw.toLowerCase();
         list = list.filter((u) => {
           const name = [u.displayName, u.surname].filter(Boolean).join(" ").toLowerCase();
-          return (
-            name.includes(q) ||
-            u.phone.toLowerCase().includes(q) ||
-            String(u.publicId).includes(q)
-          );
+          const nick = (u.nickname ?? "").toLowerCase();
+          if (name.includes(q) || nick.includes(q)) return true;
+          if (/^\d+$/u.test(raw) && String(u.publicId) === raw) return true;
+          for (const np of normalizedPhonesFromSearchQuery(raw)) {
+            if (u.phone === np) return true;
+            if (isPhoneAtRestEnabled() && u.phoneLookupHash) {
+              try {
+                if (phoneLookupHash(np) === u.phoneLookupHash) return true;
+              } catch {
+                /* */
+              }
+            }
+          }
+          return false;
         });
       }
       const total = list.length;

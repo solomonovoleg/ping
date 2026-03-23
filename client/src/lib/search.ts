@@ -3,9 +3,9 @@ import { API, apiFetch } from "@/lib/api-base";
 export type SearchUser = {
   id: string;
   publicId: number;
-  phone: string;
   displayName: string | null;
   surname: string | null;
+  nickname?: string | null;
   gender?: string | null;
   birthDate?: string | null;
   avatarUrl: string | null;
@@ -63,4 +63,10 @@ export async function createGroupChat(name: string, memberIds: string[]): Promis
 export function formatUserDisplayName(u: SearchUser): string {
   const parts = [u.displayName, u.surname].filter(Boolean);
   return parts.length > 0 ? parts.join(" ") : `ID ${u.publicId}`;
+}
+
+export function formatSearchUserSubtitle(u: SearchUser): string {
+  const nick = u.nickname?.trim();
+  if (nick) return `@${nick.replace(/^@+/, "")} · ID ${u.publicId}`;
+  return `ID ${u.publicId}`;
 }

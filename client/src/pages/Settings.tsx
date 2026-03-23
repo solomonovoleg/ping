@@ -40,6 +40,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { getSavedTheme, setTheme, type ThemeId } from "@/lib/theme";
 import { getMicroSoundsEnabled, setMicroSoundsEnabled } from "@/lib/micro-feedback";
@@ -52,6 +60,8 @@ import {
   primeMicrophoneCapture,
   primeCameraAndMicrophoneCapture,
 } from "@/lib/media-capture-prime";
+import { usePrefersReducedMotion } from "@/lib/motion";
+import { SettingsDataMemoryCard } from "@/features/settings/components/SettingsDataMemoryCard";
 
 import { PageTitle } from "@/components/PageTitle";
 import { Button } from "@/components/ui/button";
@@ -75,6 +85,7 @@ type MediaPermissionState = PermissionState | "unknown";
 
 export default function Settings() {
   const { user, refetch } = useAuth();
+  const reducedMotion = usePrefersReducedMotion();
   const [theme, setThemeState] = useState<ThemeId>("light");
   const [referralData, setReferralData] = useState<{
     codes: { id: string; code: string; expiresAt: string }[];
@@ -97,8 +108,16 @@ export default function Settings() {
   const [mediaPrimeBusy, setMediaPrimeBusy] = useState<null | "mic" | "cam">(null);
   const [microphonePermission, setMicrophonePermission] = useState<MediaPermissionState>("unknown");
   const [cameraPermission, setCameraPermission] = useState<MediaPermissionState>("unknown");
+  const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  const scrollToSettingsSection = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+  };
 
   useEffect(() => {
     const handler = () => setMicroSoundsState(getMicroSoundsEnabled());
@@ -106,24 +125,39 @@ export default function Settings() {
     return () => window.removeEventListener("ping:micro-sounds-change", handler);
   }, []);
 
-  useEffect(() => {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const offset = -new Date().getTimezoneOffset() / 60;
-    const now = new Date();
-    console.log("[PING] Timezone check:", {
-      timeZone: tz,
-      offsetMinutes: new Date().getTimezoneOffset(),
-      offsetHours: offset,
-      iso: now.toISOString(),
-      local: `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
-    });
-  }, []);
-
   const handleHideFromSearchChange = async (checked: boolean) => {
     setPrivacySaving(true);
     try {
       await updateProfile({ hideFromSearch: checked });
       await refetch();
+    } catch (e) {
+      toast({ title: e instanceof Error ? e.message : "Не сохранено", variant: "destructive" });
+      await refetch();
+    } finally {
+      setPrivacySaving(false);
+    }
+  };
+
+  const handleDmPolicyChange = async (value: "all" | "followers" | "mutual") => {
+    setPrivacySaving(true);
+    try {
+      await updateProfile({ dmPolicy: value });
+      await refetch();
+      toast({ title: "Сохранено", duration: 1800 });
+    } catch (e) {
+      toast({ title: e instanceof Error ? e.message : "Не сохранено", variant: "destructive" });
+      await refetch();
+    } finally {
+      setPrivacySaving(false);
+    }
+  };
+
+  const handleGroupAddMePolicyChange = async (value: "all" | "followers" | "mutual") => {
+    setPrivacySaving(true);
+    try {
+      await updateProfile({ groupAddMePolicy: value });
+      await refetch();
+      toast({ title: "Сохранено", duration: 1800 });
     } catch (e) {
       toast({ title: e instanceof Error ? e.message : "Не сохранено", variant: "destructive" });
       await refetch();
@@ -363,7 +397,9 @@ export default function Settings() {
           <h2 className="text-2xl font-bold mb-1">
             {user?.displayName || user?.surname ? [user.displayName, user.surname].filter(Boolean).join(" ") : "Мой профиль"}
           </h2>
-          <p className="text-muted-foreground text-[15px] mb-3">{user?.phone ?? "—"}</p>
+          <p className="text-muted-foreground text-[15px] mb-3 text-center max-w-sm">
+            Номер телефона не показывается в приложении и не передаётся в запросах — только для входа.
+          </p>
           <p className="text-[15px] text-center max-w-sm text-foreground/80 leading-snug">
             {(user as { bio?: string } | undefined)?.bio?.trim() || "Расскажите о себе в профиле."}
           </p>
@@ -419,7 +455,7 @@ export default function Settings() {
           </div>
 
           {/* Уведомления */}
-          <div className="flex flex-col gap-2">
+          <div id="settings-notifications" className="flex flex-col gap-2 scroll-mt-24">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider ml-4">
               Уведомления
             </h3>
@@ -751,7 +787,7 @@ export default function Settings() {
           )}
 
           {/* Приватность */}
-          <div>
+          <div id="settings-privacy" className="scroll-mt-24">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
               Приватность
             </h3>
@@ -775,35 +811,123 @@ export default function Settings() {
                   className="shrink-0"
                 />
               </div>
+              <div className="mt-4 space-y-4 border-t border-border/40 pt-4">
+                <div>
+                  <p className="text-[15px] font-medium">Личные сообщения</p>
+                  <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                    Кто может начать с вами новый диалог. «Подписчики» — пользователи, которые подписаны на вас.
+                    «Взаимно» — только если вы и собеседник подписаны друг на друга.
+                  </p>
+                  <label className="sr-only" htmlFor="settings-dm-policy">
+                    Политика личных сообщений
+                  </label>
+                  <select
+                    id="settings-dm-policy"
+                    className="mt-2 w-full min-h-[var(--uix-touch-min)] rounded-xl border border-border/60 bg-background px-3 py-2.5 text-sm"
+                    value={user?.dmPolicy ?? "all"}
+                    onChange={(e) =>
+                      void handleDmPolicyChange(e.target.value as "all" | "followers" | "mutual")
+                    }
+                    disabled={privacySaving}
+                  >
+                    <option value="all">Все пользователи</option>
+                    <option value="followers">Только подписчики (на меня подписаны)</option>
+                    <option value="mutual">Только взаимная подписка</option>
+                  </select>
+                </div>
+                <div>
+                  <p className="text-[15px] font-medium">Групповые чаты</p>
+                  <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                    Кто может добавлять вас в группу. «Подписчики» — вы должны быть подписаны на того, кто
+                    добавляет. «Взаимно» — взаимная подписка с тем, кто добавляет.
+                  </p>
+                  <label className="sr-only" htmlFor="settings-group-add-policy">
+                    Политика добавления в группы
+                  </label>
+                  <select
+                    id="settings-group-add-policy"
+                    className="mt-2 w-full min-h-[var(--uix-touch-min)] rounded-xl border border-border/60 bg-background px-3 py-2.5 text-sm"
+                    value={user?.groupAddMePolicy ?? "all"}
+                    onChange={(e) =>
+                      void handleGroupAddMePolicyChange(e.target.value as "all" | "followers" | "mutual")
+                    }
+                    disabled={privacySaving}
+                  >
+                    <option value="all">Любой админ группы</option>
+                    <option value="followers">Только если я подписан на добавляющего</option>
+                    <option value="mutual">Только взаимная подписка с добавляющим</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Settings Groups */}
+          {/* Данные на устройстве */}
+          <div id="settings-storage" className="scroll-mt-24">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
+              Данные и память
+            </h3>
+            <SettingsDataMemoryCard
+              onNavigateSaved={() => setLocation("/saved")}
+              onOpenDataPage={() => setLocation("/settings/data")}
+            />
+          </div>
+
+          {/* Быстрые переходы по разделам этой страницы */}
           <div>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 ml-4">
               Основные
             </h3>
             <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm">
-              {[
-                { icon: Bell, label: "Уведомления и звуки", color: "bg-orange-500" },
-                { icon: Lock, label: "Конфиденциальность", color: "bg-blue-500" },
-                { icon: Database, label: "Данные и память", color: "bg-green-500" },
-              ].map((item, j) => (
-                <div
-                  key={j}
+              {(
+                [
+                  {
+                    icon: Bell,
+                    label: "Уведомления и звуки",
+                    color: "bg-orange-500",
+                    targetId: "settings-notifications",
+                    hint: "Пуши, лента, микро-звуки, орфография",
+                  },
+                  {
+                    icon: Lock,
+                    label: "Конфиденциальность",
+                    color: "bg-blue-500",
+                    targetId: "settings-privacy",
+                    hint: "Поиск, личные сообщения, группы",
+                  },
+                  {
+                    icon: Database,
+                    label: "Данные и память",
+                    color: "bg-green-500",
+                    targetId: "settings-storage",
+                    hint: "Кэш, экспорт JSON, избранное",
+                    navigateTo: "/settings/data",
+                  },
+                ] as const
+              ).map((item, j) => (
+                <button
+                  key={item.targetId}
+                  type="button"
+                  onClick={() =>
+                    "navigateTo" in item ? setLocation(item.navigateTo) : scrollToSettingsSection(item.targetId)
+                  }
                   className={cn(
-                    "uix-list-row flex items-center justify-between p-3.5 hover:bg-secondary/50 cursor-pointer transition-colors duration-75 active:bg-secondary active:scale-[0.99]",
-                    j < 2 && "border-b border-border/50"
+                    "uix-list-row flex w-full items-center justify-between p-3.5 text-left hover:bg-secondary/50 cursor-pointer transition-colors duration-75 active:bg-secondary active:scale-[0.99] min-h-[var(--uix-touch-min)]",
+                    j < 2 && "border-b border-border/50",
                   )}
+                  aria-label={`${item.label}: перейти к разделу`}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center text-white", item.color)}>
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0", item.color)}>
                       <item.icon className="w-4 h-4" />
                     </div>
-                    <span className="text-[16px] font-medium">{item.label}</span>
+                    <div className="min-w-0">
+                      <span className="text-[16px] font-medium block">{item.label}</span>
+                      <span className="text-xs text-muted-foreground truncate block">{item.hint}</span>
+                    </div>
                   </div>
-                  <ChevronRight className="w-5 h-5 text-muted-foreground/50" />
-                </div>
+                  <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
+                </button>
               ))}
             </div>
           </div>
@@ -867,11 +991,10 @@ export default function Settings() {
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground/50" />
               </a>
-              <div
-                className={cn(
-                  "uix-list-row flex items-center justify-between p-3.5 hover:bg-secondary/50 cursor-pointer transition-colors duration-75 active:bg-secondary",
-                  ADMIN_ROLES.includes(user?.platformRole ?? "") && "border-b border-border/50"
-                )}
+              <button
+                type="button"
+                onClick={() => setHelpDialogOpen(true)}
+                className="uix-list-row flex w-full items-center justify-between p-3.5 hover:bg-secondary/50 cursor-pointer transition-colors duration-75 active:bg-secondary text-left min-h-[var(--uix-touch-min)] border-b border-border/50"
               >
                 <div className="flex items-center gap-3.5">
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white bg-teal-500">
@@ -879,25 +1002,23 @@ export default function Settings() {
                   </div>
                   <span className="text-[16px] font-medium">Помощь</span>
                 </div>
-                <ChevronRight className="w-5 h-5 text-muted-foreground/50" />
-              </div>
-              <div className="flex items-center justify-between p-3.5 text-muted-foreground">
+                <ChevronRight className="w-5 h-5 text-muted-foreground/50 shrink-0" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setAboutDialogOpen(true)}
+                className="uix-list-row flex w-full items-center justify-between p-3.5 hover:bg-secondary/50 cursor-pointer transition-colors duration-75 active:bg-secondary text-left min-h-[var(--uix-touch-min)]"
+              >
                 <div className="flex items-center gap-3.5">
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-muted">
                     <span className="text-xs font-semibold text-muted-foreground">i</span>
                   </div>
-                  <span className="text-[16px] font-medium">О приложении</span>
+                  <span className="text-[16px] font-medium text-foreground">О приложении</span>
                 </div>
-                <span className="text-sm tabular-nums">
+                <span className="text-sm tabular-nums text-muted-foreground">
                   {typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : "—"}
                 </span>
-              </div>
-              <div className="flex flex-col gap-1 p-3.5 pt-0 text-muted-foreground text-xs border-t border-border/30">
-                <span className="font-medium text-foreground/80">Часовой пояс (для проверки)</span>
-                <span>Зона: {Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
-                <span>Смещение: UTC{new Date().getTimezoneOffset() <= 0 ? "+" : ""}{-new Date().getTimezoneOffset() / 60}</span>
-                <span>Сейчас: {new Date().toISOString()} → локально {new Date().getHours().toString().padStart(2, "0")}:{new Date().getMinutes().toString().padStart(2, "0")}</span>
-              </div>
+              </button>
             </div>
           </div>
 
@@ -1003,6 +1124,82 @@ export default function Settings() {
               Удалить аккаунт
             </button>
           </div>
+
+          <Dialog open={helpDialogOpen} onOpenChange={setHelpDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Помощь</DialogTitle>
+                <DialogDescription asChild>
+                  <div className="space-y-3 text-sm text-muted-foreground pt-1">
+                    <p>
+                      <span className="font-medium text-foreground">Уведомления не приходят</span> — проверьте системные
+                      разрешения для браузера или приложения и переключатель «Пуш о новых сообщениях» выше.
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">Нет звука в звонках</span> — в блоке «Камера и микрофон»
+                      запросите доступ к микрофону; на телефоне проверьте настройки ОС для приложения.
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">Личные сообщения</span> — кто может написать первым,
+                      задаётся в разделе «Приватность» (политика ЛС и групп).
+                    </p>
+                    <p>
+                      Если проблема не решается, напишите в поддержку — приложите скрин и время события.
+                    </p>
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="flex-col gap-2 sm:flex-col">
+                <Button type="button" className="w-full" asChild>
+                  <a href={`mailto:${getSupportEmail()}`}>Написать в поддержку</a>
+                </Button>
+                <Button type="button" variant="secondary" className="w-full" onClick={() => setHelpDialogOpen(false)}>
+                  Закрыть
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={aboutDialogOpen} onOpenChange={setAboutDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>PING</DialogTitle>
+                <DialogDescription className="text-left space-y-2">
+                  <span className="block text-sm text-muted-foreground">
+                    Мессенджер и лента: чаты, звонки, посты, сториз и профили. Веб и мобильные приложения.
+                  </span>
+                  <span className="block text-sm">
+                    <span className="text-muted-foreground">Сборка:</span>{" "}
+                    <span className="font-mono tabular-nums">
+                      {typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : "—"}
+                    </span>
+                  </span>
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-xl border border-border/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground/80">Часовой пояс (диагностика)</p>
+                <p>Зона: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+                <p>
+                  Смещение: UTC{new Date().getTimezoneOffset() <= 0 ? "+" : ""}
+                  {-new Date().getTimezoneOffset() / 60}
+                </p>
+                <p>
+                  Локальное время: {new Date().getHours().toString().padStart(2, "0")}:
+                  {new Date().getMinutes().toString().padStart(2, "0")}
+                </p>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="secondary" className="w-full sm:w-auto" asChild>
+                  <a href={getPrivacyPolicyUrl()} target="_blank" rel="noopener noreferrer">
+                    Политика конфиденциальности
+                  </a>
+                </Button>
+                <Button type="button" onClick={() => setAboutDialogOpen(false)}>
+                  Закрыть
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
             <AlertDialogContent>

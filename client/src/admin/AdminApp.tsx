@@ -7,11 +7,13 @@ import AdminUsers from "@/pages/admin/Users";
 import AdminReferrals from "@/pages/admin/Referrals";
 import AdminAdmins from "@/pages/admin/Admins";
 import AdminSettings from "@/pages/admin/Settings";
+import AdminVkParser from "@/pages/admin/VkParser";
 import AdminAudit from "@/pages/admin/Audit";
 import AdminOps from "@/pages/admin/Ops";
 import AdminMonitors from "@/pages/admin/Monitors";
 import AdminDisk from "@/pages/admin/Disk";
 import AdminServiceChat from "@/pages/admin/ServiceChat";
+import AdminEdgeCompanion from "@/pages/admin/EdgeCompanion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -125,6 +127,8 @@ export function AdminApp() {
       <AdminAdmins />
     ) : location === "/admin/settings" ? (
       <AdminSettings />
+    ) : location === "/admin/vk-parser" ? (
+      <AdminVkParser />
     ) : location === "/admin/audit" ? (
       <AdminAudit />
     ) : location === "/admin/ops" ? (
@@ -135,6 +139,8 @@ export function AdminApp() {
       <AdminDisk />
     ) : location === "/admin/service-chat" ? (
       <AdminServiceChat />
+    ) : location === "/admin/edge-companion" ? (
+      <AdminEdgeCompanion />
     ) : (
       <AdminDashboard />
     );

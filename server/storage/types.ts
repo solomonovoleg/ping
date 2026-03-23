@@ -36,7 +36,8 @@ export interface IStorage {
   listContactUserIds(ownerId: string): Promise<string[]>;
 
   /** Подписки (как в Instagram): лента = посты от тех, на кого подписан */
-  addFollow(followerId: string, followingId: string): Promise<void>;
+  /** `true`, если подписка создана впервые (не была дублем). */
+  addFollow(followerId: string, followingId: string): Promise<boolean>;
   removeFollow(followerId: string, followingId: string): Promise<void>;
   isFollowing(followerId: string, followingId: string): Promise<boolean>;
   listFollowingIds(followerId: string): Promise<string[]>;
@@ -59,6 +60,7 @@ export interface IStorage {
     blockerId: string,
     blockedId: string,
     flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+    blockNote?: string | null,
   ): Promise<void>;
   removeBlock(blockerId: string, blockedId: string): Promise<void>;
   isBlocked(blockerId: string, blockedId: string): Promise<boolean>;
@@ -66,7 +68,12 @@ export interface IStorage {
   getBlockFlags(
     blockerId: string,
     blockedId: string,
-  ): Promise<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean } | null>;
+  ): Promise<{
+    restrictProfile: boolean;
+    restrictChat: boolean;
+    restrictSocial: boolean;
+    blockNote: string | null;
+  } | null>;
   /**
    * ID пользователей, которых нужно скрыть из ленты: есть блокировка с тремя флагами true
    * (полная блокировка) в любую сторону между viewer и этим пользователем.
@@ -90,17 +97,21 @@ export interface IStorage {
   setUserDeleted(userId: string, deleted: boolean): Promise<User | undefined>;
   setPlatformRole(userId: string, role: string): Promise<User | undefined>;
   /** Список пользователей с ролью отличной от user (для раздела «Админы») */
-  listAdmins(): Promise<Pick<User, "id" | "publicId" | "phone" | "displayName" | "surname" | "platformRole">[]>;
+  listAdmins(): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "platformRole">[]>;
 
   /** Реферальные коды: создать приглашение (maxUses: -1 = без лимита до истечения) */
   createReferralCode(
     inviterUserId: string,
     code: string,
     expiresAt: Date,
-    opts?: { maxUses?: number }
+    opts?: { maxUses?: number; bypassInviterLimit?: boolean }
   ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number }>;
   /** Найти код по строке (нормализованной), только если не истёк и остались использования */
-  getReferralCodeByCode(code: string): Promise<{ id: string; inviterUserId: string; expiresAt: Date } | undefined>;
+  getReferralCodeByCode(
+    code: string,
+  ): Promise<
+    { id: string; inviterUserId: string; expiresAt: Date; bypassInviterLimit: boolean } | undefined
+  >;
   /** Списать одно использование кода при регистрации */
   consumeReferralCode(codeId: string): Promise<boolean>;
   /** Сколько пользователей привёл этот inviter */
@@ -199,7 +210,7 @@ export interface IStorage {
     userId: string,
     query: string,
     limit: number
-  ): Promise<{ messageId: string; chatId: string; content: string; createdAt: Date; chatName: string }[]>;
+  ): Promise<{ messageId: string; chatId: string; type: string; content: string; createdAt: Date; chatName: string }[]>;
 
   /** Избранное: сохранить сообщение для пользователя. */
   saveMessage(userId: string, messageId: string, chatId: string): Promise<void>;
@@ -328,9 +339,61 @@ export interface IStorage {
   createUserReminder(data: { userId: string; title: string; fireAt: Date }): Promise<UserReminder>;
   listDueUserReminders(userId: string, before: Date): Promise<UserReminder[]>;
   dismissUserReminder(userId: string, id: string): Promise<boolean>;
+  updateUserReminderFireAt(userId: string, id: string, fireAt: Date): Promise<boolean>;
 
   /** Голосовые задачи */
   createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask>;
   listOpenVoiceTasks(userId: string, limit: number): Promise<VoiceTask[]>;
   completeVoiceTask(userId: string, id: string): Promise<boolean>;
+
+  /** Служебный групповой чат (1 участник) для текста треков из Пингок */
+  ensurePingokTrackSourceChat(userId: string): Promise<Chat>;
+  findBestUserTrackByName(userId: string, nameQuery: string): Promise<{ id: string; name: string } | null>;
+
+  createDmScheduledCall(data: {
+    chatId: string;
+    createdByUserId: string;
+    peerUserId: string;
+    fireAt: Date;
+    title: string;
+    plannerReminderId?: string | null;
+  }): Promise<{ id: string }>;
+  getActiveDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+  ): Promise<{
+    id: string;
+    fireAt: Date;
+    title: string;
+    createdByUserId: string;
+    peerUserId: string;
+    iAmInitiator: boolean;
+  } | null>;
+  dismissDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+    rowId: string,
+    options: { forBoth: boolean },
+  ): Promise<boolean>;
+
+  listPlannerActiveDmScheduledCalls(userId: string): Promise<
+    Array<{
+      id: string;
+      chatId: string;
+      peerUserId: string;
+      fireAt: Date;
+      title: string;
+      plannerReminderId: string | null;
+    }>
+  >;
+  updateDmScheduledCallFireAsPlanner(
+    userId: string,
+    rowId: string,
+    fireAt: Date,
+    title: string,
+  ): Promise<{ chatId: string; peerUserId: string } | null>;
+  cancelDmScheduledCallAsPlanner(userId: string, rowId: string): Promise<{ chatId: string; peerUserId: string } | null>;
+  listDmScheduledCallsInPreEventWindow(userId: string): Promise<
+    Array<{ id: string; chatId: string; title: string; fireAt: Date }>
+  >;
 }

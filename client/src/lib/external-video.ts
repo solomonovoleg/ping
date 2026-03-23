@@ -1,10 +1,22 @@
-export type ExternalVideoProvider = "youtube" | "rutube" | "yandex";
+export type ExternalVideoProvider = "youtube" | "rutube" | "yandex" | "vk";
 
 export type ExternalVideoEmbed = {
   provider: ExternalVideoProvider;
   watchUrl: string;
+  /** Пустая строка — встроенный плеер недоступен, UI покажет fallback на внешний просмотр. */
   embedUrl: string;
 };
+
+const PROVIDER_LABEL: Record<ExternalVideoProvider, string> = {
+  youtube: "YouTube",
+  rutube: "RuTube",
+  yandex: "Яндекс Видео",
+  vk: "ВКонтакте",
+};
+
+export function externalVideoProviderLabel(p: ExternalVideoProvider): string {
+  return PROVIDER_LABEL[p];
+}
 
 function normalizeYouTubeVideoId(raw: string): string | null {
   const id = raw.trim();
@@ -57,6 +69,46 @@ function parseRutube(url: URL): ExternalVideoEmbed | null {
   };
 }
 
+function parseVk(url: URL): ExternalVideoEmbed | null {
+  const host = url.hostname.replace(/^www\./i, "").replace(/^m\./i, "").toLowerCase();
+  if (host !== "vk.com" && host !== "vk.ru") return null;
+
+  const path = url.pathname;
+  if (/^\/video_ext\.php$/i.test(path)) {
+    const oid = url.searchParams.get("oid") ?? "";
+    const id = url.searchParams.get("id") ?? "";
+    const hash = (url.searchParams.get("hash") ?? "").trim();
+    if (!/^-?\d+$/.test(oid) || !/^\d+$/.test(id)) return null;
+    const watchUrl = `https://vk.com/video${oid}_${id}`;
+    const embedParams = new URLSearchParams({ oid, id, hd: "2" });
+    if (hash) embedParams.set("hash", hash);
+    return {
+      provider: "vk",
+      watchUrl,
+      embedUrl: `https://vk.com/video_ext.php?${embedParams.toString()}`,
+    };
+  }
+
+  const clip = path.match(/^\/clip(-?\d+)_(\d+)/i);
+  const video = path.match(/^\/video(-?\d+)_(\d+)/i);
+  const m = video ?? clip;
+  if (!m) return null;
+
+  const ownerId = m[1] ?? "";
+  const videoId = m[2] ?? "";
+  if (!/^-?\d+$/.test(ownerId) || !/^\d+$/.test(videoId)) return null;
+
+  const kind = clip ? "clip" : "video";
+  const watchUrl = `https://vk.com/${kind}${ownerId}_${videoId}`;
+  const embedParams = new URLSearchParams({ oid: ownerId, id: videoId, hd: "2" });
+
+  return {
+    provider: "vk",
+    watchUrl,
+    embedUrl: `https://vk.com/video_ext.php?${embedParams.toString()}`,
+  };
+}
+
 function parseYandex(url: URL): ExternalVideoEmbed | null {
   const host = url.hostname.toLowerCase();
   const isYandexVideoHost =
@@ -87,7 +139,7 @@ export function parseExternalVideoUrl(rawUrl: string): ExternalVideoEmbed | null
   try {
     const url = new URL(rawUrl.trim());
     if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    return parseYouTube(url) ?? parseRutube(url) ?? parseYandex(url);
+    return parseYouTube(url) ?? parseRutube(url) ?? parseVk(url) ?? parseYandex(url);
   } catch {
     return null;
   }

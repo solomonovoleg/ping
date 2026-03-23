@@ -9,6 +9,21 @@ export function parseMessageDate(raw: string): Date {
   return parseServerTimestamp(raw);
 }
 
+/**
+ * Две галочки у исходящих: только если у собеседника на сервере last_read ≥ времени сообщения.
+ * Не путать с «в сети» / last_seen — для статуса в шапке используется {@link formatLastSeen}.
+ */
+export function isOutgoingMessageReadByPeer(
+  messageCreatedAtIso: string,
+  peerLastReadAtIso: string | null | undefined,
+): boolean {
+  if (peerLastReadAtIso == null || peerLastReadAtIso === "") return false;
+  const msgT = parseMessageDate(messageCreatedAtIso).getTime();
+  const readT = parseMessageDate(peerLastReadAtIso).getTime();
+  if (!Number.isFinite(msgT) || !Number.isFinite(readT)) return false;
+  return msgT <= readT;
+}
+
 export function formatMessageTime(iso: string): string {
   const d = parseMessageDate(iso);
   const now = new Date();

@@ -1,6 +1,8 @@
 export interface Story {
   id: string | number;
   image: string;
+  /** Постер для видео-сториз (превью в чате при ответе). */
+  thumbnailUrl?: string;
   userName: string;
   userAvatar: string;
   time: string;
@@ -23,7 +25,14 @@ export interface StoryViewerProps {
     storyId: string;
     authorId: string;
     text: string;
-    story: { id: string; image: string; userName: string; userAvatar: string; time: string };
+    story: {
+      id: string;
+      image: string;
+      thumbnailUrl?: string;
+      userName: string;
+      userAvatar: string;
+      time: string;
+    };
   }) => Promise<void> | void;
   canReply?: boolean;
   onToggleLike?: (storyId: string, liked: boolean) => Promise<void> | void;

@@ -39,12 +39,24 @@ export type ApiChat = {
     displayName: string | null;
     surname: string | null;
     avatarUrl: string | null;
-    phone?: string | null;
     lastReadAt?: string | null;
     lastSeenAt?: string | null;
   } | null;
   /** Превью «был(а)…» в списке чатов (DM). */
   otherMemberLastSeenAt?: string | null;
+  /** DM: собеседник ограничил текущего пользователя (чат/профиль/лента). */
+  blockedByOther?: {
+    restrictChat: boolean;
+    restrictProfile: boolean;
+    restrictSocial: boolean;
+    note: string | null;
+  } | null;
+  /** DM: вы ограничили собеседника (для пункта «Разблокировать» в меню). */
+  myBlockOfOther?: {
+    restrictChat: boolean;
+    restrictProfile: boolean;
+    restrictSocial: boolean;
+  } | null;
 };
 
 export type ApiMessage = {

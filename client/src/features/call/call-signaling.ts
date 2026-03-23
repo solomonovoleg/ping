@@ -33,6 +33,7 @@ export class CallSignalingClient {
       t === "call.hangup" ||
       t === "call.resume-check" ||
       t === "call.resume-request" ||
+      t === "call.connected" ||
       t === "call.offer" ||
       t === "call.answer" ||
       t === "call.ice-candidate" ||

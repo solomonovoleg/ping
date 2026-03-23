@@ -44,6 +44,41 @@ export function normalizePhone(input: string | null | undefined): string | null 
 }
 
 /**
+ * Все варианты полного номера в формате +7… из произвольной строки поиска.
+ * Учитывает пробелы, скобки, дефисы («8900-700-9094»), префиксы 8/7/+7, 10 цифр с 9.
+ * Неполные номера (+7900, 900…) не возвращаются — только то, что проходит normalizePhone.
+ */
+export function normalizedPhonesFromSearchQuery(input: string | null | undefined): string[] {
+  if (input == null || typeof input !== "string") return [];
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+
+  const out = new Set<string>();
+  const add = (n: string | null) => {
+    if (n) out.add(n);
+  };
+
+  add(normalizePhone(trimmed));
+
+  for (const seg of trimmed.split(/\D+/).filter(Boolean)) {
+    const d = seg.replace(/\D/g, "");
+    if (d.length >= 10 && d.length <= 11) add(normalizePhone(d));
+  }
+
+  const allDigits = trimmed.replace(/\D/g, "");
+  if (allDigits.length >= 10) {
+    for (const len of [10, 11] as const) {
+      if (allDigits.length < len) continue;
+      for (let i = 0; i <= allDigits.length - len; i++) {
+        add(normalizePhone(allDigits.slice(i, i + len)));
+      }
+    }
+  }
+
+  return [...out];
+}
+
+/**
  * Форматирование для отображения: +7 (XXX) XXX-XX-XX.
  */
 export function formatPhoneDisplay(phone: string): string {

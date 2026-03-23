@@ -53,6 +53,22 @@ export const profilePatchLimiter = rateLimit({
   },
 });
 
+/** Выгрузка данных — тяжёлая; лимит как у типичных «скачать копию»: много раз в день не нужно, но не мешаем тестам. */
+const DATA_EXPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MAX_DATA_EXPORT_PER_DAY = 30;
+
+export const dataExportLimiter = rateLimit({
+  windowMs: DATA_EXPORT_WINDOW_MS,
+  max: MAX_DATA_EXPORT_PER_DAY,
+  message: { message: "Достигнут лимит выгрузок за сутки. Завтра можно снова, либо обратитесь в поддержку." },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const uid = getUserId(req);
+    return uid ? `data-export:${uid}` : `data-export-ip:${req.ip ?? "unknown"}`;
+  },
+});
+
 const LINK_PREVIEW_WINDOW_MS = 15 * 60 * 1000;
 const MAX_LINK_PREVIEW_PER_WINDOW = 60;
 

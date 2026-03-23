@@ -29,6 +29,12 @@ import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@
 import { buildProfilePostPath } from "@/lib/profile-route";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { PostMedia } from "@/components/PostMedia";
+import { PostExternalVideoEmbed } from "@/components/PostExternalVideoEmbed";
+import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
+import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
+import { buildEdgeCompanionOpenHref } from "@/features/edge-companion/edge-companion-navigation";
+import { extractFirstExternalVideoUrl, isExternalVideoOnlyCaption } from "@/lib/post-external-video";
+import { parseExternalVideoUrl } from "@/lib/external-video";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import {
@@ -47,7 +53,6 @@ import {
   isVideoMediaUrl,
   pulseProfilePostMetaParts,
 } from "../utils/post-media";
-import { PulseProfileCaption } from "./PulseProfileCaption";
 import { userProfileRu } from "../i18n.ru";
 
 const u = userProfileRu.posts;
@@ -469,7 +474,9 @@ export function UserProfilePostsContent({
     <div className="flex w-full min-w-0 flex-col">
       {profilePosts.map((post: FeedPost) => {
         const caption = post.text ?? "";
-        const hasCaption = caption.trim().length > 0;
+        const primaryExternalVideoUrl = extractFirstExternalVideoUrl(caption);
+        const maskExternalEmbed = primaryExternalVideoUrl ? parseExternalVideoUrl(primaryExternalVideoUrl) : null;
+        const hasCaption = caption.trim().length > 0 && !isExternalVideoOnlyCaption(caption, primaryExternalVideoUrl);
         const meta = pulseProfilePostMetaParts(post);
         const sortedReactions = [...(post.reactions ?? [])].sort((a, b) => b.count - a.count);
         const topEmojis = sortedReactions.slice(0, 3);
@@ -542,9 +549,29 @@ export function UserProfilePostsContent({
             metaTime={meta.timeShort}
             headerRight={menu}
           >
-            {hasCaption ? (
-              <div className="px-3 pb-2">
-                <PulseProfileCaption>{caption}</PulseProfileCaption>
+            {hasCaption || primaryExternalVideoUrl ? (
+              <div className="space-y-2 px-3 pb-2">
+                {hasCaption ? (
+                  <p
+                    className="whitespace-pre-wrap text-[15px] font-normal leading-snug tracking-[-0.01em]"
+                    style={{ color: th.text }}
+                  >
+                    <PostCaptionInlineParts
+                      text={caption}
+                      maskExternalEmbed={maskExternalEmbed}
+                      onHashtagClick={() => setLocation("/posts")}
+                      linkClassName="font-semibold text-primary underline decoration-primary/50 underline-offset-[3px] break-all"
+                      hashtagClassName="font-semibold text-primary hover:underline underline-offset-2"
+                    />
+                  </p>
+                ) : null}
+                {primaryExternalVideoUrl ? (
+                  <PostExternalVideoEmbed
+                    url={primaryExternalVideoUrl}
+                    className="overflow-hidden rounded-xl border border-border/40"
+                    autoplayInViewport
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -578,6 +605,31 @@ export function UserProfilePostsContent({
                 edgeToEdge
               />
             </div>
+            {post.edgeId ? (
+              <div className="px-3 pb-2">
+                <EdgeCompanionFeedCard
+                  variant="feed"
+                  userId={user?.id ?? "guest"}
+                  edgeId={post.edgeId}
+                  onOpen={() => {
+                    if (!user?.id) {
+                      toast({
+                        title: "Войдите в аккаунт",
+                        description: "Чтобы участвовать в кампании EDGE",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    setLocation(
+                      buildEdgeCompanionOpenHref(
+                        post.edgeId!,
+                        isMe ? "/profile/me" : `/profile/${encodeURIComponent(normalizedRouteId)}`,
+                      ),
+                    );
+                  }}
+                />
+              </div>
+            ) : null}
 
             <div className="relative px-3 pb-2 pt-2">
               <div className="flex min-w-0 items-center gap-2">

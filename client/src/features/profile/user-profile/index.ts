@@ -19,3 +19,4 @@ export { UserProfilePostsContent } from "./components/UserProfilePostsContent";
 export { UserProfileMoreSheet } from "./components/UserProfileMoreSheet";
 export { StoryDurationPickerSheet } from "./components/StoryDurationPickerSheet";
 export { StoryViewersSheet } from "./components/StoryViewersSheet";
+export { ProfileAnalyticsSheet } from "./components/ProfileAnalyticsSheet";

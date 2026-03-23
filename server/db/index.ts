@@ -1,1 +1,9 @@
-export { getDb, getPool, closeDb, ensureUserColumns, ensureChatVibeSchema, ensureCallTranscriptsSchema } from "./client";
+export {
+  getDb,
+  getPool,
+  closeDb,
+  ensureUserColumns,
+  ensureStoriesFeedBoostColumns,
+  ensureChatVibeSchema,
+  ensureCallTranscriptsSchema,
+} from "./client";

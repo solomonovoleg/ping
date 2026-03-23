@@ -21,10 +21,19 @@ export type PingokExecuteResponse =
   | {
       ok: false;
       reply: string;
-      code?: "need_time" | "pick_user" | "parse_message" | "confirm_user" | "confirm_call_user" | "pick_call_user";
+      code?:
+        | "need_time"
+        | "pick_user"
+        | "parse_message"
+        | "confirm_user"
+        | "confirm_call_user"
+        | "pick_call_user"
+        | "pick_schedule_call_peer";
       candidates?: PingokExecuteCandidate[];
       pendingMessage?: string;
       pendingCallMode?: "audio" | "video";
+      pendingScheduleFireAt?: string;
+      pendingScheduleReminderTitle?: string;
     };
 
 export async function pingokMicroExecute(text: string): Promise<PingokExecuteResponse> {
@@ -54,6 +63,27 @@ export async function pingokMicroSendDm(targetUserId: string, text: string): Pro
   const data = (await res.json().catch(() => ({}))) as PingokExecuteResponse & { message?: string };
   if (!res.ok) {
     return { ok: false, reply: typeof data.message === "string" ? data.message : "Ошибка отправки" };
+  }
+  if (data && typeof data.ok === "boolean") {
+    return data as PingokExecuteResponse;
+  }
+  return { ok: false, reply: "Некорректный ответ сервера" };
+}
+
+export async function pingokMicroConfirmScheduleCall(
+  targetUserId: string,
+  fireAtIso: string,
+  reminderTitle: string,
+): Promise<PingokExecuteResponse> {
+  const res = await apiFetch(`${API}/pingok-micro/v1/confirm-schedule-call`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetUserId, fireAtIso, reminderTitle }),
+    suppressSessionExpireOn401: true,
+  });
+  const data = (await res.json().catch(() => ({}))) as PingokExecuteResponse & { message?: string };
+  if (!res.ok) {
+    return { ok: false, reply: typeof data.message === "string" ? data.message : "Ошибка планирования" };
   }
   if (data && typeof data.ok === "boolean") {
     return data as PingokExecuteResponse;

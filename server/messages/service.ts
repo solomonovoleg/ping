@@ -11,6 +11,7 @@ import {
   getMyReactionsForMessageIds,
   getReactionsForMessageIds,
 } from "./reactions";
+import { touchStoryFeedBoostReply } from "../stories/service";
 
 export class MessagesServiceError extends Error {
   status: number;
@@ -103,7 +104,7 @@ export async function sendChatMessage(input: SendMessageInput) {
     if (recipientId) {
       const recipientBlocksSender = await storage.getBlockFlags(recipientId, userId);
       if (recipientBlocksSender?.restrictChat) {
-        throw new MessagesServiceError(403, "Пользователь не принимает сообщения");
+        throw new MessagesServiceError(403, "Собеседник ограничил вам переписку");
       }
     }
     await ensureServiceChatReplyAllowed(chatId, userId);
@@ -176,6 +177,18 @@ export async function sendChatMessage(input: SendMessageInput) {
   };
   notifyNewMessage(chatId, payload);
 
+  if (rawType === "story_reply") {
+    try {
+      const parsed = JSON.parse(content.trim()) as { storyId?: unknown };
+      const sid = typeof parsed.storyId === "string" ? parsed.storyId.trim() : "";
+      if (sid) {
+        void touchStoryFeedBoostReply(sid).catch(() => {});
+      }
+    } catch {
+      /* контент не JSON — буст ленты не применяем */
+    }
+  }
+
   if (chat?.type === "dm") {
     import("../vibe/state-engine")
       .then((m) => m.processNewMessage(chatId))
@@ -228,7 +241,7 @@ export async function createScheduledMessage(input: CreateScheduledInput) {
     if (recipientId) {
       const recipientBlocksSender = await storage.getBlockFlags(recipientId, userId);
       if (recipientBlocksSender?.restrictChat) {
-        throw new MessagesServiceError(403, "Пользователь не принимает сообщения");
+        throw new MessagesServiceError(403, "Собеседник ограничил вам переписку");
       }
     }
   }

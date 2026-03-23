@@ -2,7 +2,12 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { MessageCircle, LayoutDashboard, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { onChatListUpdate, onIncomingChatMessageHint, onGroupCallInvite } from "@/features/chat/realtime-events";
+import {
+  emitChatPendingUnread,
+  onChatListUpdate,
+  onIncomingChatMessageHint,
+  onGroupCallInvite,
+} from "@/features/chat/realtime-events";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGroupCallContext } from "@/contexts/GroupCallContext";
 import { isGroupCallModuleEnabled } from "@/features/group-call/flags";
@@ -19,6 +24,7 @@ import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { PlatformAnnouncementBar } from "@/features/admin-ops/PlatformAnnouncementBar";
 import { usePreferPhoneChrome } from "@/hooks/use-prefer-phone-chrome";
 import { usePingokRemindersPoll } from "@/hooks/usePingokRemindersPoll";
+import { usePingokScheduledCallsPreEventPoll } from "@/hooks/usePingokScheduledCallsPreEventPoll";
 
 import feedIcon from "@/assets/images/feed-icon.png";
 import { NavPulseCenterLogoButton } from "@/components/layout/NavPulseCenterLogoButton";
@@ -69,6 +75,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const reducedMotion = usePrefersReducedMotion();
   const preferPhoneChrome = usePreferPhoneChrome();
   usePingokRemindersPoll(Boolean(user?.id));
+  usePingokScheduledCallsPreEventPoll(Boolean(user?.id));
 
   // Мягкие свайпы между экранами: направление анимации (null = по тапу в навбаре)
   const [transitionDirection, setTransitionDirection] = useState<"left" | "right" | null>(null);
@@ -167,6 +174,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       if (!viewingThisChat) {
         playIncomingChatMessageSound();
         showNewChatMessageBrowserNotificationIfHidden();
+        emitChatPendingUnread({ chatId });
       }
     });
   }, [location]);
@@ -217,8 +225,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
         haptic
         subtle
         onClick={() => setLocation(item.path)}
-        className="flex flex-col items-center justify-center flex-1 min-h-[var(--uix-touch-min)] pt-1 pb-1 gap-1 relative transition-colors duration-75"
+        className="flex flex-col items-center justify-center flex-1 min-h-[var(--uix-touch-min)] pt-0 pb-1 gap-1 relative transition-colors duration-75"
         data-testid={`mobile-nav-${item.id}`}
+        data-pingok-flight-target={item.id === "chats" ? "chats" : item.id === "board" ? "board" : undefined}
         aria-label={item.label}
       >
         <div className="relative flex items-center justify-center w-8 h-8">
@@ -302,23 +311,34 @@ export default function AppLayout({ children }: AppLayoutProps) {
         {/* Нижнее меню PULSE: 5 пунктов, в чате скрыто */}
         <nav
           className={cn(
-            "fixed bottom-0 left-0 right-0 z-50 overflow-visible border-t border-border/50 bg-background/95 backdrop-blur-md pb-[env(safe-area-inset-bottom,0px)] [padding-left:env(safe-area-inset-left,0px)] [padding-right:env(safe-area-inset-right,0px)]",
+            "fixed bottom-0 z-50 overflow-visible border-t border-border/50 bg-background/95 backdrop-blur-md pb-[env(safe-area-inset-bottom,0px)] [padding-left:env(safe-area-inset-left,0px)] [padding-right:env(safe-area-inset-right,0px)]",
+            preferPhoneChrome
+              ? "left-1/2 w-[min(100vw,480px)] max-w-full -translate-x-1/2"
+              : "left-0 right-0",
             isChatPage && "hidden"
           )}
         >
           <div
             className={cn(
-              "mx-auto flex min-h-[var(--uix-nav-height)] w-full min-w-0 items-end justify-between gap-0.5 px-1.5 pt-1 sm:px-3",
+              "mx-auto grid min-h-[var(--uix-nav-height)] w-full min-w-0 grid-cols-[1fr_minmax(5.5rem,7rem)_1fr] items-stretch gap-x-0.5 px-1.5 pt-[5px] pb-1.5 sm:px-3",
               preferPhoneChrome ? "max-w-[480px]" : "max-w-none",
             )}
           >
-            {navItemsLeft.map(renderNavButton)}
-            <NavPulseCenterLogoButton
-              isActive={basePath.replace(/\/$/, "") === "/profile/me"}
-              logoSrc={PULSE_NAV_LOGO_SRC}
-              onShortPress={() => setLocation("/profile/me")}
-            />
-            {navItemsRight.map(renderNavButton)}
+            <div className="flex min-w-0 items-start justify-start gap-0.5">
+              {navItemsLeft.map(renderNavButton)}
+            </div>
+            <div className="pointer-events-none relative z-10 flex min-h-0 min-w-0 justify-center self-stretch overflow-visible">
+              <div className="pointer-events-auto absolute bottom-0 left-1/2 -translate-x-1/2">
+                <NavPulseCenterLogoButton
+                  isActive={basePath.replace(/\/$/, "") === "/profile/me"}
+                  logoSrc={PULSE_NAV_LOGO_SRC}
+                  onShortPress={() => setLocation("/profile/me")}
+                />
+              </div>
+            </div>
+            <div className="flex min-w-0 items-start justify-end gap-0.5">
+              {navItemsRight.map(renderNavButton)}
+            </div>
           </div>
         </nav>
       </div>

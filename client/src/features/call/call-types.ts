@@ -2,6 +2,7 @@
 
 export type CallState =
   | "idle"
+  | "initializing"
   | "outgoing_ringing"
   | "incoming_ringing"
   | "accepting"
@@ -115,6 +116,11 @@ export type ClientCallEvent =
   | {
       type: "call.resume-request";
       callId: string;
+    }
+  | {
+      /** Локальный WebRTC перешёл в connected (подтверждение участника). */
+      type: "call.connected";
+      callId: string;
     };
 
 // ─── Server → Client events ──────────────────────────────────────
@@ -197,13 +203,24 @@ export type ServerCallEvent =
       mediaType: CallMediaType;
       otherUserId: string;
       otherDisplayName: string;
+      /** Аватар собеседника (для входящего — звонящий). */
+      otherAvatarUrl?: string | null;
       direction: CallDirection;
       shouldInitiateOffer: boolean;
+      /** Состояние сессии на сервере; для «позднего» WS при ringing+incoming — показать входящий звонок. */
+      sessionState?: string;
     }
   | {
       type: "call.peer-reconnected";
       callId: string;
       byUserId: string;
+    }
+  | {
+      /** Подтверждение подключения (в т.ч. confirmedByBoth=true когда подтвердили оба). */
+      type: "call.connected";
+      callId: string;
+      byUserId: string;
+      confirmedByBoth?: boolean;
     }
   | {
       type: "call.timeout";
@@ -277,6 +294,8 @@ export interface CallStoreState {
   otherAvatarUrl: string | null;
   chatId: string | null;
   callMessageContext: CallMessageListContext;
+  /** Голосовой звонок: громкая связь vs разговорник (натив). */
+  audioOutputSpeaker: boolean;
 }
 
 export interface IncomingCallInfo {
@@ -301,6 +320,7 @@ export interface CallStoreActions {
   rejectCall: () => void;
   hangup: () => void;
   setMuted: (muted: boolean) => void;
+  setAudioOutputSpeaker: (speaker: boolean) => void;
   toggleCameraEnabled: () => void;
   switchCamera: () => Promise<void>;
   toggleScreenShare: () => Promise<void>;

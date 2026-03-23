@@ -1,9 +1,11 @@
 import { eq, sql } from "drizzle-orm";
+import { computeDmAllowedForViewer, normalizeSocialPolicy } from "./social-policy";
 import { normalizePhone } from "../auth/phone";
 import { getDb } from "../db";
 import { storage } from "../storage";
 import { getAuthorWall } from "../posts/author-wall";
 import { getStoriesByAuthorId } from "../stories/service";
+import { recordProfilePageView } from "./profile-analytics";
 import { notifyFollow } from "../notifications/create";
 import {
   NAME_MAX_LENGTH,
@@ -102,6 +104,8 @@ function buildUnavailableProfile(target: {
     postsCount: 0,
     reactionsCount: 0,
     commentsCount: 0,
+    isFollowedByTarget: false,
+    isMutualFollow: false,
   };
 }
 
@@ -143,16 +147,19 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
   let canMessage = true;
   let isInMyContacts = false;
   let isFollowing = false;
+  let isFollowedByTarget = false;
   let isBlockedByMe = false;
   let isBlockedMe = false;
+  let theirBlockOfViewer: Awaited<ReturnType<typeof storage.getBlockFlags>> = null;
   if (!isMe) {
     isInMyContacts = await storage.isContact(viewerId, target.id);
     isFollowing = await storage.isFollowing(viewerId, target.id);
+    isFollowedByTarget = await storage.isFollowing(target.id, viewerId);
     isBlockedByMe = await storage.isBlocked(viewerId, target.id);
     isBlockedMe = await storage.isBlocked(target.id, viewerId);
     if (target.hideFromSearch) canMessage = isInMyContacts;
-    const theyBlockedMeChat = await storage.getBlockFlags(target.id, viewerId);
-    if (theyBlockedMeChat?.restrictChat) canMessage = false;
+    theirBlockOfViewer = await storage.getBlockFlags(target.id, viewerId);
+    if (theirBlockOfViewer?.restrictChat) canMessage = false;
   }
   const loadMutual =
     !isMe && !isBlockedByMe && !isBlockedMe
@@ -192,6 +199,8 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     canMessage,
     isInMyContacts,
     isFollowing,
+    isFollowedByTarget: !isMe ? isFollowedByTarget : false,
+    isMutualFollow: !isMe && isFollowing && isFollowedByTarget,
     isBlockedByMe,
     isMe,
     followersCount,
@@ -200,6 +209,15 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     reactionsCount: counters.reactionsCount,
     commentsCount: counters.commentsCount,
     mutualFollowers,
+    blockedByProfileOwner:
+      !isMe && theirBlockOfViewer
+        ? {
+            restrictChat: theirBlockOfViewer.restrictChat,
+            restrictProfile: theirBlockOfViewer.restrictProfile,
+            restrictSocial: theirBlockOfViewer.restrictSocial,
+            note: theirBlockOfViewer.blockNote,
+          }
+        : null,
   };
 }
 
@@ -208,9 +226,9 @@ export async function searchUsersForViewer(viewerId: string, q: string) {
   return users.map((u) => ({
     id: u.id,
     publicId: u.publicId,
-    phone: u.phone,
     displayName: u.displayName ?? null,
     surname: u.surname ?? null,
+    nickname: u.nickname ?? null,
     gender: u.gender ?? null,
     birthDate: u.birthDate ?? null,
     avatarUrl: u.avatarUrl ?? null,
@@ -245,6 +263,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     pushEnabled,
     vibeEnabled,
     vibeShareWithPartner,
+    dmPolicy: dmPolicyRaw,
+    groupAddMePolicy: groupAddMePolicyRaw,
   } = body ?? {};
   let name = typeof displayName === "string" ? displayName.trim() : (current.displayName ?? "");
   let fam = typeof surname === "string" ? surname.trim() : (current.surname ?? "");
@@ -262,6 +282,21 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     : undefined;
 
   const nicknameVal = parseNicknameUpdate(nickname);
+
+  let dmPolicy: string | undefined;
+  if (dmPolicyRaw !== undefined) {
+    if (dmPolicyRaw !== "all" && dmPolicyRaw !== "followers" && dmPolicyRaw !== "mutual") {
+      throw new UsersServiceError(400, "dmPolicy: допустимо all, followers или mutual");
+    }
+    dmPolicy = dmPolicyRaw;
+  }
+  let groupAddMePolicy: string | undefined;
+  if (groupAddMePolicyRaw !== undefined) {
+    if (groupAddMePolicyRaw !== "all" && groupAddMePolicyRaw !== "followers" && groupAddMePolicyRaw !== "mutual") {
+      throw new UsersServiceError(400, "groupAddMePolicy: допустимо all, followers или mutual");
+    }
+    groupAddMePolicy = groupAddMePolicyRaw;
+  }
 
   const user = await storage.updateUserProfile(userId, {
     displayName: name || null,
@@ -290,6 +325,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ...(typeof vibeEnabled === "boolean" && { vibeEnabled }),
     ...(typeof vibeShareWithPartner === "boolean" && { vibeShareWithPartner }),
     ...(nicknameVal !== undefined && { nickname: nicknameVal }),
+    ...(dmPolicy !== undefined && { dmPolicy }),
+    ...(groupAddMePolicy !== undefined && { groupAddMePolicy }),
   });
   if (!user) throw new UsersServiceError(404, "User not found");
 
@@ -316,6 +353,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     pushEnabled: (user as { pushEnabled?: boolean }).pushEnabled !== false,
     vibeEnabled: (user as { vibeEnabled?: boolean }).vibeEnabled === true,
     vibeShareWithPartner: (user as { vibeShareWithPartner?: boolean }).vibeShareWithPartner === true,
+    dmPolicy: normalizeSocialPolicy((user as { dmPolicy?: string }).dmPolicy),
+    groupAddMePolicy: normalizeSocialPolicy((user as { groupAddMePolicy?: string }).groupAddMePolicy),
   };
 }
 
@@ -335,6 +374,9 @@ export async function getProfilePage(viewerId: string, idParam: string, postsLim
     getAuthorWall(viewerId, target.id, postsLimit),
     getStoriesByAuthorId(target.id, viewerId),
   ]);
+  if (viewerId !== target.id) {
+    void recordProfilePageView(viewerId, target.id);
+  }
   return { profile, posts: profilePosts, stories: profileStories };
 }
 
@@ -360,14 +402,30 @@ export async function followUser(viewerId: string, targetUserId: string): Promis
   if (!target || target.deletedAt || target.isBlocked) {
     throw new UsersServiceError(404, "Пользователь не найден");
   }
-  await storage.addFollow(viewerId, targetUserId);
+  const followInserted = await storage.addFollow(viewerId, targetUserId);
   await storage.addContact(viewerId, targetUserId);
   notifyFollow(targetUserId, viewerId).catch((e) => console.error("[users] notify follow:", e));
+  if (followInserted) {
+    const { scheduleEdgeFollowReward } = await import("./edge-follow-hook");
+    scheduleEdgeFollowReward(viewerId, targetUserId);
+  }
 }
 
 export async function unfollowUser(viewerId: string, targetUserId: string): Promise<void> {
   if (!targetUserId) throw new UsersServiceError(400, "userId не указан");
   await storage.removeFollow(viewerId, targetUserId);
+}
+
+/** Владелец профиля убирает пользователя из своих подписчиков (не блокирует). */
+export async function removeMyFollower(ownerId: string, followerUserId: string): Promise<void> {
+  if (!followerUserId || followerUserId === ownerId) {
+    throw new UsersServiceError(400, "Некорректный пользователь");
+  }
+  const isFollower = await storage.isFollowing(followerUserId, ownerId);
+  if (!isFollower) {
+    throw new UsersServiceError(404, "Этот пользователь не подписан на вас");
+  }
+  await storage.removeFollow(followerUserId, ownerId);
 }
 
 export async function getFollowersList(targetUserId: string, limit: number, offset: number) {
@@ -382,6 +440,7 @@ export async function blockUser(
   blockerId: string,
   blockedId: string,
   flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+  note?: string | null,
 ): Promise<void> {
   if (!blockedId || blockedId === blockerId) {
     throw new UsersServiceError(400, "Нельзя заблокировать себя");
@@ -390,7 +449,7 @@ export async function blockUser(
   if (!target || target.deletedAt) {
     throw new UsersServiceError(404, "Пользователь не найден");
   }
-  await storage.addBlock(blockerId, blockedId, flags);
+  await storage.addBlock(blockerId, blockedId, flags, note);
 }
 
 export async function unblockUser(blockerId: string, blockedId: string): Promise<void> {

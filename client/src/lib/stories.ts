@@ -130,15 +130,39 @@ export type StoriesFeedAuthor = {
   latestStoryAt?: string | null;
   hasUnseen?: boolean;
   unseenCount?: number;
-  activityScore?: number;
   stories: StoryItem[];
 };
 
+export type StoriesFeedPage = {
+  authors: StoriesFeedAuthor[];
+  nextOffset: number;
+  hasMore: boolean;
+};
+
+const STORIES_FEED_DEFAULT_LIMIT = 18;
+
+/** Пачка ленты сториз (пагинация по авторам). */
+export async function fetchStoriesFeedPage(params?: { limit?: number; offset?: number }): Promise<StoriesFeedPage> {
+  const sp = new URLSearchParams();
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  if (params?.offset != null) sp.set("offset", String(params.offset));
+  const q = sp.toString();
+  const res = await apiFetch(`${API}/stories/feed${q ? `?${q}` : ""}`, { cache: "no-store" });
+  if (!res.ok) return { authors: [], nextOffset: 0, hasMore: false };
+  const data: unknown = await res.json();
+  if (data && typeof data === "object" && Array.isArray((data as StoriesFeedPage).authors)) {
+    return data as StoriesFeedPage;
+  }
+  if (Array.isArray(data)) {
+    return { authors: data as StoriesFeedAuthor[], nextOffset: data.length, hasMore: false };
+  }
+  return { authors: [], nextOffset: 0, hasMore: false };
+}
+
+/** Первая страница ленты (удобно для простых экранов). */
 export async function fetchStoriesFeed(): Promise<StoriesFeedAuthor[]> {
-  const res = await apiFetch(`${API}/stories/feed`, { cache: "no-store" });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  const page = await fetchStoriesFeedPage({ limit: STORIES_FEED_DEFAULT_LIMIT, offset: 0 });
+  return page.authors;
 }
 
 /** Записать просмотр сториз (идемпотентно) */

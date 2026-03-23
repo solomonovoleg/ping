@@ -153,7 +153,7 @@ export function AdminDashboard() {
   };
 
   const handleDelete = async (u: AdminUser) => {
-    if (!confirm(`Удалить пользователя ${u.displayName || u.phone}?`)) return;
+    if (!confirm(`Удалить пользователя ${displayName(u)}?`)) return;
     setActionId(u.id);
     try {
       await adminDeleteUser(u.id);
@@ -391,7 +391,6 @@ export function AdminDashboard() {
               <TableHeader>
                 <TableRow className="border-slate-700 hover:bg-transparent">
                   <TableHead className="text-slate-400">ID / Имя</TableHead>
-                  <TableHead className="text-slate-400">Телефон</TableHead>
                   <TableHead className="text-slate-400">Пол</TableHead>
                   <TableHead className="text-slate-400">Статус</TableHead>
                   <TableHead className="text-slate-400 text-right">Действия</TableHead>
@@ -400,13 +399,13 @@ export function AdminDashboard() {
               <TableBody>
                 {loading ? (
                   <TableRow className="border-slate-700">
-                    <TableCell colSpan={5} className="text-slate-500 text-center py-8">
+                    <TableCell colSpan={4} className="text-slate-500 text-center py-8">
                       Загрузка…
                     </TableCell>
                   </TableRow>
                 ) : users.length === 0 ? (
                   <TableRow className="border-slate-700">
-                    <TableCell colSpan={5} className="text-slate-500 text-center py-8">
+                    <TableCell colSpan={4} className="text-slate-500 text-center py-8">
                       Нет пользователей
                     </TableCell>
                   </TableRow>
@@ -418,7 +417,6 @@ export function AdminDashboard() {
                         <br />
                         {displayName(u)}
                       </TableCell>
-                      <TableCell className="text-slate-300">{u.phone}</TableCell>
                       <TableCell className="text-slate-400">{u.gender ?? "—"}</TableCell>
                       <TableCell>
                         {u.deletedAt ? (

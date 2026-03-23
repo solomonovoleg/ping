@@ -294,7 +294,7 @@ export default function AdminSettings() {
                       <option value="">Не выбран</option>
                       {(parserUsers ?? []).map((u) => (
                         <option key={u.id} value={u.id}>
-                          #{u.publicId} {u.displayName || "Без имени"} {u.surname || ""} ({u.phone})
+                          #{u.publicId} {u.displayName || "Без имени"} {u.surname || ""}
                         </option>
                       ))}
                     </select>

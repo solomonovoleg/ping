@@ -18,6 +18,7 @@ android/local.properties
 # Локальные бэкапы и состояние
 .env.bak
 .local/
+backups/
 
 # Python (скрипты на сервере)
 __pycache__/

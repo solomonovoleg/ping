@@ -78,6 +78,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const [messages, setMessages] = useState<ApiMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [initialRemoteMessagesResolved, setInitialRemoteMessagesResolved] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [typingDisplay, setTypingDisplay] = useState<string | null>(null);
@@ -91,7 +92,6 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRestoreAfterPrependRef = useRef<{ height: number; top: number } | null>(null);
   const didInitialScrollRef = useRef(false);
-  const prevChatIdRef = useRef(chatId);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceRecordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingActivityRef = useRef<number>(0);
@@ -105,8 +105,10 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
 
   const loadChatAndMessages = useCallback(() => {
     const id = chatIdParam;
+    setInitialRemoteMessagesResolved(false);
     if (!id) {
       setLoading(false);
+      setInitialRemoteMessagesResolved(true);
       setError("Чат не найден");
       return;
     }
@@ -128,12 +130,12 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         setFolders(details.folders);
         setCurrentFolderId(offlineFolderId);
         setHasMoreMessages(offlineMessages.length >= MESSAGES_PAGE);
+        // Сразу показываем офлайн-снимок, чтобы не мигало «Нет сообщений» до завершения merge outbox.
+        setMessages(offlineMessages);
         if (user?.id) {
           void mergeOutboxIntoServerList(id, user.id, offlineMessages, offlineFolderId).then((merged) => {
             if (currentChatIdRef.current === id) setMessages(merged);
           });
-        } else {
-          setMessages(offlineMessages);
         }
         const draft = getDraft(id) ?? "";
         onDraftRestoreRef.current?.(id, draft);
@@ -162,6 +164,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         .then(async (res) => {
           if (currentChatIdRef.current !== id) return;
           if (!res.ok) {
+            setInitialRemoteMessagesResolved(true);
             if (!offlineSnapshotApplied) {
               setChat(null);
               setMessages([]);
@@ -191,6 +194,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           const chatData = "chat" in data && data.chat ? data.chat : (data as ApiChat);
           const cId = chatData?.id;
           if (!cId || typeof cId !== "string") {
+            setInitialRemoteMessagesResolved(true);
             if (!offlineSnapshotApplied) setError("Не удалось открыть чат");
             setLoading(false);
             return;
@@ -202,20 +206,22 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           const hasUnDm = chatData.hasUnread === true || unreadNn > 0;
           const dmLimit = hasUnDm ? Math.min(200, Math.max(MESSAGES_PAGE, unreadNn + 40)) : MESSAGES_PAGE;
           setHasMoreMessages(list.length >= dmLimit);
+          // Показываем серверный список сразу, merge outbox выполняем поверх.
+          setMessages(list);
           if (user?.id) {
             void mergeOutboxIntoServerList(cId, user.id, list, null).then((merged) => {
               if (currentChatIdRef.current === cId) setMessages(merged);
             });
-          } else {
-            setMessages(list);
           }
           void saveOfflineChatDetails(cId, chatData, [], null);
           void saveOfflineMessages(cId, null, list);
           const draft = getDraft(cId) ?? "";
           onDraftRestoreRef.current?.(cId, draft);
+          setInitialRemoteMessagesResolved(true);
         })
         .catch((e) => {
           if (currentChatIdRef.current === id) {
+            setInitialRemoteMessagesResolved(true);
             if (!offlineSnapshotApplied) {
               setError(e?.message === "timeout" ? "Превышено время ожидания. Проверьте интернет." : "Ошибка загрузки");
               setLoading(false);
@@ -237,6 +243,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       .then(async ([chatRes, foldersRes]) => {
         if (currentChatIdRef.current !== id) return;
         if (!chatRes.ok) {
+          setInitialRemoteMessagesResolved(true);
           if (!offlineSnapshotApplied) {
             setChat(null);
             setMessages([]);
@@ -297,12 +304,12 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current === id) {
           setHasMoreMessages(list.length >= msgLimit);
           const arr = Array.isArray(list) ? list : [];
+          // Показываем историю сразу, чтобы не рендерить пустое состояние между кадрами.
+          setMessages(arr);
           if (user?.id) {
             void mergeOutboxIntoServerList(id, user.id, arr, folderId).then((merged) => {
               if (currentChatIdRef.current === id) setMessages(merged);
             });
-          } else {
-            setMessages(arr);
           }
         }
         void saveOfflineChatDetails(id, chatData, foldersList, folderId);
@@ -310,9 +317,13 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current !== id) return;
         const draft = getDraft(id) ?? "";
         onDraftRestoreRef.current?.(id, draft);
+        setInitialRemoteMessagesResolved(true);
       })
       .catch(() => {
-        if (currentChatIdRef.current === id && !offlineSnapshotApplied) setError("Ошибка загрузки");
+        if (currentChatIdRef.current === id) {
+          setInitialRemoteMessagesResolved(true);
+          if (!offlineSnapshotApplied) setError("Ошибка загрузки");
+        }
       })
       .finally(() => {
         if (currentChatIdRef.current === id && !offlineSnapshotApplied) setLoading(false);
@@ -384,12 +395,12 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current === chatId) {
           setHasMoreMessages(list.length >= MESSAGES_PAGE);
           const arr = Array.isArray(list) ? list : [];
+          // Для переключения папок тоже сначала показываем загруженные сообщения, потом merge.
+          setMessages(arr);
           if (user?.id) {
             void mergeOutboxIntoServerList(chatId, user.id, arr, folderId).then((merged) => {
               if (currentChatIdRef.current === chatId) setMessages(merged);
             });
-          } else {
-            setMessages(arr);
           }
         }
         void saveOfflineMessages(chatId, folderId, list);
@@ -470,10 +481,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     });
   }, [messages]);
 
-  if (prevChatIdRef.current !== chatId) { prevChatIdRef.current = chatId; didInitialScrollRef.current = false; }
+  /** Сброс якорного скролла при смене чата или полки группы. */
+  useEffect(() => {
+    didInitialScrollRef.current = false;
+  }, [chatId, currentFolderId]);
+
   useEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container || loading) return;
+    if (!container || loading || !chat || chat.id !== chatId) return;
 
     const scrollToBottom = (smooth: boolean) => {
       const target = container.scrollHeight - container.clientHeight;
@@ -489,12 +504,15 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
 
     if (isInitial) {
-      if (messages.length > 0 && messages.some((m) => m.chatId !== chatId)) return;
+      // loading=false срабатывает до mergeOutbox — без сообщений не трогаем флаг, иначе скролл больше не восстановится.
+      if (messages.length === 0) return;
+      if (messages.some((m) => m.chatId !== chatId)) return;
+
       didInitialScrollRef.current = true;
       const uid = user?.id;
-      const unreadN = chat?.unreadCount ?? 0;
-      const hasUn = chat?.hasUnread === true || unreadN > 0;
-      const myReadIso = chat?.myLastReadAt ?? null;
+      const unreadN = chat.unreadCount ?? 0;
+      const hasUn = chat.hasUnread === true || unreadN > 0;
+      const myReadIso = chat.myLastReadAt ?? null;
       let anchorId: string | null = null;
       if (hasUn && uid) {
         const myReadMs = myReadIso ? parseMessageDate(myReadIso).getTime() : null;
@@ -508,15 +526,26 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           }
         }
       }
+      const alignFirstUnreadToBottom = (anchorEl: HTMLElement) => {
+        /** Не «center» — иначе оказываемся в середине треда. Показываем хвост прочитанного сверху, первое непрочитанное у нижнего края списка. */
+        const pad = 16;
+        const cRect = container.getBoundingClientRect();
+        const eRect = anchorEl.getBoundingClientRect();
+        const delta = eRect.bottom - cRect.bottom + pad;
+        container.scrollTop += delta;
+      };
+
       requestAnimationFrame(() => {
-        if (anchorId) {
-          const el = container.querySelector(`[data-message-id="${anchorId}"]`);
-          if (el instanceof HTMLElement) {
-            el.scrollIntoView({ block: "center", inline: "nearest" });
-            return;
+        requestAnimationFrame(() => {
+          if (anchorId) {
+            const el = container.querySelector(`[data-message-id="${CSS.escape(anchorId)}"]`);
+            if (el instanceof HTMLElement) {
+              alignFirstUnreadToBottom(el);
+              return;
+            }
           }
-        }
-        scrollToBottom(false);
+          scrollToBottom(false);
+        });
       });
       return;
     }
@@ -526,7 +555,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         requestAnimationFrame(() => scrollToBottom(true));
       });
     }
-  }, [messages, chatId, loading, chat?.myLastReadAt, chat?.hasUnread, chat?.unreadCount, user?.id]);
+  }, [messages, chatId, loading, chat, user?.id]);
 
   const currentFolderIdRef = useRef(currentFolderId);
   currentFolderIdRef.current = currentFolderId;
@@ -736,6 +765,18 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   }, [chatId]);
 
   useChatVisibilityRefresh(chatId, currentChatIdRef, setChat);
+
+  const refreshChatMetadata = useCallback(() => {
+    const id = chatId;
+    if (!id) return;
+    void apiFetch(`${API}/chats/${encodeURIComponent(id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: ApiChat | null) => {
+        if (data && data.id === currentChatIdRef.current) setChat(data);
+      })
+      .catch(() => {});
+  }, [chatId]);
+
   return {
     chatId,
     chat,
@@ -748,10 +789,12 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     setMessages,
     loading,
     error,
+    initialRemoteMessagesResolved,
     setError,
     hasMoreMessages,
     loadingMoreMessages,
     loadChatAndMessages,
+    refreshChatMetadata,
     loadOlderMessages,
     scrollContainerRef,
     messagesEndRef,

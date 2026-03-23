@@ -21,7 +21,7 @@ function detectIntent(text: string): PingokMicroIntent {
     return "plan";
   }
 
-  if (/(?:задач|to do|todo|сделать|нужно)/i.test(t)) {
+  if (/(?:задач|to do|todo|сделать|нужно|\bтрек\b|в\s+трек|запиши\s+в\s+трек)/i.test(t)) {
     return "task";
   }
 

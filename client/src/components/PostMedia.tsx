@@ -38,6 +38,8 @@ function SinglePostMedia({
   feedVideoSoundOn = false,
   feedReelsInteraction = null,
   cropCover = false,
+  /** Лента с виртуализацией: без native lazy — иначе кадр с чёрным фоном до позднего старта загрузки */
+  eagerImages = false,
 }: {
   url: string;
   isVideo: boolean;
@@ -50,6 +52,7 @@ function SinglePostMedia({
   feedReelsInteraction?: FeedReelsInteraction | null;
   /** Лента/профиль: обрезка по рамке, без искажения пропорций */
   cropCover?: boolean;
+  eagerImages?: boolean;
 }) {
   const [ready, setReady] = useState(false);
   const [intrinsic, setIntrinsic] = useState<{ w: number; h: number } | null>(null);
@@ -114,8 +117,9 @@ function SinglePostMedia({
                 <img
                   src={url}
                   alt=""
-                  loading="lazy"
+                  loading={eagerImages ? "eager" : "lazy"}
                   decoding="async"
+                  fetchPriority={eagerImages ? "high" : undefined}
                   className={coverMediaClass}
                   onLoad={onImgLoadCrop}
                 />
@@ -158,8 +162,9 @@ function SinglePostMedia({
       <img
         src={url}
         alt=""
-        loading="lazy"
+        loading={eagerImages ? "eager" : "lazy"}
         decoding="async"
+        fetchPriority={eagerImages ? "high" : undefined}
         className={naturalMediaClass}
         style={naturalStyle}
         onLoad={() => setReady(true)}
@@ -189,6 +194,8 @@ type PostMediaProps = {
    * Включается вместе с edgeToEdge в ленте и профиле.
    */
   singleMediaCropCover?: boolean;
+  /** Лента: сразу запрашивать изображения (виртуализация уже ограничивает DOM). */
+  feedEagerImages?: boolean;
 };
 
 /**
@@ -209,6 +216,7 @@ export function PostMedia({
   feedVideoSoundOn = false,
   feedReelsInteraction = null,
   singleMediaCropCover,
+  feedEagerImages = false,
 }: PostMediaProps) {
   const cropSingle = singleMediaCropCover ?? edgeToEdge;
   if (!mediaUrls.length) return null;
@@ -274,6 +282,7 @@ export function PostMedia({
           feedVideoSoundOn={feedVideoSoundOn}
           feedReelsInteraction={feedReelsInteraction}
           cropCover={cropSingle}
+          eagerImages={feedEagerImages}
         />
         {renderAudioList()}
       </>
@@ -292,7 +301,14 @@ export function PostMedia({
               {isVideoUrl(url) ? (
                 renderCollageVideo(url, "w-full h-full object-cover")
               ) : (
-                <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                <img
+                  src={url}
+                  alt=""
+                  loading={feedEagerImages ? "eager" : "lazy"}
+                  decoding="async"
+                  fetchPriority={feedEagerImages ? "high" : undefined}
+                  className="w-full h-full object-cover"
+                />
               )}
             </div>
           ))}
@@ -311,7 +327,14 @@ export function PostMedia({
             {isVideoUrl(visual[0]) ? (
               renderCollageVideo(visual[0], "w-full h-full object-cover")
             ) : (
-              <img src={visual[0]} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+              <img
+                src={visual[0]}
+                alt=""
+                loading={feedEagerImages ? "eager" : "lazy"}
+                decoding="async"
+                fetchPriority={feedEagerImages ? "high" : undefined}
+                className="w-full h-full object-cover"
+              />
             )}
           </div>
           <div className={cn("w-1/3 flex flex-col", collageGap)}>
@@ -320,7 +343,14 @@ export function PostMedia({
                 {isVideoUrl(url) ? (
                   renderCollageVideo(url, "w-full h-full object-cover")
                 ) : (
-                  <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                  <img
+                    src={url}
+                    alt=""
+                    loading={feedEagerImages ? "eager" : "lazy"}
+                    decoding="async"
+                    fetchPriority={feedEagerImages ? "high" : undefined}
+                    className="w-full h-full object-cover"
+                  />
                 )}
               </div>
             ))}
@@ -341,7 +371,14 @@ export function PostMedia({
               {isVideoUrl(url) ? (
                 renderCollageVideo(url, "w-full h-full object-cover")
               ) : (
-                <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                <img
+                  src={url}
+                  alt=""
+                  loading={feedEagerImages ? "eager" : "lazy"}
+                  decoding="async"
+                  fetchPriority={feedEagerImages ? "high" : undefined}
+                  className="w-full h-full object-cover"
+                />
               )}
             </div>
           ))}
@@ -361,7 +398,14 @@ export function PostMedia({
             {isVideoUrl(url) ? (
               renderCollageVideo(url, "w-full h-full object-cover")
             ) : (
-              <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+              <img
+              src={url}
+              alt=""
+              loading={feedEagerImages ? "eager" : "lazy"}
+              decoding="async"
+              fetchPriority={feedEagerImages ? "high" : undefined}
+              className="w-full h-full object-cover"
+            />
             )}
           </div>
         ))}
@@ -369,7 +413,14 @@ export function PostMedia({
           {isVideoUrl(visual[4]) ? (
             renderCollageVideo(visual[4], "w-full h-full object-cover")
           ) : (
-            <img src={visual[4]} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+            <img
+              src={visual[4]}
+              alt=""
+              loading={feedEagerImages ? "eager" : "lazy"}
+              decoding="async"
+              fetchPriority={feedEagerImages ? "high" : undefined}
+              className="w-full h-full object-cover"
+            />
           )}
           {rest > 0 && (
             <span className="absolute inset-0 flex items-center justify-center bg-black/55 text-white text-xl font-bold tabular-nums backdrop-blur-[1px]">

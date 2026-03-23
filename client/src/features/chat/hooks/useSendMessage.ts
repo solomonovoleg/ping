@@ -423,15 +423,11 @@ export function useSendMessage({ chatId, folderId, setMessages, user }: UseSendM
     [chatId, folderId, user, setMessages, toast]
   );
 
-  const insertMentionAtPosition = useCallback(
-    (start: number, end: number, text: string): number => {
-      const newMsg = message.slice(0, start) + text + message.slice(end);
-      const newCursor = start + text.length;
-      setMessage(newMsg);
-      return newCursor;
-    },
-    [message]
-  );
+  const insertMentionAtPosition = useCallback((start: number, end: number, text: string): number => {
+    const newCursor = start + text.length;
+    setMessage((prev) => prev.slice(0, start) + text + prev.slice(end));
+    return newCursor;
+  }, []);
 
   const handleKeyPress = useCallback(
     (e: React.KeyboardEvent) => {

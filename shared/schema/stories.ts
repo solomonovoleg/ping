@@ -13,6 +13,10 @@ export const stories = pgTable("stories", {
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" })
     .notNull()
     .default(sql`(now() + interval '24 hours')`),
+  /** Буст от лайка (короткое окно). */
+  feedBoostLikeAt: timestamp("feed_boost_like_at", { withTimezone: true, mode: "date" }),
+  /** Буст от ответа на сториз в чате (длиннее). */
+  feedBoostReplyAt: timestamp("feed_boost_reply_at", { withTimezone: true, mode: "date" }),
 });
 
 export type Story = typeof stories.$inferSelect;

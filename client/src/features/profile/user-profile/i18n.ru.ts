@@ -69,6 +69,8 @@ export const userProfileRu = {
   moreSheet: {
     copyLink: "Скопировать ссылку",
     settings: "Настройки",
+    blockUser: "Заблокировать",
+    unblockUser: "Снять блокировку",
     close: "Закрыть",
     ariaProfileActions: "Действия профиля",
   },
@@ -90,8 +92,38 @@ export const userProfileRu = {
   },
   follow: {
     loading: "…",
-    followingLabel: "Подписки",
+    /** Кнопка после подписки (было «Подписки» — путали с разделом подписок). */
+    followingLabel: "Вы подписаны",
+    mutualLabel: "Взаимно",
     follow: "Подписаться",
     message: "Написать",
+  },
+  analyticsSheet: {
+    title: "Статистика профиля",
+    subtitle: "Данные с сервера. «Сегодня» — с полуночи по времени сервера.",
+    loadError: "Не удалось загрузить",
+    retry: "Повторить",
+    footnotePostStory:
+      "Посты и сторис: в базе один зарегистрированный зритель учитывается один раз на каждый пост или сторис. «Всего просмотров» — число таких отметок; «уникальных зрителей» — сколько разных людей смотрели хотя бы один ваш пост или сторис.",
+    footnoteProfile:
+      "Посещения профиля считаются с момента обновления приложения: каждое открытие вашей страницы другим пользователем добавляет строку; повторные заходы того же человека увеличивают «всего».",
+    sectionProfile: "Посещения профиля",
+    profileTotal: "Всего заходов",
+    profileUnique: "Уникальных посетителей",
+    profileTodayTotal: "Заходов сегодня",
+    profileTodayUnique: "Уникальных сегодня",
+    sectionPosts: "Просмотры постов",
+    postTotal: "Всего отметок просмотра",
+    postUnique: "Уникальных зрителей",
+    sectionStories: "Просмотры сториз",
+    storyTotal: "Всего отметок просмотра",
+    storyUnique: "Уникальных зрителей",
+    sectionFollowers: "Новые подписчики",
+    followersToday: "Сегодня",
+    followers7d: "За 7 дней",
+    sectionActivity: "Активность на ваших постах (7 дней)",
+    activityReactions: "Реакции",
+    activityComments: "Комментарии",
+    activityShares: "Отправки поста в чат (шары)",
   },
 } as const;

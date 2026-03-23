@@ -7,22 +7,25 @@ const WINDOW_MS = 60_000;
 
 /**
  * Два независимых счётчика на ключ (IP / userId):
- * - **read** — только GET: высокий потолок (чат, уведомления, нервные обновления страницы).
+ * - **read** — только GET: высокий потолок (чат, уведомления, частые обновления как в мессенджерах).
  * - **mutation** — POST/PUT/PATCH/DELETE: умеренный потолок (спам действий).
+ *
+ * Один полный перезагруз SPA легко даёт 50–150 параллельных GET; за минуту несколько F5 + фоновые
+ * поллинги не должны упираться в 429. Жёсткий анти-DDoS — на nginx/CDN; здесь защита от грубого перебора.
  */
-/** Неавторизованные GET: по IP. */
-const LIMIT_ANON_READ_NORMAL = 480;
-const LIMIT_ANON_READ_STRICT = 200;
-/** Авторизованные GET: по userId — десятки параллельных запросов при одном F5 не упираются в 429. */
-const LIMIT_AUTH_READ_NORMAL = 5000;
-const LIMIT_AUTH_READ_STRICT = 2200;
+/** Неавторизованные GET: по IP (офисный NAT, мобильная сеть — общий IP у многих). */
+const LIMIT_ANON_READ_NORMAL = 6000;
+const LIMIT_ANON_READ_STRICT = 2500;
+/** Авторизованные GET: по userId. */
+const LIMIT_AUTH_READ_NORMAL = 12000;
+const LIMIT_AUTH_READ_STRICT = 6000;
 
 /** Неавторизованные мутации: по IP. */
-const LIMIT_ANON_MUTATION_NORMAL = 1200;
-const LIMIT_ANON_MUTATION_STRICT = 500;
+const LIMIT_ANON_MUTATION_NORMAL = 4000;
+const LIMIT_ANON_MUTATION_STRICT = 1500;
 /** Авторизованные мутации: по userId. */
-const LIMIT_AUTH_MUTATION_NORMAL = 4500;
-const LIMIT_AUTH_MUTATION_STRICT = 1800;
+const LIMIT_AUTH_MUTATION_NORMAL = 8000;
+const LIMIT_AUTH_MUTATION_STRICT = 4000;
 
 const HISTORY_MINUTES = 90;
 const buckets = new Map<
@@ -108,7 +111,9 @@ function shieldSkipPath(path: string): boolean {
   return false;
 }
 
-const SHIELD_MSG = { message: "Слишком много запросов. Подождите минуту и попробуйте снова." };
+const SHIELD_MSG = {
+  message: "Слишком много запросов за короткое время. Подождите около минуты и обновите страницу.",
+};
 
 function createShieldHandler() {
   return (req: Request, res: Response, _next: NextFunction, options: { statusCode: number; message: unknown }) => {

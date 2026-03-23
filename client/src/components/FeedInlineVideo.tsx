@@ -69,7 +69,7 @@ export function FeedInlineVideo({
         const e = entries[0];
         setPreloadAhead(!!e?.isIntersecting);
       },
-      { root, rootMargin: "85% 0px 85% 0px", threshold: 0 },
+      { root, rootMargin: "100% 0px 100% 0px", threshold: 0 },
     );
     observer.observe(el);
     return () => observer.disconnect();

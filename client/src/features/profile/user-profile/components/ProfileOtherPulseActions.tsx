@@ -1,14 +1,17 @@
+import { UserPlus, UserCheck } from "lucide-react";
 import { usePulseProfileTheme } from "@/features/profile/pulse-profile";
 import { userProfileRu } from "../i18n.ru";
 
 export function ProfileOtherPulseActions({
   isFollowing,
+  isMutualFollow,
   followLoading,
   onFollow,
   onMessage,
   canMessage,
 }: {
   isFollowing: boolean;
+  isMutualFollow?: boolean;
   followLoading: boolean;
   onFollow: () => void;
   onMessage: () => void;
@@ -16,21 +19,27 @@ export function ProfileOtherPulseActions({
 }) {
   const { th } = usePulseProfileTheme();
   const f = userProfileRu.follow;
+  const showMutual = isFollowing && isMutualFollow;
   return (
     <div className="flex gap-2">
       <button
         type="button"
         onClick={onFollow}
         disabled={followLoading}
-        className="flex-1 flex items-center justify-center rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-transform disabled:opacity-60"
+        className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-all duration-150 disabled:opacity-60"
         style={{
           height: 40,
-          background: isFollowing ? th.surface : th.accentDim,
-          border: `1px solid ${isFollowing ? th.border : th.accentBorder}`,
+          background: isFollowing ? `${th.accent}18` : th.accentDim,
+          border: `1px solid ${isFollowing ? th.accent : th.accentBorder}`,
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: isFollowing ? th.text : th.accent }}>
-          {followLoading ? f.loading : isFollowing ? f.followingLabel : f.follow}
+        {followLoading ? null : isFollowing ? (
+          <UserCheck className="h-4 w-4 shrink-0" style={{ color: th.accent }} strokeWidth={2.5} aria-hidden />
+        ) : (
+          <UserPlus className="h-4 w-4 shrink-0" style={{ color: th.accent }} strokeWidth={2.25} aria-hidden />
+        )}
+        <span style={{ fontSize: 13, fontWeight: 700, color: isFollowing ? th.accent : th.accent }}>
+          {followLoading ? f.loading : showMutual ? f.mutualLabel : isFollowing ? f.followingLabel : f.follow}
         </span>
       </button>
       <button

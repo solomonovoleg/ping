@@ -32,9 +32,11 @@ import { LocalRecordingController } from "./utils/local-recording";
 import { createReaction, trimReactionQueue } from "./utils/live-reactions";
 import { LiveCaptionsController } from "./utils/live-captions";
 import { DISABLED_CALL_FEATURE_SUPPORT } from "./call-feature-modules";
+import { applyCallAudioOutputRoute } from "@/lib/call-audio-route";
 
 type StateChangeListener = (snapshot: CallControllerSnapshot) => void;
 const RESUME_REJOIN_TIMEOUT_MS = 45_000;
+const PEER_DISCONNECTED_GRACE_MS = 2_500;
 
 export interface CallControllerSnapshot {
   state: CallState;
@@ -66,6 +68,8 @@ export interface CallControllerSnapshot {
   otherAvatarUrl: string | null;
   chatId: string | null;
   callMessageContext: CallMessageListContext;
+  /** Голосовой звонок: true = громкая связь, false = разговорный динамик (только натив). */
+  audioOutputSpeaker: boolean;
 }
 
 /**
@@ -129,7 +133,24 @@ export class CallController {
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private idleResetTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Не спамить call.connected для одного callId. */
+  private reportedConnectedCallId: string | null = null;
+  /** Инкремент при cleanupFull — отменяет хвост очереди resume/reneg. */
+  private resumeGeneration = 0;
+  /** Последовательная обработка resume (несколько resume-available подряд ломали SDP/ICE). */
+  private resumeWorkChain: Promise<void> = Promise.resolve();
+  /** Дебаунс call.resume-check при двойном onTransportConnected. */
+  private resumeCheckDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Не слать resume-check чаще (два открытия WS подряд → лишний peer-reconnected / reneg у собеседника). */
+  private resumeCheckCooldownUntil = 0;
+  /** Не слать второй offer сразу после первого при том же callId. */
+  private lastRenegotiateOfferAtMs = 0;
+  private lastRenegotiateOfferCallId: string | null = null;
+  /** Один за другим: resume и peer-reconnected не должны параллельно делать recreatePeer. */
+  private renegotiateTail: Promise<void> = Promise.resolve();
   private destroyed = false;
+  /** По умолчанию громкая связь для audio-only (на телефоне). */
+  private _audioOutputSpeaker = true;
 
   private listeners = new Set<StateChangeListener>();
 
@@ -138,6 +159,19 @@ export class CallController {
     private myUserId: string,
   ) {
     this.signaling.onEvent((ev) => this.onServerEvent(ev));
+  }
+
+  private logStateTransition(from: CallState, to: CallState, meta?: Record<string, unknown>): void {
+    if (from === to) return;
+    /** До `acceptCall` у входящего `callId` лежит в `_incoming`, а не в `_callId`. */
+    const effectiveCallId = this._callId ?? this._incoming?.callId ?? null;
+    console.info("[call] state_transition", {
+      callId: effectiveCallId,
+      from,
+      to,
+      direction: this._direction,
+      ...meta,
+    });
   }
 
   // ── Public API ─────────────────────────────────────────────────
@@ -172,10 +206,12 @@ export class CallController {
     this._direction = "outgoing";
     this._error = null;
     this._statusText = null;
-    this.setState("outgoing_ringing");
+    this._audioOutputSpeaker = mediaType === "audio";
+    this.setState("initializing");
 
     try {
       await this.ensurePeer(mediaType);
+      this.setState("outgoing_ringing");
 
       this.signaling.send({
         type: "call.invite",
@@ -233,11 +269,16 @@ export class CallController {
     this._incoming = null;
     this._error = null;
     this._statusText = null;
+    this._audioOutputSpeaker = info.mediaType === "audio";
     this.setState("accepting");
 
+    /** Важно: не слать call.accept до getUserMedia + PeerConnection. Иначе сервер и звонящий
+     * переходят в «соединяется», а ответа SDP ещё нет — плюс при отказе камеры accept уже ушёл. */
+    let serverNotifiedAccepted = false;
     try {
-      this.signaling.send({ type: "call.accept", callId: info.callId });
       await this.ensurePeer(info.mediaType);
+      this.signaling.send({ type: "call.accept", callId: info.callId });
+      serverNotifiedAccepted = true;
       this.setState("connecting");
 
       // Apply buffered offer/ICE that arrived while we had no peer
@@ -251,6 +292,11 @@ export class CallController {
         }
       }, CONNECT_TIMEOUT_MS);
     } catch (e) {
+      if (serverNotifiedAccepted && this._callId) {
+        this.signaling.send({ type: "call.hangup", callId: this._callId });
+      } else if (this._callId) {
+        this.signaling.send({ type: "call.reject", callId: this._callId, reason: "declined" });
+      }
       this._error = e instanceof Error ? mapMediaAccessError(e) : "Ошибка";
       this.endCallInternal("error");
     }
@@ -284,14 +330,26 @@ export class CallController {
       return;
     }
 
-    const eventType = this._state === "outgoing_ringing" ? "call.cancel" as const : "call.hangup" as const;
+    const eventType =
+      this._state === "outgoing_ringing" || this._state === "initializing"
+        ? ("call.cancel" as const)
+        : ("call.hangup" as const);
     this.signaling.send({ type: eventType, callId: this._callId });
-    this.endCallInternal("hangup");
+    /** Красная кнопка / отмена исходящего — сразу idle, без фантомного «восстановления». */
+    this.endCallInternal("hangup", { immediateIdle: true });
   }
 
   setMuted(muted: boolean): void {
     this._isMuted = muted;
     this.peer?.setMicEnabled(!muted);
+    this.notify();
+  }
+
+  /** Переключение динамика (только смысл при `mediaType === "audio"` и нативном приложении). */
+  setAudioOutputSpeaker(speaker: boolean): void {
+    if (this._mediaType !== "audio") return;
+    this._audioOutputSpeaker = speaker;
+    void applyCallAudioOutputRoute(speaker);
     this.notify();
   }
 
@@ -411,7 +469,18 @@ export class CallController {
   /** Call this when the WebSocket disconnects. */
   onTransportDisconnected(): void {
     if (!isActiveCallState(this._state)) return;
+    // На стадии дозвона это не "восстановление разговора": при кратком переподключении WS
+    // нельзя уводить UI в reconnecting, иначе следующий звонок выглядит как resume старого.
+    if (this._state === "initializing" || this._state === "outgoing_ringing" || this._state === "incoming_ringing") {
+      return;
+    }
     const pcState = this.peer?.getConnectionState() ?? null;
+    // Если media-канал уже живой, потеря только /calls WS не должна переключать звонок
+    // в reconnecting и показывать "восстановление соединения".
+    if (pcState === "connected" && this._state === "connected") {
+      console.info("[call-reconnect] ws closed but media still connected — keep connected state");
+      return;
+    }
     console.warn("[call-reconnect] ws closed during call", { uiState: this._state, peerConnectionState: pcState });
     this._statusText = "Связь потеряна. Пытаемся вернуть звонок…";
     if (this._state !== "reconnecting") {
@@ -435,8 +504,22 @@ export class CallController {
       this._statusText = "Соединение восстановлено. Возвращаем в звонок…";
       this.notify();
     }
-    console.info("[call-reconnect] ws open → resume-check");
-    this.signaling.send({ type: "call.resume-check" });
+    if (this.resumeCheckDebounce) clearTimeout(this.resumeCheckDebounce);
+    this.resumeCheckDebounce = setTimeout(() => {
+      this.resumeCheckDebounce = null;
+      if (this.destroyed) return;
+      /** Звонок уже завершён / не начат — не будить сервер resume-check (ложное «восстановление» в чате). */
+      if (!isActiveCallState(this._state)) return;
+      if (!this._callId && !this._incoming?.callId) return;
+      const now = Date.now();
+      const reconnecting = this._state === "reconnecting";
+      if (!reconnecting && now < this.resumeCheckCooldownUntil) {
+        return;
+      }
+      this.resumeCheckCooldownUntil = now + 2000;
+      console.info("[call-reconnect] ws open → resume-check");
+      this.signaling.send({ type: "call.resume-check" });
+    }, 320);
     if (this._state === "reconnecting") {
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
@@ -483,18 +566,40 @@ export class CallController {
       otherAvatarUrl: this._otherAvatarUrl,
       chatId: this._chatId,
       callMessageContext: this._callMessageContext,
+      audioOutputSpeaker: this._audioOutputSpeaker,
     };
   }
 
   subscribe(listener: StateChangeListener): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    try {
+      listener(this.getSnapshot());
+    } catch (e) {
+      console.error("[call-ctrl] listener error", e);
+    }
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   destroy(): void {
-    this.destroyed = true;
+    if (this.destroyed) return;
+    if (this.resumeCheckDebounce) {
+      clearTimeout(this.resumeCheckDebounce);
+      this.resumeCheckDebounce = null;
+    }
     this.cleanupFull();
+    const subs = [...this.listeners];
     this.listeners.clear();
+    const snap = this.getSnapshot();
+    this.destroyed = true;
+    for (const fn of subs) {
+      try {
+        fn(snap);
+      } catch (e) {
+        console.error("[call-ctrl] listener error", e);
+      }
+    }
   }
 
   // ── Server event handler ───────────────────────────────────────
@@ -546,6 +651,9 @@ export class CallController {
       case "call.peer-reconnected":
         this.handlePeerReconnected(event);
         break;
+      case "call.connected":
+        this.handleConnectedEvent(event);
+        break;
     }
   }
 
@@ -570,6 +678,7 @@ export class CallController {
       chatId: event.chatId,
       mediaType: event.mediaType,
     };
+    this._direction = "incoming";
     this.setState("incoming_ringing");
   }
 
@@ -674,7 +783,12 @@ export class CallController {
     if (this._incoming?.callId === event.callId) {
       this._incoming = null;
     }
-
+    const incomingRinging = this._state === "incoming_ringing";
+    if (event.type === "call.canceled" && incomingRinging) {
+      this._statusText = "Пропущенный звонок";
+      this.endCallInternal("timeout");
+      return;
+    }
     this.endCallInternal("hangup");
   }
 
@@ -690,8 +804,29 @@ export class CallController {
       this._incoming = null;
     }
 
-    this._error = this._direction === "outgoing" ? "Абонент не отвечает" : null;
+    this._statusText = this._direction === "incoming" ? "Пропущенный звонок" : "Недозвон";
+    this._error = null;
     this.endCallInternal("timeout");
+  }
+
+  private handleConnectedEvent(event: Extract<ServerCallEvent, { type: "call.connected" }>): void {
+    if (event.callId !== this._callId) return;
+    // Если сигнал accepted потерялся, но сервер прислал connected-подтверждение,
+    // выводим UI в "подключено" и гасим "вызов...".
+    this.stopRingback?.();
+    this.stopRingback = null;
+    this.clearTimer("ringTimer");
+    this.clearTimer("connectTimer");
+    this._statusText = null;
+    if (this._state === "outgoing_ringing") {
+      const next = tryTransition(this._state, "connecting");
+      this._state = next ?? forceTransition(this._state, "connecting");
+    }
+    if (this._state === "connecting" || this._state === "reconnecting") {
+      this.setState("connected");
+    } else {
+      this.notify();
+    }
   }
 
   private handleServerError(event: Extract<ServerCallEvent, { type: "call.error" }>): void {
@@ -758,10 +893,13 @@ export class CallController {
     this._otherAvatarUrl = event.fromAvatarUrl ?? null;
     this._chatId = event.chatId;
     this._mediaType = event.mediaType;
+    this._audioOutputSpeaker = event.mediaType === "audio";
     this._direction = "incoming";
     this._error = null;
     this._statusText = null;
+    const prev = this._state;
     this._state = forceTransition(this._state, "incoming_ringing");
+    this.logStateTransition(prev, this._state, { reason: "glare-merge" });
     this.stopIncomingAlert?.();
     this.stopIncomingAlert = startIncomingCallAlert(event.fromDisplayName);
     this.notify();
@@ -779,8 +917,13 @@ export class CallController {
     this.clearTimer("reconnectTimer");
     this._statusText = null;
     this._error = null;
+    const prev = this._state;
     const next = tryTransition(this._state, "connected");
     this._state = next ?? forceTransition(this._state, "connected");
+    this.logStateTransition(prev, this._state, { reason: "peer-stable-after-reconnect" });
+    if (this._mediaType === "audio") {
+      void applyCallAudioOutputRoute(this._audioOutputSpeaker);
+    }
     this.notify();
   }
 
@@ -792,15 +935,36 @@ export class CallController {
     console.info("[call-reconnect] resume-available", {
       callId: event.callId,
       shouldOffer: event.shouldInitiateOffer,
+      sessionState: event.sessionState,
       uiState: this._state,
       peerState: this.peer?.getConnectionState() ?? null,
     });
+
+    // WS подключился позже call.incoming: на сервере ещё ringing — показываем входящий, не «возврат в звонок».
+    if (this._state === "idle" && event.direction === "incoming" && event.sessionState === "ringing") {
+      this.stopIncomingAlert?.();
+      this.stopIncomingAlert = startIncomingCallAlert(event.otherDisplayName);
+      this._incoming = {
+        callId: event.callId,
+        fromUserId: event.otherUserId,
+        fromDisplayName: event.otherDisplayName,
+        fromAvatarUrl: event.otherAvatarUrl ?? null,
+        chatId: event.chatId,
+        mediaType: event.mediaType,
+      };
+      this._direction = "incoming";
+      this.setState("incoming_ringing");
+      return;
+    }
 
     if (this._incoming && !this._callId && event.callId === this._incoming.callId) {
       this._statusText = null;
       this.clearTimer("reconnectTimer");
       if (this._state === "reconnecting") {
+        const prev = this._state;
+        this._direction = "incoming";
         this._state = forceTransition(this._state, "incoming_ringing");
+        this.logStateTransition(prev, this._state, { reason: "resume-incoming-ringing" });
       }
       this.notify();
       return;
@@ -813,31 +977,119 @@ export class CallController {
       this._mediaType = event.mediaType;
       this._otherUserId = event.otherUserId;
       this._otherDisplayName = event.otherDisplayName;
+      this._otherAvatarUrl = event.otherAvatarUrl ?? null;
       this._direction = event.direction;
       this._error = null;
-      this._statusText = "Возвращаем в активный звонок…";
-      this._state = forceTransition(this._state, "reconnecting");
+      // Исходящий ещё звонит (например перезагрузка страницы) — не путать с ICE-reconnect.
+      if (event.direction === "outgoing" && event.sessionState === "ringing") {
+        this._statusText = null;
+        this.setState("outgoing_ringing");
+        this.stopRingback?.();
+        this.stopRingback = startRingbackTone();
+        this.clearTimer("ringTimer");
+        this.ringTimer = setTimeout(() => {
+          this.ringTimer = null;
+          if (this._state === "outgoing_ringing") {
+            this._error = "Абонент не отвечает";
+            this.endCallInternal("timeout");
+          }
+        }, RING_TIMEOUT_MS);
+      } else {
+        /** Сервер шлёт `sessionState: accepted` почти до конца звонка — для UI это «подключение», не обрыв медиа.
+         * Состояние только `reconnecting`: если поставить `connecting`, `inInitialNegotiation` срежет renegotiate у звонящего. */
+        const serverPastRing =
+          event.sessionState === "accepted" ||
+          event.sessionState === "connecting" ||
+          event.sessionState === "connected";
+        this._statusText = serverPastRing
+          ? "Подключаемся к звонку…"
+          : "Возвращаем в активный звонок…";
+        const prev = this._state;
+        const next = tryTransition(this._state, "reconnecting");
+        this._state = next ?? forceTransition(this._state, "reconnecting");
+        this.logStateTransition(prev, this._state, { reason: "resume-available-reconnect" });
+        this.clearTimer("connectTimer");
+        this.connectTimer = setTimeout(() => {
+          this.connectTimer = null;
+          if (this._state === "reconnecting") {
+            this._error = "Не удалось восстановить звонок. Завершите или наберите снова.";
+            this.endCallInternal("error");
+          }
+        }, CONNECT_TIMEOUT_MS);
+      }
       this.notify();
     }
-    this.ensurePeer(event.mediaType)
-      .then(async () => {
-        if (this._callId !== event.callId) return;
-        if (event.shouldInitiateOffer) {
-          if (this.peer?.getConnectionState() === "connected") {
-            this.syncCallUiWithPeerIfStable();
-            return;
-          }
-          await this.renegotiateAsCaller(event.callId);
-        } else {
-          this.signaling.send({ type: "call.resume-request", callId: event.callId });
+    const gen = this.resumeGeneration;
+    this.resumeWorkChain = this.resumeWorkChain
+      .then(() => this.runResumeMediaPipeline(event, gen))
+      .catch((e) => console.error("[call-ctrl] resume pipeline error", e));
+  }
+
+  private async runResumeMediaPipeline(
+    event: Extract<ServerCallEvent, { type: "call.resume-available" }>,
+    generation: number,
+  ): Promise<void> {
+    if (this.destroyed || generation !== this.resumeGeneration) return;
+    if (isTerminalState(this._state)) return;
+    if (this._callId !== event.callId) return;
+    try {
+      await this.ensurePeer(event.mediaType);
+    } catch (e) {
+      console.error("[call-ctrl] resume ensurePeer error", e);
+      if (this.destroyed || generation !== this.resumeGeneration) return;
+      this._error =
+        e instanceof Error ? mapMediaAccessError(e) : "Не удалось включить микрофон для восстановления звонка";
+      this.notify();
+      return;
+    }
+    if (this.destroyed || generation !== this.resumeGeneration) return;
+    if (this._callId !== event.callId) return;
+    const pcState = this.peer?.getConnectionState() ?? null;
+    /** WS часто шлёт второй onConnected → resume-check во время первичного SDP; recreatePeer срывает установку связи.
+     * Не трогаем outgoing_ringing — после перезагрузки страницы нужен новый offer. */
+    const inInitialNegotiation =
+      this.peer != null &&
+      pcState !== "failed" &&
+      pcState !== "closed" &&
+      (this._state === "connecting" || this._state === "accepting");
+    try {
+      if (event.shouldInitiateOffer) {
+        if (pcState === "connected") {
+          this.syncCallUiWithPeerIfStable();
+          return;
         }
-      })
-      .catch((e) => {
-        console.error("[call-ctrl] resume ensurePeer error", e);
-      })
-      .finally(() => {
-        this.syncCallUiWithPeerIfStable();
-      });
+        if (inInitialNegotiation) {
+          console.info("[call-reconnect] skip resume reneg during initial negotiation", {
+            uiState: this._state,
+            pcState,
+            callId: event.callId,
+          });
+          return;
+        }
+        const now = Date.now();
+        if (
+          this.lastRenegotiateOfferCallId === event.callId &&
+          now - this.lastRenegotiateOfferAtMs < 3500
+        ) {
+          console.info("[call-reconnect] skip duplicate renegotiate burst", { callId: event.callId });
+          return;
+        }
+        this.lastRenegotiateOfferCallId = event.callId;
+        this.lastRenegotiateOfferAtMs = now;
+        await this.renegotiateAsCaller(event.callId);
+      } else {
+        if (inInitialNegotiation) {
+          console.info("[call-reconnect] skip resume-request during initial negotiation", {
+            uiState: this._state,
+            pcState,
+          });
+          return;
+        }
+        this.signaling.send({ type: "call.resume-request", callId: event.callId });
+      }
+    } finally {
+      this.syncCallUiWithPeerIfStable();
+    }
   }
 
   private handlePeerReconnected(event: Extract<ServerCallEvent, { type: "call.peer-reconnected" }>): void {
@@ -865,10 +1117,28 @@ export class CallController {
     if (this.destroyed) return;
 
     if (pcState === "connected") {
+      // Против потери `call.accepted`: медиа уже поднялось, значит дозвон должен
+      // завершиться немедленно (без зависшего рингбэка/таймера "Вызов...").
+      this.stopRingback?.();
+      this.stopRingback = null;
+      this.clearTimer("ringTimer");
       this.clearTimer("connectTimer");
       this.clearTimer("reconnectTimer");
+      this.lastRenegotiateOfferCallId = null;
+      this.lastRenegotiateOfferAtMs = 0;
       if (this.supports.networkQuality) {
         this.networkMonitor?.start();
+      }
+      if (this._mediaType === "audio") {
+        void applyCallAudioOutputRoute(this._audioOutputSpeaker);
+      }
+      if (this._callId && this.reportedConnectedCallId !== this._callId) {
+        this.reportedConnectedCallId = this._callId;
+        this.signaling.send({ type: "call.connected", callId: this._callId });
+      }
+      if (this._state === "outgoing_ringing") {
+        const next = tryTransition(this._state, "connecting");
+        this._state = next ?? forceTransition(this._state, "connecting");
       }
       if (this._state === "connecting" || this._state === "reconnecting") {
         this.setState("connected");
@@ -878,14 +1148,23 @@ export class CallController {
         void tuneOutgoingVideoSenders(pc, { screenShare: this._isScreenShareActive });
       }
     } else if (pcState === "disconnected" && this._state === "connected") {
-      this.setState("reconnecting");
+      // Короткие network jitter'ы не должны мгновенно переводить звонок в reconnecting.
+      this.clearTimer("reconnectTimer");
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
-        if (this._state === "reconnecting") {
-          this._error = "Соединение потеряно";
-          this.endCallInternal("connection_lost");
-        }
-      }, Math.max(RECONNECT_TIMEOUT_MS, RESUME_REJOIN_TIMEOUT_MS));
+        if (this._state !== "connected") return;
+        const still = this.peer?.getConnectionState() ?? null;
+        if (still !== "disconnected") return;
+
+        this.setState("reconnecting");
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          if (this._state === "reconnecting") {
+            this._error = "Соединение потеряно";
+            this.endCallInternal("connection_lost");
+          }
+        }, Math.max(RECONNECT_TIMEOUT_MS, RESUME_REJOIN_TIMEOUT_MS));
+      }, PEER_DISCONNECTED_GRACE_MS);
     } else if (pcState === "failed") {
       this._error = "Не удалось установить связь. Проверьте интернет или попробуйте позвонить снова.";
       this.endCallInternal("error");
@@ -972,10 +1251,18 @@ export class CallController {
   }
 
   private async renegotiateAsCaller(callId: string): Promise<void> {
-    if (this._callId !== callId) return;
-    await this.recreatePeer(this._mediaType);
-    const offer = await this.peer!.createOffer();
-    this.signaling.send({ type: "call.offer", callId, sdp: offer });
+    const task = async (): Promise<void> => {
+      if (this.destroyed || this._callId !== callId) return;
+      await this.recreatePeer(this._mediaType);
+      if (this.destroyed || this._callId !== callId) return;
+      const offer = await this.peer!.createOffer();
+      this.signaling.send({ type: "call.offer", callId, sdp: offer });
+    };
+    const p = this.renegotiateTail.then(task);
+    this.renegotiateTail = p.catch((e) => {
+      console.error("[call-ctrl] renegotiateAsCaller error", e);
+    });
+    await p;
   }
 
   private onLocalCaption(text: string): void {
@@ -999,7 +1286,8 @@ export class CallController {
     this.notify();
   }
 
-  private endCallInternal(reason: string): void {
+  private endCallInternal(reason: string, opts?: { immediateIdle?: boolean }): void {
+    this.cancelPendingResumeCheck();
     this.stopRingback?.();
     this.stopRingback = null;
     this.stopIncomingAlert?.();
@@ -1031,19 +1319,35 @@ export class CallController {
       case "hangup": targetState = "ended"; break;
       case "rejected": targetState = "rejected"; break;
       case "busy": targetState = "busy"; break;
-      case "timeout": targetState = this._direction === "outgoing" ? "missed" : "ended"; break;
+      case "timeout": targetState = "missed"; break;
       case "canceled": targetState = "ended"; break;
+      case "connection_lost": targetState = "failed"; break;
       default: targetState = "failed"; break;
     }
 
+    const prev = this._state;
     const result = tryTransition(this._state, targetState);
     if (result) {
       this._state = result;
     } else {
       this._state = forceTransition(this._state, targetState);
     }
+    this.logStateTransition(prev, this._state, { reason });
+
+    /** Сброс текста «восстановление / связь потеряна» — иначе после красной кнопки модалка и контекст «висят» в режиме reconnect. */
+    this._statusText = null;
+    if (reason !== "connection_lost" && reason !== "error") {
+      this._error = null;
+    }
 
     this.notify();
+
+    // Только локальный сброс (красная кнопка): сразу idle — WS не должен продолжать сценарий resume.
+    if (targetState !== "failed" && opts?.immediateIdle === true) {
+      this.cleanupFull();
+      this.notify();
+      return;
+    }
 
     // Auto-reset to idle after terminal states — except "failed" (user must explicitly close or retry)
     if (targetState !== "failed") {
@@ -1074,6 +1378,7 @@ export class CallController {
     this.pendingOffer = null;
     this.pendingIceCandidates = [];
 
+    const prev = this._state;
     this._state = "idle";
     this._callId = null;
     this._otherUserId = null;
@@ -1096,12 +1401,26 @@ export class CallController {
     this._localReactions = [];
     this._remoteReactions = [];
     this._captions = [];
+    this._audioOutputSpeaker = true;
+    this.resumeGeneration += 1;
+    this.resumeWorkChain = Promise.resolve();
+    this.renegotiateTail = Promise.resolve();
+    this.lastRenegotiateOfferCallId = null;
+    this.lastRenegotiateOfferAtMs = 0;
+    this.reportedConnectedCallId = null;
+    if (this.resumeCheckDebounce) {
+      clearTimeout(this.resumeCheckDebounce);
+      this.resumeCheckDebounce = null;
+    }
+    this.logStateTransition(prev, this._state, { reason: "cleanup" });
   }
 
   private setState(next: CallState): void {
+    const prev = this._state;
     const result = tryTransition(this._state, next);
     if (result) {
       this._state = result;
+      this.logStateTransition(prev, this._state);
       this.notify();
     }
   }
@@ -1127,5 +1446,13 @@ export class CallController {
     this.clearTimer("connectTimer");
     this.clearTimer("reconnectTimer");
     this.clearTimer("idleResetTimer");
+  }
+
+  /** Отменить отложенный resume-check (иначе после красной кнопки WS шлёт check и UI «как будто звонок ещё живёт»). */
+  private cancelPendingResumeCheck(): void {
+    if (this.resumeCheckDebounce) {
+      clearTimeout(this.resumeCheckDebounce);
+      this.resumeCheckDebounce = null;
+    }
   }
 }

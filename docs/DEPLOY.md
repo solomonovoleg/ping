@@ -2,7 +2,39 @@
 
 На VPS у тебя несколько проектов: у каждого свой домен и **своя БД**. Этот проект живёт в **отдельной папке**, на **порту 3080** и с **отдельной базой PostgreSQL**.
 
-**Деплой одной командой:** заполни `deploy.env` (VPS_HOST, VPS_USER, VPS_PASSWORD, **DATABASE_URL**) и выполни `npm run deploy`. Правила про .env и DATABASE_URL — в `docs/DEPLOY_RULES.md`.
+## Полный деплой (всё, что делает одна команда)
+
+Из корня репозитория на своей машине:
+
+```bash
+npm run deploy
+```
+
+**Что происходит по шагам** (`scripts/deploy.sh`):
+
+1. Читает **`deploy.env`** (без коммита в git), экспортирует все **`VITE_*`** для сборки.
+2. **`npm ci` / `npm install`** → **`npm run build`**: клиент (Vite), **`dist/index.cjs`**, при наличии артефактов — **`dist/pingok-micro.cjs`**, **`dist/edge.cjs`**, **`dist/parser.cjs`**, **`dist/feed-worker.cjs`**.
+3. **rsync** кода на VPS (без `.env` и `uploads` с сервера) + отдельно **`dist/`**.
+4. Если в **`deploy.env`** задан **`DATABASE_URL`**, собирает **серверный `.env`** на VPS из `deploy.env` (см. **`docs/ENV_REFERENCE.md`** — полный список ключей, которые уезжают в `put` в `deploy.sh`).
+5. На сервере **`scripts/server-setup.sh`**: зависимости production, **миграции** основной БД, при **`EDGE_DATABASE_URL`** — миграции EDGE, **PM2 reload** (основное приложение + опционально pingok / edge / parser / feed-worker по флагам в `.env`).
+
+**Минимум в `deploy.env`:** `VPS_HOST`, `VPS_USER`, `VPS_PASSWORD` (или SSH-ключ), **`DATABASE_URL`**, `SESSION_SECURE`, при HTTPS-проде — все нужные **`VITE_*`** (TURN, `VITE_WS_URL`, и т.д.). Детали и типичные ловушки — **`docs/DEPLOY_RULES.md`**, переменные — **`docs/ENV_REFERENCE.md`**.
+
+---
+
+**Деплой одной командой (кратко):** заполни `deploy.env` (VPS_HOST, VPS_USER, VPS_PASSWORD, **DATABASE_URL**) и выполни `npm run deploy`. Правила про .env и DATABASE_URL — в `docs/DEPLOY_RULES.md`.
+
+**Сводка по всем миграциям** (платформа + EDGE + PARSER, порядок скриптов, что не забыть после нескольких веток): **`docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md`**.
+
+### Сборка и миграции — не пропускать
+
+| Шаг | Что делает |
+|-----|------------|
+| **`npm run deploy`** | Локально **`npm run build`** (клиент + `dist/index.cjs` + `dist/edge.cjs` и др.) → выкладка на VPS → на сервере **`scripts/server-setup.sh`**: миграции **основной БД** (`node scripts/run-migrations.cjs`), затем при заполненном **`EDGE_DATABASE_URL`** в серверном `.env` — миграции **EDGE** (`node EDGE/db/run-migrations.cjs`), затем **PM2 reload**. |
+| Только миграции на уже выкаченном коде | На сервере: `cd $REMOTE_DIR && node scripts/run-migrations.cjs` и при EDGE — `EDGE_DATABASE_URL=... node EDGE/db/run-migrations.cjs` (см. `scripts/server-setup.sh`). |
+| Ручной деплой без `deploy.sh` | Сначала **`npm run build`**, залить **`dist/`** и репо, потом на сервере миграции как выше, потом **`pm2 reload`**. |
+
+В **`deploy.env`** для EDGE должны быть **`EDGE_DATABASE_URL`**, **`EDGE_UPSTREAM_URL`**, **`EDGE_SERVICE_SECRET`** (и при PM2 — **`EDGE_PM2_ENABLED=1`**), иначе миграции EDGE не запустятся или платформа не достучится до микросервиса.
 
 ### Staging на том же VPS
 

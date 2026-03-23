@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { eq, and, desc, asc, sql, gt, gte, lt, lte, or, ilike, isNull, isNotNull, ne, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, gt, gte, lt, lte, or, ilike, isNull, isNotNull, ne, inArray, exists } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { IStorage } from "./types";
 import type {
@@ -45,10 +45,14 @@ import {
   callTrackItems,
   userReminders,
   voiceTasks,
+  dmScheduledCalls,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { getDb, getPool, ensureUserColumns } from "../db";
-import { normalizePhone } from "../auth/phone";
+import { normalizePhone, normalizedPhonesFromSearchQuery } from "../auth/phone";
+import { isPhoneAtRestEnabled, phoneLookupHash } from "../auth/phone-at-rest";
+
+const PUBLIC_ID_START = 241095;
 
 /** Таблица/колонки user_blocks ещё не накатили — не роняем ленту и профиль. */
 function isUserBlocksSchemaUnavailable(err: unknown): boolean {
@@ -74,20 +78,44 @@ export class DbStorage implements IStorage {
 
   async getUserByPhone(phone: string): Promise<User | undefined> {
     await ensureUserColumns();
-    const [row] = await this.db.select().from(users).where(eq(users.phone, phone)).limit(1);
-    return row;
+    if (phone === "admin") {
+      const [row] = await this.db.select().from(users).where(eq(users.phone, "admin")).limit(1);
+      return row;
+    }
+    const normalized = normalizePhone(phone);
+    if (!normalized) return undefined;
+    if (isPhoneAtRestEnabled()) {
+      try {
+        const h = phoneLookupHash(normalized);
+        const [byHash] = await this.db.select().from(users).where(eq(users.phoneLookupHash, h)).limit(1);
+        if (byHash) return byHash;
+      } catch {
+        /* секрет не задан между проверкой и запросом */
+      }
+    }
+    const [legacy] = await this.db.select().from(users).where(eq(users.phone, normalized)).limit(1);
+    return legacy;
   }
 
   async findUsersDiscoverableByPhones(phones: string[], excludeUserId: string): Promise<User[]> {
     await ensureUserColumns();
     const unique = [...new Set(phones)].filter(Boolean);
     if (unique.length === 0) return [];
+    const matchClauses = [inArray(users.phone, unique)];
+    if (isPhoneAtRestEnabled()) {
+      try {
+        const hashes = unique.map((p) => phoneLookupHash(p));
+        matchClauses.push(inArray(users.phoneLookupHash, hashes));
+      } catch {
+        /* */
+      }
+    }
     const rows = await this.db
       .select()
       .from(users)
       .where(
         and(
-          inArray(users.phone, unique),
+          or(...matchClauses),
           isNull(users.deletedAt),
           eq(users.isBlocked, false),
           eq(users.hideFromSearch, false),
@@ -105,24 +133,62 @@ export class DbStorage implements IStorage {
     const conditions = [
       ilike(users.displayName, safeLike),
       ilike(users.surname, safeLike),
-      ilike(users.nickname, safeLike),
       ilike(sql<string>`TRIM(COALESCE(${users.displayName}, '') || ' ' || COALESCE(${users.surname}, ''))`, safeLike),
     ];
-    const normalized = normalizePhone(q);
-    if (normalized) conditions.push(eq(users.phone, normalized));
-    const digits = q.replace(/\D/g, "");
-    if (digits.length >= 1) {
-      if (digits.length <= 9) {
-        const num = parseInt(digits, 10);
-        if (!Number.isNaN(num)) conditions.push(eq(users.publicId, num));
-      }
-      conditions.push(ilike(users.phone, `%${escapeLike(digits)}%`));
+    const nickQ = q.replace(/^@+/u, "").trim();
+    if (nickQ.length > 0) {
+      conditions.push(ilike(users.nickname, `%${escapeLike(nickQ)}%`));
     }
-    const baseCond = and(
-      isNull(users.deletedAt),
-      eq(users.isBlocked, false),
-      eq(users.hideFromSearch, false)
+    if (/^\d+$/u.test(q)) {
+      const pubId = parseInt(q, 10);
+      if (!Number.isNaN(pubId) && pubId >= 0 && pubId <= 2147483647) {
+        conditions.push(eq(users.publicId, pubId));
+      }
+    }
+    for (const normalized of normalizedPhonesFromSearchQuery(q)) {
+      conditions.push(eq(users.phone, normalized));
+      if (isPhoneAtRestEnabled()) {
+        try {
+          conditions.push(eq(users.phoneLookupHash, phoneLookupHash(normalized)));
+        } catch {
+          /* */
+        }
+      }
+    }
+    const viewerId = excludeUserId;
+    const dmMemberSelf = alias(chatMembers, "search_dm_self");
+    const dmMemberPeer = alias(chatMembers, "search_dm_peer");
+    /** Скрытие из поиска не должно выкидывать тех, с кем уже есть связь (как в комментарии к hide_from_search в схеме). */
+    const discoverableDespiteHideFromSearch = or(
+      eq(users.hideFromSearch, false),
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(contacts)
+          .where(and(eq(contacts.userId, viewerId), eq(contacts.contactUserId, users.id))),
+      ),
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(contacts)
+          .where(and(eq(contacts.userId, users.id), eq(contacts.contactUserId, viewerId))),
+      ),
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(dmMemberSelf)
+          .innerJoin(dmMemberPeer, eq(dmMemberSelf.chatId, dmMemberPeer.chatId))
+          .innerJoin(chats, eq(chats.id, dmMemberSelf.chatId))
+          .where(
+            and(
+              eq(chats.type, "dm"),
+              eq(dmMemberSelf.userId, viewerId),
+              eq(dmMemberPeer.userId, users.id),
+            ),
+          ),
+      ),
     );
+    const baseCond = and(isNull(users.deletedAt), eq(users.isBlocked, false), discoverableDespiteHideFromSearch);
     const rows = await this.db
       .select()
       .from(users)
@@ -132,8 +198,12 @@ export class DbStorage implements IStorage {
   }
 
   async getNextPublicId(): Promise<number> {
-    const [r] = await this.db.select({ next: sql<number>`COALESCE(MAX(${users.publicId}), 99) + 1` }).from(users);
-    return r?.next ?? 100;
+    const [r] = await this.db
+      .select({
+        next: sql<number>`GREATEST(COALESCE(MAX(${users.publicId}), ${PUBLIC_ID_START - 1}), ${PUBLIC_ID_START - 1}) + 1`,
+      })
+      .from(users);
+    return r?.next ?? PUBLIC_ID_START;
   }
 
   async createUser(data: InsertUser): Promise<User> {
@@ -179,15 +249,25 @@ export class DbStorage implements IStorage {
     let searchCond = cond;
     if (search) {
       const like = `%${search}%`;
-      const digitsOnly = search.replace(/\D/g, "");
+      const trimmed = search.trim();
       const clauses = [
         ilike(users.displayName, like),
         ilike(users.surname, like),
-        ilike(users.phone, like),
+        ilike(users.nickname, like),
       ];
-      if (digitsOnly.length >= 1 && digitsOnly.length <= 9) {
-        const num = parseInt(digitsOnly, 10);
-        if (!Number.isNaN(num)) clauses.push(eq(users.publicId, num));
+      if (/^\d+$/u.test(trimmed)) {
+        const num = parseInt(trimmed, 10);
+        if (!Number.isNaN(num) && num >= 0 && num <= 2147483647) clauses.push(eq(users.publicId, num));
+      }
+      for (const np of normalizedPhonesFromSearchQuery(search)) {
+        clauses.push(eq(users.phone, np));
+        if (isPhoneAtRestEnabled()) {
+          try {
+            clauses.push(eq(users.phoneLookupHash, phoneLookupHash(np)));
+          } catch {
+            /* */
+          }
+        }
       }
       const searchClause = or(...clauses);
       searchCond = searchClause ? (cond ? and(cond, searchClause) : searchClause) : cond;
@@ -243,12 +323,11 @@ export class DbStorage implements IStorage {
     return row;
   }
 
-  async listAdmins(): Promise<Pick<User, "id" | "publicId" | "phone" | "displayName" | "surname" | "platformRole">[]> {
+  async listAdmins(): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "platformRole">[]> {
     const list = await this.db
       .select({
         id: users.id,
         publicId: users.publicId,
-        phone: users.phone,
         displayName: users.displayName,
         surname: users.surname,
         platformRole: users.platformRole,
@@ -262,7 +341,7 @@ export class DbStorage implements IStorage {
     inviterUserId: string,
     code: string,
     expiresAt: Date,
-    opts?: { maxUses?: number }
+    opts?: { maxUses?: number; bypassInviterLimit?: boolean }
   ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number }> {
     const id = randomUUID();
     let maxUses = opts?.maxUses ?? 1;
@@ -275,11 +354,16 @@ export class DbStorage implements IStorage {
       expiresAt,
       maxUses,
       useCount: 0,
+      bypassInviterLimit: opts?.bypassInviterLimit === true,
     });
     return { id, code, expiresAt, maxUses };
   }
 
-  async getReferralCodeByCode(code: string): Promise<{ id: string; inviterUserId: string; expiresAt: Date } | undefined> {
+  async getReferralCodeByCode(
+    code: string,
+  ): Promise<
+    { id: string; inviterUserId: string; expiresAt: Date; bypassInviterLimit: boolean } | undefined
+  > {
     const now = new Date();
     const usable = or(
       and(eq(referralCodes.maxUses, 1), isNull(referralCodes.usedAt)),
@@ -287,11 +371,21 @@ export class DbStorage implements IStorage {
       and(gt(referralCodes.maxUses, 1), sql`${referralCodes.useCount} < ${referralCodes.maxUses}`)
     );
     const [row] = await this.db
-      .select({ id: referralCodes.id, inviterUserId: referralCodes.inviterUserId, expiresAt: referralCodes.expiresAt })
+      .select({
+        id: referralCodes.id,
+        inviterUserId: referralCodes.inviterUserId,
+        expiresAt: referralCodes.expiresAt,
+        bypassInviterLimit: referralCodes.bypassInviterLimit,
+      })
       .from(referralCodes)
       .where(and(eq(referralCodes.code, code), gt(referralCodes.expiresAt, now), usable))
       .limit(1);
-    return row;
+    return row
+      ? {
+          ...row,
+          bypassInviterLimit: row.bypassInviterLimit === true,
+        }
+      : undefined;
   }
 
   /** Атомарно списывает одно использование; false — гонка или код уже недействителен */
@@ -640,17 +734,18 @@ export class DbStorage implements IStorage {
       .limit(1);
     const since = member?.lastReadAt ?? null;
     const fromOthers = or(ne(messages.senderId, userId), isNull(messages.senderId));
+    const unreadEligible = and(ne(messages.type, "system"), ne(messages.type, "missed_call"));
     if (!since) {
       const [r] = await this.db
         .select({ count: sql<number>`count(*)::int` })
         .from(messages)
-        .where(and(eq(messages.chatId, chatId), fromOthers));
+        .where(and(eq(messages.chatId, chatId), fromOthers, unreadEligible));
       return r?.count ?? 0;
     }
     const [r] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(messages)
-      .where(and(eq(messages.chatId, chatId), gt(messages.createdAt, since), fromOthers));
+      .where(and(eq(messages.chatId, chatId), gt(messages.createdAt, since), fromOthers, unreadEligible));
     return r?.count ?? 0;
   }
 
@@ -662,18 +757,19 @@ export class DbStorage implements IStorage {
       .limit(1);
     const since = member?.lastReadAt ?? null;
     const fromOthers = or(ne(messages.senderId, userId), isNull(messages.senderId));
+    const unreadEligible = and(ne(messages.type, "system"), ne(messages.type, "missed_call"));
     const folderCond = folderId == null ? isNull(messages.folderId) : eq(messages.folderId, folderId);
     if (!since) {
       const [r] = await this.db
         .select({ count: sql<number>`count(*)::int` })
         .from(messages)
-        .where(and(eq(messages.chatId, chatId), folderCond, fromOthers));
+        .where(and(eq(messages.chatId, chatId), folderCond, fromOthers, unreadEligible));
       return r?.count ?? 0;
     }
     const [r] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(messages)
-      .where(and(eq(messages.chatId, chatId), folderCond, gt(messages.createdAt, since), fromOthers));
+      .where(and(eq(messages.chatId, chatId), folderCond, gt(messages.createdAt, since), fromOthers, unreadEligible));
     return r?.count ?? 0;
   }
 
@@ -931,7 +1027,7 @@ export class DbStorage implements IStorage {
     userId: string,
     query: string,
     limit: number
-  ): Promise<{ messageId: string; chatId: string; content: string; createdAt: Date; chatName: string }[]> {
+  ): Promise<{ messageId: string; chatId: string; type: string; content: string; createdAt: Date; chatName: string }[]> {
     const q = query.trim();
     if (!q) return [];
     const like = `%${q}%`;
@@ -939,6 +1035,7 @@ export class DbStorage implements IStorage {
       .select({
         id: messages.id,
         chatId: messages.chatId,
+        type: messages.type,
         content: messages.content,
         createdAt: messages.createdAt,
       })
@@ -970,6 +1067,7 @@ export class DbStorage implements IStorage {
     return rows.map((r) => ({
       messageId: r.id,
       chatId: r.chatId,
+      type: r.type,
       content: r.content.slice(0, 200),
       createdAt: r.createdAt,
       chatName: chatNames.get(r.chatId) || "Чат",
@@ -1563,6 +1661,8 @@ export class DbStorage implements IStorage {
     if (data.status !== undefined) update.status = data.status;
     if (data.pinnedPostId !== undefined) update.pinnedPostId = data.pinnedPostId;
     if (data.profileVisibility !== undefined) update.profileVisibility = data.profileVisibility;
+    if (data.dmPolicy !== undefined) update.dmPolicy = data.dmPolicy;
+    if (data.groupAddMePolicy !== undefined) update.groupAddMePolicy = data.groupAddMePolicy;
     if (data.showOnlineTo !== undefined) update.showOnlineTo = data.showOnlineTo;
     if (data.pushEnabled !== undefined) update.pushEnabled = data.pushEnabled;
     if (data.vibeEnabled !== undefined) update.vibeEnabled = data.vibeEnabled;
@@ -1607,11 +1707,12 @@ export class DbStorage implements IStorage {
     return rows.map((r) => r.contactUserId);
   }
 
-  async addFollow(followerId: string, followingId: string): Promise<void> {
-    if (followerId === followingId) return;
+  async addFollow(followerId: string, followingId: string): Promise<boolean> {
+    if (followerId === followingId) return false;
     const existing = await this.isFollowing(followerId, followingId);
-    if (existing) return;
+    if (existing) return false;
     await this.db.insert(follows).values({ followerId, followingId });
+    return true;
   }
 
   async removeFollow(followerId: string, followingId: string): Promise<void> {
@@ -1762,17 +1863,24 @@ export class DbStorage implements IStorage {
     blockerId: string,
     blockedId: string,
     flags?: Partial<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean }>,
+    blockNote?: string | null,
   ): Promise<void> {
     if (blockerId === blockedId) return;
     const restrictProfile = flags?.restrictProfile !== false;
     const restrictChat = flags?.restrictChat !== false;
     const restrictSocial = flags?.restrictSocial !== false;
+    const noteOnInsert = blockNote === undefined ? null : blockNote;
     await this.db
       .insert(userBlocks)
-      .values({ blockerId, blockedId, restrictProfile, restrictChat, restrictSocial })
+      .values({ blockerId, blockedId, restrictProfile, restrictChat, restrictSocial, blockNote: noteOnInsert })
       .onConflictDoUpdate({
         target: [userBlocks.blockerId, userBlocks.blockedId],
-        set: { restrictProfile, restrictChat, restrictSocial },
+        set: {
+          restrictProfile,
+          restrictChat,
+          restrictSocial,
+          ...(blockNote !== undefined ? { blockNote } : {}),
+        },
       });
   }
 
@@ -1794,12 +1902,18 @@ export class DbStorage implements IStorage {
   async getBlockFlags(
     blockerId: string,
     blockedId: string,
-  ): Promise<{ restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean } | null> {
+  ): Promise<{
+    restrictProfile: boolean;
+    restrictChat: boolean;
+    restrictSocial: boolean;
+    blockNote: string | null;
+  } | null> {
     const [row] = await this.db
       .select({
         restrictProfile: userBlocks.restrictProfile,
         restrictChat: userBlocks.restrictChat,
         restrictSocial: userBlocks.restrictSocial,
+        blockNote: userBlocks.blockNote,
       })
       .from(userBlocks)
       .where(and(eq(userBlocks.blockerId, blockerId), eq(userBlocks.blockedId, blockedId)))
@@ -1809,6 +1923,7 @@ export class DbStorage implements IStorage {
       restrictProfile: row.restrictProfile === true,
       restrictChat: row.restrictChat === true,
       restrictSocial: row.restrictSocial === true,
+      blockNote: row.blockNote && String(row.blockNote).trim() ? String(row.blockNote).trim() : null,
     };
   }
 
@@ -2004,6 +2119,15 @@ export class DbStorage implements IStorage {
     return rows.length > 0;
   }
 
+  async updateUserReminderFireAt(userId: string, id: string, fireAt: Date): Promise<boolean> {
+    const rows = await this.db
+      .update(userReminders)
+      .set({ fireAt })
+      .where(and(eq(userReminders.id, id), eq(userReminders.userId, userId), isNull(userReminders.dismissedAt)))
+      .returning({ id: userReminders.id });
+    return rows.length > 0;
+  }
+
   async createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask> {
     const [row] = await this.db
       .insert(voiceTasks)
@@ -2032,5 +2156,265 @@ export class DbStorage implements IStorage {
       .where(and(eq(voiceTasks.id, id), eq(voiceTasks.userId, userId), isNull(voiceTasks.doneAt)))
       .returning({ id: voiceTasks.id });
     return rows.length > 0;
+  }
+
+  async ensurePingokTrackSourceChat(userId: string): Promise<Chat> {
+    const pool = getPool();
+    const findSql = `
+      SELECT c.id
+      FROM chats c
+      INNER JOIN chat_members m ON m.chat_id = c.id AND m.user_id = $1
+      WHERE c.type = 'group' AND c.name = '__pingok_track_src'
+        AND (SELECT COUNT(*)::int FROM chat_members cm WHERE cm.chat_id = c.id) = 1
+      LIMIT 1
+    `;
+    const found = await pool.query<{ id: string }>(findSql, [userId]);
+    let chatId = found.rows[0]?.id;
+    if (!chatId) {
+      const ins = await pool.query<{ id: string }>(
+        `INSERT INTO chats (type, name) VALUES ('group', '__pingok_track_src') RETURNING id`,
+      );
+      chatId = ins.rows[0]?.id;
+      if (!chatId) throw new Error("Не удалось создать служебный чат для треков");
+      await pool.query(`INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, 'admin')`, [
+        chatId,
+        userId,
+      ]);
+    }
+    await this.upsertChatMemberPrefs(userId, chatId, { hiddenAt: new Date() });
+    const chat = await this.getChatById(chatId);
+    if (!chat) throw new Error("Служебный чат треков не найден");
+    return chat;
+  }
+
+  async findBestUserTrackByName(userId: string, nameQuery: string): Promise<{ id: string; name: string } | null> {
+    const q = nameQuery.trim().toLowerCase().replace(/ё/g, "е");
+    if (!q) return null;
+    const list = await this.listTracks(userId);
+    let best: { id: string; name: string; score: number } | null = null;
+    for (const t of list) {
+      const n = t.name.trim().toLowerCase().replace(/ё/g, "е");
+      let score = 0;
+      if (n === q) score = 100;
+      else if (n.startsWith(q)) score = 88;
+      else if (n.includes(q)) score = 75;
+      else if (q.length >= 4 && n.includes(q.slice(0, Math.max(3, q.length - 1)))) score = 55;
+      if (score > 0 && (!best || score > best.score)) best = { id: t.id, name: t.name, score };
+    }
+    return best ? { id: best.id, name: best.name } : null;
+  }
+
+  async createDmScheduledCall(data: {
+    chatId: string;
+    createdByUserId: string;
+    peerUserId: string;
+    fireAt: Date;
+    title: string;
+    plannerReminderId?: string | null;
+  }): Promise<{ id: string }> {
+    const [row] = await this.db
+      .insert(dmScheduledCalls)
+      .values({
+        chatId: data.chatId,
+        createdByUserId: data.createdByUserId,
+        peerUserId: data.peerUserId,
+        fireAt: data.fireAt,
+        title: data.title.trim() || "Звонок",
+        plannerReminderId: data.plannerReminderId ?? null,
+      })
+      .returning({ id: dmScheduledCalls.id });
+    if (!row) throw new Error("insert dm_scheduled_calls failed");
+    return row;
+  }
+
+  async getActiveDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+  ): Promise<{
+    id: string;
+    fireAt: Date;
+    title: string;
+    createdByUserId: string;
+    peerUserId: string;
+    iAmInitiator: boolean;
+  } | null> {
+    const memberIds = await this.getChatMemberIds(chatId);
+    if (!memberIds.includes(userId)) return null;
+    const now = Date.now();
+    const rows = await this.db
+      .select()
+      .from(dmScheduledCalls)
+      .where(
+        and(
+          eq(dmScheduledCalls.chatId, chatId),
+          or(
+            and(eq(dmScheduledCalls.createdByUserId, userId), isNull(dmScheduledCalls.initiatorDismissedAt)),
+            and(eq(dmScheduledCalls.peerUserId, userId), isNull(dmScheduledCalls.peerDismissedAt)),
+          ),
+        ),
+      )
+      .orderBy(desc(dmScheduledCalls.fireAt))
+      .limit(8);
+    for (const r of rows) {
+      const until = r.fireAt.getTime() + 5 * 60_000;
+      if (now > until) continue;
+      const iAmInitiator = r.createdByUserId === userId;
+      if (iAmInitiator && r.initiatorDismissedAt) continue;
+      if (!iAmInitiator && r.peerDismissedAt) continue;
+      return {
+        id: r.id,
+        fireAt: r.fireAt,
+        title: r.title,
+        createdByUserId: r.createdByUserId,
+        peerUserId: r.peerUserId,
+        iAmInitiator,
+      };
+    }
+    return null;
+  }
+
+  async dismissDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+    rowId: string,
+    options: { forBoth: boolean },
+  ): Promise<boolean> {
+    const memberIds = await this.getChatMemberIds(chatId);
+    if (!memberIds.includes(userId)) return false;
+    const [row] = await this.db
+      .select()
+      .from(dmScheduledCalls)
+      .where(and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.chatId, chatId)))
+      .limit(1);
+    if (!row) return false;
+    const isInitiator = row.createdByUserId === userId;
+    const isPeer = row.peerUserId === userId;
+    if (!isInitiator && !isPeer) return false;
+    const now = new Date();
+    if (options.forBoth) {
+      const upd = await this.db
+        .update(dmScheduledCalls)
+        .set({ initiatorDismissedAt: now, peerDismissedAt: now })
+        .where(and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.chatId, chatId)))
+        .returning({ id: dmScheduledCalls.id });
+      return upd.length > 0;
+    }
+    if (isInitiator) {
+      const upd = await this.db
+        .update(dmScheduledCalls)
+        .set({ initiatorDismissedAt: now })
+        .where(and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.chatId, chatId)))
+        .returning({ id: dmScheduledCalls.id });
+      return upd.length > 0;
+    }
+    const upd = await this.db
+      .update(dmScheduledCalls)
+      .set({ peerDismissedAt: now })
+      .where(and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.chatId, chatId)))
+      .returning({ id: dmScheduledCalls.id });
+    return upd.length > 0;
+  }
+
+  async listPlannerActiveDmScheduledCalls(userId: string): Promise<
+    Array<{
+      id: string;
+      chatId: string;
+      peerUserId: string;
+      fireAt: Date;
+      title: string;
+      plannerReminderId: string | null;
+    }>
+  > {
+    const cutoff = new Date(Date.now() - 2 * 60_000);
+    return this.db
+      .select({
+        id: dmScheduledCalls.id,
+        chatId: dmScheduledCalls.chatId,
+        peerUserId: dmScheduledCalls.peerUserId,
+        fireAt: dmScheduledCalls.fireAt,
+        title: dmScheduledCalls.title,
+        plannerReminderId: dmScheduledCalls.plannerReminderId,
+      })
+      .from(dmScheduledCalls)
+      .where(
+        and(
+          eq(dmScheduledCalls.createdByUserId, userId),
+          isNull(dmScheduledCalls.initiatorDismissedAt),
+          gt(dmScheduledCalls.fireAt, cutoff),
+        ),
+      )
+      .orderBy(asc(dmScheduledCalls.fireAt));
+  }
+
+  async updateDmScheduledCallFireAsPlanner(
+    userId: string,
+    rowId: string,
+    fireAt: Date,
+    title: string,
+  ): Promise<{ chatId: string; peerUserId: string } | null> {
+    const [row] = await this.db
+      .select()
+      .from(dmScheduledCalls)
+      .where(
+        and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.createdByUserId, userId), isNull(dmScheduledCalls.initiatorDismissedAt)),
+      )
+      .limit(1);
+    if (!row) return null;
+    await this.db
+      .update(dmScheduledCalls)
+      .set({ fireAt, title: title.trim() || row.title })
+      .where(eq(dmScheduledCalls.id, rowId));
+    if (row.plannerReminderId) {
+      await this.updateUserReminderFireAt(userId, row.plannerReminderId, fireAt);
+    }
+    return { chatId: row.chatId, peerUserId: row.peerUserId };
+  }
+
+  async cancelDmScheduledCallAsPlanner(userId: string, rowId: string): Promise<{ chatId: string; peerUserId: string } | null> {
+    const now = new Date();
+    const [row] = await this.db
+      .select()
+      .from(dmScheduledCalls)
+      .where(
+        and(eq(dmScheduledCalls.id, rowId), eq(dmScheduledCalls.createdByUserId, userId), isNull(dmScheduledCalls.initiatorDismissedAt)),
+      )
+      .limit(1);
+    if (!row) return null;
+    await this.db
+      .update(dmScheduledCalls)
+      .set({ initiatorDismissedAt: now, peerDismissedAt: now })
+      .where(eq(dmScheduledCalls.id, rowId));
+    if (row.plannerReminderId) {
+      await this.dismissUserReminder(userId, row.plannerReminderId);
+    }
+    return { chatId: row.chatId, peerUserId: row.peerUserId };
+  }
+
+  async listDmScheduledCallsInPreEventWindow(userId: string): Promise<
+    Array<{ id: string; chatId: string; title: string; fireAt: Date }>
+  > {
+    const now = new Date();
+    const until = new Date(now.getTime() + 5 * 60_000);
+    const rows = await this.db
+      .select({
+        id: dmScheduledCalls.id,
+        chatId: dmScheduledCalls.chatId,
+        title: dmScheduledCalls.title,
+        fireAt: dmScheduledCalls.fireAt,
+      })
+      .from(dmScheduledCalls)
+      .where(
+        and(
+          gt(dmScheduledCalls.fireAt, now),
+          lte(dmScheduledCalls.fireAt, until),
+          or(
+            and(eq(dmScheduledCalls.createdByUserId, userId), isNull(dmScheduledCalls.initiatorDismissedAt)),
+            and(eq(dmScheduledCalls.peerUserId, userId), isNull(dmScheduledCalls.peerDismissedAt)),
+          ),
+        ),
+      )
+      .orderBy(asc(dmScheduledCalls.fireAt))
+      .limit(20);
+    return rows;
   }
 }

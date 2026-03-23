@@ -45,7 +45,6 @@ export async function fetchDashboardAnalytics(days = 14): Promise<DashboardAnaly
 export type AdminUser = {
   id: string;
   publicId: number;
-  phone: string;
   displayName: string | null;
   surname: string | null;
   isBlocked?: boolean;
@@ -275,6 +274,182 @@ export async function fetchParserUsers(search?: string): Promise<AdminParserUser
   if (!res.ok) throw new Error("Ошибка загрузки пользователей для автопостинга");
   const data = await res.json().catch(() => ({ users: [] }));
   return data.users ?? [];
+}
+
+/** Парсер ВК → посты от имени пользователя платформы */
+export type AdminVkParserBinding = {
+  id: string;
+  platformUserId: string;
+  displayName: string | null;
+  vkOwnerId: string;
+  tokenConfigured: boolean;
+  enabled: boolean;
+  parseIntervalMinutes: number;
+  postsPerRun: number;
+  requireModeration: boolean;
+  visibility: string;
+  cityLine: string | null;
+  lastRunAt: string | null;
+  lastError: string | null;
+  lastCreatedCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminVkParserItem = {
+  id: string;
+  bindingId: string;
+  vkPostKey: string;
+  status: string;
+  postText: string;
+  mediaUrls: string[] | null;
+  mediaLayout: unknown;
+  platformPostId: string | null;
+  vkPostDate: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+};
+
+export async function fetchVkParserBindings(): Promise<AdminVkParserBinding[]> {
+  const res = await adminFetch("/admin/vk-parser/bindings");
+  if (!res.ok) throw new Error("Не удалось загрузить привязки ВК");
+  const data = await res.json();
+  return data.bindings ?? [];
+}
+
+export async function createVkParserBinding(body: {
+  platformUserId: string;
+  vkAccessToken: string;
+  vkOwnerId: string;
+  displayName?: string | null;
+  parseIntervalMinutes?: number;
+  postsPerRun?: number;
+  requireModeration?: boolean;
+  visibility?: "public" | "followers";
+  cityLine?: string | null;
+  enabled?: boolean;
+}): Promise<AdminVkParserBinding> {
+  const res = await adminFetch("/admin/vk-parser/bindings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Ошибка создания привязки");
+  return (data as { binding: AdminVkParserBinding }).binding;
+}
+
+export async function updateVkParserBinding(
+  id: string,
+  patch: Partial<{
+    displayName: string | null;
+    vkAccessToken: string;
+    vkOwnerId: string;
+    parseIntervalMinutes: number;
+    postsPerRun: number;
+    requireModeration: boolean;
+    visibility: "public" | "followers";
+    cityLine: string | null;
+    enabled: boolean;
+  }>,
+): Promise<AdminVkParserBinding> {
+  const res = await adminFetch(`/admin/vk-parser/bindings/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Ошибка сохранения");
+  return (data as { binding: AdminVkParserBinding }).binding;
+}
+
+export async function deleteVkParserBinding(id: string): Promise<void> {
+  const res = await adminFetch(`/admin/vk-parser/bindings/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Ошибка удаления");
+  }
+}
+
+export async function runVkParserBindingNow(
+  id: string,
+): Promise<{ created: number; skipped: number; duplicates: number }> {
+  const res = await adminFetch(`/admin/vk-parser/bindings/${encodeURIComponent(id)}/run`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Ошибка запуска");
+  return data as { created: number; skipped: number; duplicates: number };
+}
+
+export async function runVkParserAllEnabled(): Promise<{
+  results: (
+    | { bindingId: string; ok: true; created: number; skipped: number; duplicates: number }
+    | { bindingId: string; ok: false; error: string }
+  )[];
+}> {
+  const res = await adminFetch("/admin/vk-parser/run-all", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Ошибка");
+  return data as {
+    results: (
+      | { bindingId: string; ok: true; created: number; skipped: number; duplicates: number }
+      | { bindingId: string; ok: false; error: string }
+    )[];
+  };
+}
+
+export async function fetchVkParserItems(opts?: {
+  bindingId?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: AdminVkParserItem[]; total: number }> {
+  const params = new URLSearchParams();
+  if (opts?.bindingId) params.set("bindingId", opts.bindingId);
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  const res = await adminFetch(`/admin/vk-parser/items?${params.toString()}`);
+  if (!res.ok) throw new Error("Не удалось загрузить очередь");
+  const data = await res.json();
+  return {
+    items: data.items ?? [],
+    total: typeof data.total === "number" ? data.total : 0,
+  };
+}
+
+export async function approveVkParserItem(itemId: string): Promise<{ platformPostId: string }> {
+  const res = await adminFetch(`/admin/vk-parser/items/${encodeURIComponent(itemId)}/approve`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Ошибка публикации");
+  return data as { platformPostId: string };
+}
+
+export async function rejectVkParserItem(itemId: string): Promise<void> {
+  const res = await adminFetch(`/admin/vk-parser/items/${encodeURIComponent(itemId)}/reject`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Ошибка");
+  }
+}
+
+export async function testVkParserToken(token: string): Promise<{ vkUserId: number }> {
+  const res = await adminFetch("/admin/vk-parser/test-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { message?: string }).message || "Токен не прошёл проверку");
+  return data as { vkUserId: number };
 }
 
 export type FetchAuditLogOpts = {

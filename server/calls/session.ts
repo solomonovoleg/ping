@@ -15,6 +15,15 @@ export type CallSessionState =
   | "failed";
 
 export type CallMediaType = "audio" | "video";
+export type CallSessionEndReason =
+  | "hangup"
+  | "cancel"
+  | "timeout"
+  | "rejected"
+  | "busy"
+  | "connection_lost"
+  | "superseded"
+  | "system";
 
 export interface CallSession {
   callId: string;
@@ -29,7 +38,10 @@ export interface CallSession {
   connectedAt?: number;
   endedAt?: number;
   endedBy?: string;
+  endReason?: CallSessionEndReason;
   ringTimer?: ReturnType<typeof setTimeout>;
+  /** Участники, подтвердившие media-connected локально. */
+  connectedParticipantIds: Set<string>;
 }
 
 const sessions = new Map<string, CallSession>();
@@ -58,6 +70,7 @@ export function createSession(params: {
     ...params,
     state: "ringing",
     createdAt: Date.now(),
+    connectedParticipantIds: new Set<string>(),
   };
   sessions.set(params.callId, session);
   activeCallByUser.set(params.callerId, params.callId);
@@ -90,6 +103,17 @@ export function isParticipant(callId: string, userId: string): boolean {
   return session.callerId === userId || session.calleeId === userId;
 }
 
+/**
+ * Активная **ringing**-сессия именно между двумя пользователями (после await в invite — защита от гонки A↔B).
+ */
+export function findRingingSessionBetween(userA: string, userB: string): CallSession | undefined {
+  const sa = getActiveCallForUser(userA);
+  if (sa?.state === "ringing" && isParticipant(sa.callId, userB)) return sa;
+  const sb = getActiveCallForUser(userB);
+  if (sb?.state === "ringing" && isParticipant(sb.callId, userA)) return sb;
+  return undefined;
+}
+
 export function getOtherParticipant(callId: string, userId: string): string | null {
   const session = sessions.get(callId);
   if (!session) return null;
@@ -108,9 +132,17 @@ export function acceptSession(callId: string): boolean {
   return true;
 }
 
-export function endSession(callId: string, endedBy?: string, state?: CallSessionState): void {
+export function endSession(
+  callId: string,
+  endedBy?: string,
+  state?: CallSessionState,
+  endReason: CallSessionEndReason = "system",
+): { changed: boolean; session: CallSession | null } {
   const session = sessions.get(callId);
-  if (!session) return;
+  if (!session) return { changed: false, session: null };
+  if (isTerminal(session.state)) {
+    return { changed: false, session };
+  }
   if (session.ringTimer) {
     clearTimeout(session.ringTimer);
     session.ringTimer = undefined;
@@ -118,11 +150,39 @@ export function endSession(callId: string, endedBy?: string, state?: CallSession
   session.state = state ?? "ended";
   session.endedAt = Date.now();
   session.endedBy = endedBy;
+  session.endReason = endReason;
+  session.connectedParticipantIds.clear();
   activeCallByUser.delete(session.callerId);
   activeCallByUser.delete(session.calleeId);
 
   // Garbage-collect session after 60 seconds
   setTimeout(() => { sessions.delete(callId); }, 60_000);
+  return { changed: true, session };
+}
+
+export function markParticipantConnected(
+  callId: string,
+  userId: string,
+): { changed: boolean; bothConnected: boolean; session: CallSession | null } {
+  const session = sessions.get(callId);
+  if (!session) return { changed: false, bothConnected: false, session: null };
+  if (session.state === "ended" || session.state === "rejected" || session.state === "missed" || session.state === "busy" || session.state === "failed") {
+    return { changed: false, bothConnected: false, session };
+  }
+  const wasKnown = session.connectedParticipantIds.has(userId);
+  if (!wasKnown) {
+    session.connectedParticipantIds.add(userId);
+  }
+  const bothConnected =
+    session.connectedParticipantIds.has(session.callerId) &&
+    session.connectedParticipantIds.has(session.calleeId);
+  if (bothConnected) {
+    session.state = "connected";
+    if (!session.connectedAt) session.connectedAt = Date.now();
+  } else if (session.state === "accepted" || session.state === "ringing") {
+    session.state = "connecting";
+  }
+  return { changed: !wasKnown, bothConnected, session };
 }
 
 export function setRingTimer(callId: string, timer: ReturnType<typeof setTimeout>): void {

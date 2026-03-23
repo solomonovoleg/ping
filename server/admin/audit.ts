@@ -11,6 +11,13 @@ export type AuditAction =
   | "chat.delete"
   | "parser.config.update"
   | "parser.run"
+  | "vk_parser.binding.create"
+  | "vk_parser.binding.update"
+  | "vk_parser.binding.delete"
+  | "vk_parser.binding.run"
+  | "vk_parser.run_all"
+  | "vk_parser.item.approve"
+  | "vk_parser.item.reject"
   | "ops.platform.update"
   | "ops.report.resolve"
   | "ops.report.dismiss";

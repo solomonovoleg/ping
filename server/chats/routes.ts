@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { dmByPublicIdLimiter } from "../auth/rate-limit";
 import { requireAuth, getUserId } from "../auth/session";
 import { noStorePrivateJson } from "../middleware/no-store-private-json";
+import { storage } from "../storage";
 import {
   addMemberToGroup,
   ChatsServiceError,
@@ -313,4 +314,52 @@ export function registerChatsRoutes(app: Express): void {
       throw error;
     }
   });
+
+  app.get("/api/chats/:id/pingok-scheduled-call", noStorePrivateJson, requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req)!;
+    const chatId = param(req.params, "id");
+    try {
+      const active = await storage.getActiveDmScheduledCallForChatMember(userId, chatId);
+      if (!active) {
+        res.json({ active: null });
+        return;
+      }
+      res.json({
+        active: {
+          id: active.id,
+          fireAt: active.fireAt.toISOString(),
+          title: active.title,
+          createdByUserId: active.createdByUserId,
+          peerUserId: active.peerUserId,
+          iAmInitiator: active.iAmInitiator,
+        },
+      });
+    } catch (e) {
+      console.error("[chats] pingok-scheduled-call get", e);
+      res.status(500).json({ message: "Не удалось загрузить" });
+    }
+  });
+
+  app.post(
+    "/api/chats/:id/pingok-scheduled-call/:callId/dismiss",
+    noStorePrivateJson,
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const userId = getUserId(req)!;
+      const chatId = param(req.params, "id");
+      const callId = param(req.params, "callId");
+      const forBoth = req.body?.forBoth === true || req.body?.scope === "both";
+      try {
+        const ok = await storage.dismissDmScheduledCallForChatMember(userId, chatId, callId, { forBoth });
+        if (!ok) {
+          res.status(404).json({ message: "Не найдено" });
+          return;
+        }
+        res.json({ ok: true });
+      } catch (e) {
+        console.error("[chats] pingok-scheduled-call dismiss", e);
+        res.status(500).json({ message: "Ошибка" });
+      }
+    },
+  );
 }

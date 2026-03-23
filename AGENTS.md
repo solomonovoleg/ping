@@ -42,9 +42,12 @@
 - `docs/UIX_SPECIALIST_GUIDE.md` — полировка, микро-взаимодействия, библиотеки.  
 - `docs/UNSTABLE_OR_POORLY_WORKING.md` — что было нестабильно и что исправлено.  
 - `docs/OPTIMIZATIONS.md` — что оптимизировано (code splitting, memo, chunks).  
-- `docs/DEPLOY_RULES.md` — правила деплоя и DATABASE_URL.  
+- `docs/DEPLOY_RULES.md` — правила деплоя и DATABASE_URL.
+- `docs/MIGRATIONS_AND_DEPLOY_CHECKLIST.md` — все миграции (платформа + EDGE + PARSER), порядок `run-migrations.cjs`, чеклист после многих фич.  
 - **`docs/CHAT_DETAIL_RULES.md`** — при изменении страницы чата или хуков чата (ChatDetail, useChatMessages, useSendMessage, useMessageActions) обязательно читать: три хука, только `send.*` и `actions.*`, без голых переменных.
 - **`docs/CALL_REALTIME_IMPROVEMENT_PLAN.md`** — план доработок звонков и общего WebSocket (onclose, stale handlers, peer factory, error vs status, вынос chat realtime). См. также `docs/CALLS_MODULE_AUDIT.md`.
+- **`docs/CALLS_RELIABILITY.md`** — надёжность 1:1: один `/calls` WS на пользователя, порядок accept/offer/ICE, TURN, чеклист регрессий.
+- **`docs/CALLS_EDGE_CASES.md`** — дубли WS/хуков, glare, обрыв, перезагрузка, бэклог до «как у топовых мессенджеров».
 - **`docs/SEED_SOCIAL_AND_FEED.md`** — почему не видно постов/сториз сидов (TTL сториз, лимит 800 постов в ленте, `--reset`, моки в UI).
 - **`docs/CALLS_GROUP.md`** — групповые звонки (флаги, nginx `/group-calls`, mesh, лимиты).
 - **`docs/VOSK_ASR_SETUP.md`** — бесплатный self-hosted ASR backend для титров/команд на VPS.
@@ -57,6 +60,7 @@
 - Клиент: `client/src/` — страницы (`pages/`), компоненты (`components/`), хуки (`hooks/`), API и утилиты (`lib/`).
 - **Эталон UI чата PULSE (макет 1:1):** `client/src/features/chat/pulse-template/` — `DESIGN_RULES.md`, мобильные `MobileChatDark` / `MobileChatLight`, десктоп **`MessengerChatDark` / `MessengerChatLight`** (большой экран, сайдбар списка чатов). В dev: **`/dev/pulse-template`** (мобильный тёмный), **`/dev/pulse-template/desktop`** и **`/dev/pulse-template/desktop-light`** (десктоп). Продакшен-экран — `ChatDetail`; переносить из шаблона по частям, не подменять страницу целиком (см. `docs/CHAT_DETAIL_RULES.md`).
 - **Профиль по макету PULSE:** `client/src/features/profile/pulse-profile/` — оболочка `PulseProfileLayout` (параллакс, сториз-кольцо, вкладки, сетка постов); страница **`UserProfile`** подключает реальные данные, посты, `StoryViewer`. Тема оболочки = глобальная из **Настроек** (`html.dark`). Эталон UI сториз (мок): `client/src/features/chat/pulse-template/MobileStoriesViewer.tsx`, dev **`/dev/pulse-template/stories`** (док: `STORIES_README.md` в той же папке).
+- **EDGE в ленте:** кампания = **пост** с `posts.edge_id`; лайки/комменты/просмотры/шаринг — как у любого поста (`post.id`). В ленте и в **`PostDetail`** — `EdgeCompanionFeedCard` + полный экран **`/edge/{edgeId}?back=…`** (редирект с `/edge/companion?edgeId=`); «Назад» через `back` (`edge-companion-navigation.ts`). Детали: `docs/EDGE_PRODUCT_SPEC.md` §8.
 - **ПИНГОК МИКРО (голосовой слой):** каталог `ПИНГОК МИКРО/` — `client/` (`PingokMicroOverlay`, STT, сценарии), `shared/` (типы NLU), опционально отдельный процесс. Вход в приложении: **долгое удержание центрального логотипа** в нижнем меню (`NavPulseCenterLogoButton` реэкспортируется из `@pingok-micro/…`, не подменять заглушкой «только профиль»). В оверлее: распознавание речи, parse, поиск в памяти, выдача постов ленты, напоминания/задачи/план, написание сообщения контакту, запуск звонка — см. `server/pingok-micro/` и `docs/PROJECT_MAP.md`.
 - Общая схема/типы: `shared/schema/`.
 - Сервер: `server/` — маршруты по доменам (auth, chats, messages, posts, calls, ws, upload и т.д.).

@@ -13,6 +13,7 @@ import { getDb } from "../db";
 import { stories, storyViews } from "@shared/schema";
 import { CHAT_LIST_SECTIONS, type ChatListSection } from "@shared/schema";
 import { markServiceStepRead } from "../service-chat/service";
+import { targetAllowsGroupAddFromActor, viewerMayDmTarget } from "../users/social-policy";
 
 export class ChatsServiceError extends Error {
   status: number;
@@ -99,19 +100,44 @@ async function buildDmChatPayload(
   const otherId = memberIds.find((id) => id !== viewerId);
   const other = otherId ? await storage.getUser(otherId) : undefined;
   const otherName = other ? [other.displayName, other.surname].filter(Boolean).join(" ") || null : null;
-  const [otherLastReadAt, myLastReadAt, unreadCount] = await Promise.all([
+  const [otherLastReadAt, myLastReadAt, unreadCount, blockedByOtherRow, myBlockRow] = await Promise.all([
     otherId ? storage.getChatMemberLastReadAt(chatId, otherId) : Promise.resolve(null),
     storage.getChatMemberLastReadAt(chatId, viewerId),
     storage.getUnreadCount(chatId, viewerId),
+    otherId ? storage.getBlockFlags(otherId, viewerId) : Promise.resolve(null),
+    otherId ? storage.getBlockFlags(viewerId, otherId) : Promise.resolve(null),
   ]);
   const lastSeenAt = await getOtherLastSeenAt(viewerId, otherId, other);
   const hasUnread = unreadCount > 0;
+  const blockedByOther =
+    blockedByOtherRow &&
+    (blockedByOtherRow.restrictChat ||
+      blockedByOtherRow.restrictProfile ||
+      blockedByOtherRow.restrictSocial)
+      ? {
+          restrictChat: blockedByOtherRow.restrictChat,
+          restrictProfile: blockedByOtherRow.restrictProfile,
+          restrictSocial: blockedByOtherRow.restrictSocial,
+          note: blockedByOtherRow.blockNote,
+        }
+      : null;
+  const myBlockOfOther =
+    myBlockRow &&
+    (myBlockRow.restrictChat || myBlockRow.restrictProfile || myBlockRow.restrictSocial)
+      ? {
+          restrictChat: myBlockRow.restrictChat,
+          restrictProfile: myBlockRow.restrictProfile,
+          restrictSocial: myBlockRow.restrictSocial,
+        }
+      : null;
   return {
     ...baseChat,
     name: otherName,
     myLastReadAt: myLastReadAt?.toISOString() ?? null,
     hasUnread,
     unreadCount: hasUnread ? unreadCount : 0,
+    blockedByOther,
+    myBlockOfOther,
     otherMember: other
       ? {
           id: other.id,
@@ -119,7 +145,6 @@ async function buildDmChatPayload(
           displayName: other.displayName,
           surname: other.surname,
           avatarUrl: other.avatarUrl,
-          phone: other.phone ?? null,
           lastReadAt: otherLastReadAt ? otherLastReadAt.toISOString() : null,
           lastSeenAt,
         }
@@ -414,6 +439,11 @@ export async function markChatRead(chatId: string, userId: string, messageId?: s
     throw new ChatsServiceError(403, "Нет доступа к чату");
   }
   if (!messageId) return;
+  const msg = await storage.getMessage(chatId, messageId);
+  if (!msg) return;
+  /* Курсор чтения только по чужим сообщениям; свои/sлужебные — иначе ложные ✓✓ у собеседника */
+  if (msg.type === "system" || msg.type === "missed_call") return;
+  if (msg.senderId === userId) return;
   await storage.updateLastReadByMessageId(chatId, userId, messageId);
   await markServiceStepRead(chatId, messageId);
   const lastReadAt = await storage.getChatMemberLastReadAt(chatId, userId);
@@ -486,6 +516,13 @@ export async function addMemberToGroup(actorUserId: string, chatId: string, newU
   if (memberIds.includes(newUserId)) throw new ChatsServiceError(400, "Пользователь уже в группе");
   const other = await storage.getUser(newUserId);
   if (!other) throw new ChatsServiceError(404, "Пользователь не найден");
+  const groupOk = await targetAllowsGroupAddFromActor(actorUserId, newUserId);
+  if (!groupOk) {
+    throw new ChatsServiceError(
+      403,
+      "Пользователь ограничил, кто может добавлять его в групповые чаты (нужна подписка или взаимная подписка)",
+    );
+  }
   await storage.addChatMember({ chatId, userId: newUserId, role: "member" });
   notifyChatListUpdate(newUserId);
   return getChatByIdForUser(actorUserId, chatId);

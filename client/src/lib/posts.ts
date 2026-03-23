@@ -85,8 +85,21 @@ export async function uploadPostMedia(
   return url;
 }
 
-export async function createPost(data: { text: string; imageUrl?: string | null; mediaUrls?: string[]; mediaLayout?: PostMediaLayout | null }): Promise<{ id: string; createdAt: string }> {
-  const payload: { text: string; imageUrl?: string | null; mediaUrls?: string[]; mediaLayout?: PostMediaLayout | null } = {
+export async function createPost(data: {
+  text: string;
+  imageUrl?: string | null;
+  mediaUrls?: string[];
+  mediaLayout?: PostMediaLayout | null;
+  /** Кампания EDGE в теле поста. */
+  edgeId?: string | null;
+}): Promise<{ id: string; createdAt: string }> {
+  const payload: {
+    text: string;
+    imageUrl?: string | null;
+    mediaUrls?: string[];
+    mediaLayout?: PostMediaLayout | null;
+    edgeId?: string | null;
+  } = {
     text: data.text.trim(),
   };
   if (data.mediaUrls?.length) {
@@ -95,6 +108,8 @@ export async function createPost(data: { text: string; imageUrl?: string | null;
     payload.imageUrl = data.imageUrl ?? null;
   }
   if (data.mediaLayout !== undefined) payload.mediaLayout = data.mediaLayout;
+  const e = data.edgeId?.trim();
+  if (e) payload.edgeId = e;
   const res = await apiFetch(`${API}/posts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

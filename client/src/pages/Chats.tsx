@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, memo, useCallback, useMemo, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useLocation } from "wouter";
 import {
@@ -18,6 +18,7 @@ import {
   BookUser,
   Loader2,
   EyeOff,
+  Eye,
   Trash2,
   Briefcase,
   Megaphone,
@@ -25,6 +26,7 @@ import {
   Heart,
   LayoutList,
   Sparkles,
+  MoreHorizontal,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,6 +35,11 @@ import { GlobalSearch } from "@/components/GlobalSearch";
 import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChatRealtime } from "@/features/chat/hooks/useChatRealtime";
+import {
+  onChatPendingUnread,
+  onChatPendingUnreadClear,
+  onChatRead,
+} from "@/features/chat/realtime-events";
 
 import { API, apiFetch } from "@/lib/api-base";
 import {
@@ -76,6 +83,7 @@ import {
 } from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
 import type { ApiChat } from "@/features/chat";
+import { formatMessageContentPreview } from "@/features/chat/utils/message-content-preview";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import {
   AlertDialog,
@@ -257,6 +265,10 @@ const ChatRow = memo(function ChatRow({
   isAiChat,
   /** Скрытые / архив: без бейджа непрочитанного и яркого акцента (как «без уведомлений» в списке). */
   suppressUnreadVisual,
+  /** Кнопка справа (например «Вернуть» у скрытых чатов); не даём всплыть long-press на строку. */
+  trailingAction,
+  /** WS подсказка «входящее» до refetch списка — точка/бейдж, если серверный unread ещё 0. */
+  pendingUnreadHint,
 }: {
   chat: ApiChat;
   typingLabel: string | null;
@@ -266,6 +278,8 @@ const ChatRow = memo(function ChatRow({
   onLongPressMenu?: () => void;
   isAiChat?: boolean;
   suppressUnreadVisual?: boolean;
+  trailingAction?: ReactNode;
+  pendingUnreadHint?: boolean;
 }) {
   const rawUnc = (chat as { unread_count?: unknown }).unread_count;
   const unreadCount = Math.max(
@@ -276,7 +290,9 @@ const ChatRow = memo(function ChatRow({
     ) || 0,
   );
   const hasUnreadVisual =
-    !isAiChat && !suppressUnreadVisual && (unreadCount > 0 || chat.hasUnread === true);
+    !isAiChat &&
+    !suppressUnreadVisual &&
+    (unreadCount > 0 || chat.hasUnread === true || pendingUnreadHint === true);
 
   const reducedMotion = usePrefersReducedMotion();
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -451,6 +467,16 @@ const ChatRow = memo(function ChatRow({
         )}
       >
         {content}
+        {trailingAction ? (
+          <span
+            className="flex shrink-0 items-center"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {trailingAction}
+          </span>
+        ) : null}
         {badgeLabel ? (
           <span
             className="flex-shrink-0 inline-flex min-h-[20px] min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground"
@@ -501,6 +527,59 @@ export default function Chats() {
     refetchOnMount: "always",
   });
 
+  /** Пока refetch /chats не подтвердил unread, показываем индикатор по событию входящего из WS (слушатель в AppLayout). */
+  const [pendingUnreadChatIds, setPendingUnreadChatIds] = useState(() => new Set<string>());
+
+  useEffect(() => {
+    return onChatPendingUnread(({ chatId }) => {
+      setPendingUnreadChatIds((prev) => {
+        if (prev.has(chatId)) return prev;
+        const next = new Set(prev);
+        next.add(chatId);
+        return next;
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    return onChatPendingUnreadClear(({ chatId }) => {
+      setPendingUnreadChatIds((prev) => {
+        if (!prev.has(chatId)) return prev;
+        const next = new Set(prev);
+        next.delete(chatId);
+        return next;
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    return onChatRead((detail) => {
+      if (!detail.readerId || detail.readerId !== user?.id) return;
+      setPendingUnreadChatIds((prev) => {
+        if (!prev.has(detail.chatId)) return prev;
+        const next = new Set(prev);
+        next.delete(detail.chatId);
+        return next;
+      });
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (chats.length === 0) return;
+    setPendingUnreadChatIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(prev);
+      let changed = false;
+      for (const chat of chats) {
+        if (next.has(chat.id) && chatHasUnread(chat)) {
+          next.delete(chat.id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [chats]);
+
   const [listSectionTab, setListSectionTab] = useState<"all" | "friends" | "work" | "promo" | "invitations">("all");
   /** Полоса скрытых чатов вверху списка после pull-to-refresh (если есть скрытые). */
   const [hiddenPeekOpen, setHiddenPeekOpen] = useState(false);
@@ -533,6 +612,26 @@ export default function Chats() {
       const chatId = chat.id;
       unsubs.push(
         subscribeChat(chatId, () => {
+          if (typingTimeoutsRef.current[chatId]) {
+            clearTimeout(typingTimeoutsRef.current[chatId]);
+            delete typingTimeoutsRef.current[chatId];
+          }
+          setTypingByChatId((prev) => {
+            if (prev[chatId] == null) return prev;
+            const next = { ...prev };
+            delete next[chatId];
+            return next;
+          });
+          if (voiceTimeoutsRef.current[chatId]) {
+            clearTimeout(voiceTimeoutsRef.current[chatId]);
+            delete voiceTimeoutsRef.current[chatId];
+          }
+          setVoiceRecordingByChatId((prev) => {
+            if (prev[chatId] == null) return prev;
+            const next = { ...prev };
+            delete next[chatId];
+            return next;
+          });
           notifyChatListUpdate();
           void queryClient.invalidateQueries({ queryKey: ["chats"] });
         })
@@ -700,6 +799,29 @@ export default function Chats() {
     void queryClient.invalidateQueries({ queryKey: ["chats", "hidden"] });
     notifyChatListUpdate();
   }, [queryClient, notifyChatListUpdate]);
+
+  const unhideChat = useCallback(
+    async (chatId: string) => {
+      try {
+        await patchChatMemberMe(chatId, { hidden: false });
+        refreshChatQueries();
+        await refetchHidden();
+        toast({ title: "Чат снова в основном списке" });
+      } catch (e) {
+        toast({
+          title: "Не удалось вернуть чат",
+          description: e instanceof Error ? e.message : "Повторите позже",
+          variant: "destructive",
+        });
+      }
+    },
+    [refreshChatQueries, refetchHidden, toast],
+  );
+
+  const serviceMenuChatIsHidden = useMemo(
+    () => !!serviceMenuChat && hiddenChats.some((h) => h.id === serviceMenuChat.id),
+    [serviceMenuChat, hiddenChats],
+  );
 
   const revealHiddenPeekIfAny = useCallback(() => {
     void (async () => {
@@ -1218,7 +1340,8 @@ export default function Chats() {
                     <div className="min-w-0">
                       <p className="text-[13px] font-semibold leading-tight text-foreground/95">Скрытые чаты</p>
                       <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                        В основном списке не показываются и без счётчика непрочитанного. Нажмите — открыть переписку.
+                        В основном списке не показываются, без счётчика непрочитанного. Нажмите строку — открыть чат;
+                        три точки — вернуть в список; удерживайте строку — полное меню.
                       </p>
                     </div>
                   </div>
@@ -1242,6 +1365,30 @@ export default function Chats() {
                       suppressUnreadVisual
                       onSelect={() => setLocation(`/chat/${encodeURIComponent(h.id)}`)}
                       onLongPressMenu={() => setServiceMenuChat(h)}
+                      trailingAction={
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                              aria-label="Меню скрытого чата"
+                              onPointerDown={(e) => e.stopPropagation()}
+                            >
+                              <MoreHorizontal className="h-5 w-5" aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-[220px]">
+                            <DropdownMenuItem
+                              onClick={() => {
+                                void unhideChat(h.id);
+                              }}
+                            >
+                              <Eye className="h-4 w-4" aria-hidden />
+                              Вернуть в основной список
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      }
                     />
                   ))}
                 </div>
@@ -1290,7 +1437,9 @@ export default function Chats() {
                           className="flex flex-col gap-0.5 p-2.5 rounded-lg hover:bg-secondary/50 cursor-pointer"
                         >
                           <span className="text-xs text-muted-foreground">{hit.chatName}</span>
-                          <span className="text-sm truncate">{hit.content}</span>
+                          <span className="text-sm truncate">
+                            {formatMessageContentPreview(hit.type, hit.content, 200)}
+                          </span>
                         </TapScaleDiv>
                       </li>
                     ))}
@@ -1402,6 +1551,7 @@ export default function Chats() {
                               chat={chat}
                               typingLabel={typingByChatId[chat.id] ?? null}
                               voiceLabel={voiceRecordingByChatId[chat.id] ?? null}
+                              pendingUnreadHint={pendingUnreadChatIds.has(chat.id)}
                               onSelect={() => setLocation(`/chat/${encodeURIComponent(chat.id)}`)}
                               onLongPressMenu={() => setServiceMenuChat(chat)}
                             />
@@ -1491,13 +1641,21 @@ export default function Chats() {
                   onClick={async () => {
                     const c = serviceMenuChat;
                     try {
-                      await patchChatMemberMe(c.id, { hidden: true });
-                      refreshChatQueries();
-                      setServiceMenuChat(null);
-                      toast({
-                        title: "Чат скрыт",
-                        description: "Потяните список вниз для обновления — скрытые чаты появятся вверху списка.",
-                      });
+                      if (serviceMenuChatIsHidden) {
+                        await patchChatMemberMe(c.id, { hidden: false });
+                        refreshChatQueries();
+                        await refetchHidden();
+                        setServiceMenuChat(null);
+                        toast({ title: "Чат снова в основном списке" });
+                      } else {
+                        await patchChatMemberMe(c.id, { hidden: true });
+                        refreshChatQueries();
+                        setServiceMenuChat(null);
+                        toast({
+                          title: "Чат скрыт",
+                          description: "Потяните список вниз для обновления — скрытые чаты появятся вверху списка.",
+                        });
+                      }
                     } catch (e) {
                       toast({
                         title: "Не удалось",
@@ -1507,8 +1665,12 @@ export default function Chats() {
                     }
                   }}
                 >
-                  <EyeOff className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
-                  Скрыть из списка
+                  {serviceMenuChatIsHidden ? (
+                    <Eye className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  ) : (
+                    <EyeOff className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  )}
+                  {serviceMenuChatIsHidden ? "Вернуть в основной список" : "Скрыть из списка"}
                 </TapScaleButton>
                 </div>
 

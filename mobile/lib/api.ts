@@ -12,7 +12,7 @@ const PING_SECURE_USER_SNAPSHOT_KEY = "ping_auth_user_snapshot";
 export type AuthUser = {
   id: string;
   publicId: number;
-  phone: string;
+  phone?: string | null;
   displayName: string | null;
   surname: string | null;
   gender: string | null;
@@ -34,7 +34,10 @@ async function readUserSnapshot(): Promise<AuthUser | null> {
 async function writeUserSnapshot(u: AuthUser | null): Promise<void> {
   try {
     if (!u) await SecureStore.deleteItemAsync(PING_SECURE_USER_SNAPSHOT_KEY);
-    else await SecureStore.setItemAsync(PING_SECURE_USER_SNAPSHOT_KEY, JSON.stringify(u));
+    else {
+      const { phone: _omit, ...rest } = u;
+      await SecureStore.setItemAsync(PING_SECURE_USER_SNAPSHOT_KEY, JSON.stringify(rest));
+    }
   } catch {
     /* ignore */
   }
@@ -233,16 +236,37 @@ export async function startDm(otherUserId: string): Promise<ChatItem> {
   return data as ChatItem;
 }
 
+export type ChatBlockFlags = {
+  restrictChat: boolean;
+  restrictProfile: boolean;
+  restrictSocial: boolean;
+};
+
+export type ChatMember = {
+  id: string;
+  publicId?: number;
+  displayName: string | null;
+  surname: string | null;
+  avatarUrl?: string | null;
+  role?: string;
+};
+
 export type ChatDetail = ChatItem & {
   otherMember?: {
     id: string;
     displayName: string | null;
     surname: string | null;
     avatarUrl: string | null;
-    phone?: string | null;
     lastReadAt?: string | null;
     lastSeenAt?: string | null;
   } | null;
+  /** Группа: участники (GET /chats/:id). */
+  members?: ChatMember[];
+  myRole?: "admin" | "member";
+  /** Собеседник ограничил вас */
+  blockedByOther?: (ChatBlockFlags & { note: string | null }) | null;
+  /** Вы ограничили собеседника */
+  myBlockOfOther?: ChatBlockFlags | null;
 };
 
 export async function getChat(id: string): Promise<ChatDetail> {
@@ -277,6 +301,38 @@ export async function sendMessage(chatId: string, content: string, type = "text"
     throw new Error((err as { message?: string }).message || "Не удалось отправить");
   }
   return res.json();
+}
+
+/** Блокировка пользователя (явные флаги, как на вебе). */
+export async function setUserBlockFlags(
+  targetUserId: string,
+  flags: ChatBlockFlags,
+  note?: string | null,
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    restrictProfile: flags.restrictProfile,
+    restrictChat: flags.restrictChat,
+    restrictSocial: flags.restrictSocial,
+  };
+  if (note !== undefined) body.note = note === "" ? null : String(note).slice(0, 500);
+  const res = await apiFetch(`/users/${encodeURIComponent(targetUserId)}/block`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.message as string) || "Не удалось заблокировать");
+}
+
+export async function removeUserBlock(targetUserId: string): Promise<void> {
+  const res = await apiFetch(`/users/${encodeURIComponent(targetUserId)}/block`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.message as string) || "Не удалось снять блокировку");
+}
+
+export async function deleteChatForMe(chatId: string): Promise<void> {
+  const res = await apiFetch(`/chats/${encodeURIComponent(chatId)}/me`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.message as string) || "Не удалось удалить чат у себя");
 }
 
 /** Передавай messageId последнего видимого сообщения — иначе сервер не двигает lastReadAt (корректные галочки). */

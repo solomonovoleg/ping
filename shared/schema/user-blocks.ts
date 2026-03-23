@@ -18,6 +18,8 @@ export const userBlocks = pgTable(
     restrictChat: boolean("restrict_chat").notNull().default(true),
     /** blocked не может комментировать и реагировать на контент blocker */
     restrictSocial: boolean("restrict_social").notNull().default(true),
+    /** Комментарий blocker для blocked (показ при «вы ограничены»), до 500 символов */
+    blockNote: varchar("block_note", { length: 500 }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [unique().on(t.blockerId, t.blockedId)]

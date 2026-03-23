@@ -5,7 +5,9 @@ import type { CallState } from "./call-types";
  * Если перехода нет в таблице — он невалиден и будет отклонён.
  */
 const TRANSITIONS: Record<CallState, CallState[]> = {
-  idle:              ["outgoing_ringing", "incoming_ringing"],
+  /** reconnecting: восстановление сессии после reload / нового WS при активном звонке на сервере */
+  idle:              ["initializing", "outgoing_ringing", "incoming_ringing", "reconnecting"],
+  initializing:      ["outgoing_ringing", "failed", "ended"],
   outgoing_ringing:  ["connecting", "incoming_ringing", "reconnecting", "ended", "busy", "rejected", "missed", "failed"],
   incoming_ringing:  ["accepting", "reconnecting", "rejected", "ended", "missed"],
   accepting:         ["connecting", "reconnecting", "failed", "ended"],
@@ -16,7 +18,7 @@ const TRANSITIONS: Record<CallState, CallState[]> = {
   rejected:          ["idle"],
   missed:            ["idle"],
   busy:              ["idle"],
-  failed:            ["idle"],
+  failed:            ["idle", "ended"],
 };
 
 /** Terminal states — после них звонок завершён, можно вернуться только в idle. */
@@ -24,6 +26,7 @@ const TERMINAL_STATES: ReadonlySet<CallState> = new Set<CallState>(["ended", "re
 
 /** States where an active call is in progress (peer/media may exist). */
 const ACTIVE_STATES: ReadonlySet<CallState> = new Set<CallState>([
+  "initializing",
   "outgoing_ringing",
   "incoming_ringing",
   "accepting",

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { MessageCircle, Newspaper } from "lucide-react";
 import { useLocation } from "wouter";
@@ -14,14 +15,25 @@ import {
   pingokMicroExecute,
   pingokMicroSendDm,
   pingokMicroStartCall,
+  pingokMicroConfirmScheduleCall,
   type PingokMemorySearchResponse,
   type PingokExecuteResponse,
   type PingokExecuteCandidate,
 } from "./pingok-micro-api";
 import { fetchFeed, type FeedPost } from "@/lib/posts";
 import { PingokVoicePanel, type PingokVoiceVisualPhase } from "./PingokVoicePanel";
-import { triggerTapFeedback, triggerSuccessFeedback, triggerErrorFeedback } from "@/lib/micro-feedback";
+import {
+  triggerTapFeedback,
+  triggerSuccessFeedback,
+  triggerErrorFeedback,
+  playPingokReadySound,
+} from "@/lib/micro-feedback";
 import { isVoiceNo, isVoiceYes, pickCandidateFromVoice } from "./voice-followup";
+import { PingokSuccessFlight } from "@/features/pingok/PingokSuccessFlight";
+import {
+  pingokSuccessPayloadFromExecute,
+  type PingokSuccessFlightPayload,
+} from "@/features/pingok/pingok-success-flight-types";
 
 type Props = {
   open: boolean;
@@ -35,8 +47,13 @@ type PendingVoiceAction =
   | { kind: "pick_user"; candidates: PingokExecuteCandidate[]; pendingMessage: string }
   | { kind: "confirm_call_user"; candidate: PingokExecuteCandidate; mode: "audio" | "video" }
   | { kind: "pick_call_user"; candidates: PingokExecuteCandidate[]; mode: "audio" | "video" }
+  | {
+      kind: "pick_schedule_call_user";
+      candidates: PingokExecuteCandidate[];
+      fireAtIso: string;
+      reminderTitle: string;
+    }
   | null;
-const RECENT_COMMANDS_KEY = "pingok:recent-commands:v1";
 
 export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
   const reduced = usePrefersReducedMotion();
@@ -51,24 +68,15 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
   const [execError, setExecError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<PingokExecuteResponse | null>(null);
   const [pickBusyId, setPickBusyId] = useState<string | null>(null);
-  const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingVoiceAction, setPendingVoiceAction] = useState<PendingVoiceAction>(null);
+  const [successFlight, setSuccessFlight] = useState<PingokSuccessFlightPayload | null>(null);
   const lastVisualPhaseRef = useRef<PingokVoiceVisualPhase | null>(null);
+  const overlaySessionOpenRef = useRef(false);
 
-  const pushRecentCommand = useCallback((text: string) => {
-    const normalized = text.trim();
-    if (!normalized) return;
-    setRecentCommands((prev) => {
-      const next = [normalized, ...prev.filter((x) => x !== normalized)].slice(0, 3);
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(next));
-        }
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+  const launchSuccessFlight = useCallback((ex: PingokExecuteResponse, opts?: { messageBody?: string }) => {
+    if (!ex.ok) return;
+    const p = pingokSuccessPayloadFromExecute(ex, opts);
+    if (p) setSuccessFlight(p);
   }, []);
 
   const runParse = useCallback(async (commandText: string) => {
@@ -116,10 +124,12 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       return;
     }
 
+    const normalizedCommand = data.commandText.trim() || commandText;
+
     if (data.intent === "find") {
       setExecPhase("memory");
       try {
-        const mem = await pingokMicroMemorySearch(commandText);
+        const mem = await pingokMicroMemorySearch(normalizedCommand);
         setMemorySearch(mem);
       } catch (e) {
         setExecError(e instanceof Error ? e.message : "Ошибка поиска");
@@ -128,7 +138,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
     } else if (data.intent === "show") {
       setExecPhase("posts");
       try {
-        const posts = await fetchFeed(15, 0, { q: commandText });
+        const posts = await fetchFeed(15, 0, { q: normalizedCommand });
         setShowPosts(posts);
       } catch (e) {
         setExecError(e instanceof Error ? e.message : "Не удалось загрузить посты");
@@ -142,7 +152,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       data.intent === "message"
     ) {
       try {
-        const ex = await pingokMicroExecute(commandText);
+        const ex = await pingokMicroExecute(normalizedCommand);
         setExecuteResult(ex);
         if (ex.ok) {
           if (ex.chatId && ex.targetUserId && ex.callMode) {
@@ -155,6 +165,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
               { kind: "dm" },
             );
             onClose();
+          } else {
+            launchSuccessFlight(ex);
           }
           setParseResult((prev) =>
             prev ? { ...prev, reply: ex.reply } : { ...data, reply: ex.reply },
@@ -202,6 +214,19 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
               candidates: ex.candidates,
               mode: ex.pendingCallMode === "video" ? "video" : "audio",
             });
+          } else if (
+            ex.code === "pick_schedule_call_peer" &&
+            Array.isArray(ex.candidates) &&
+            ex.candidates.length > 1 &&
+            ex.pendingScheduleFireAt &&
+            ex.pendingScheduleReminderTitle?.trim()
+          ) {
+            setPendingVoiceAction({
+              kind: "pick_schedule_call_user",
+              candidates: ex.candidates,
+              fireAtIso: ex.pendingScheduleFireAt,
+              reminderTitle: ex.pendingScheduleReminderTitle.trim(),
+            });
           }
           setParseResult((prev) =>
             prev ? { ...prev, reply: ex.reply } : { ...data, reply: ex.reply },
@@ -213,7 +238,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
     }
 
     setStage("result");
-  }, [call, onClose]);
+  }, [call, launchSuccessFlight, onClose]);
 
   const sendPendingMessageTo = useCallback(
     async (candidate: PingokExecuteCandidate, pendingMessage: string) => {
@@ -225,6 +250,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         setExecuteResult(ex);
         if (ex.ok) {
           setPendingVoiceAction(null);
+          triggerSuccessFeedback();
+          launchSuccessFlight(ex, { messageBody: pendingMessage.trim() });
           setParseResult({
             intent: "message",
             commandText: pendingMessage,
@@ -246,7 +273,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         setStage("result");
       }
     },
-    [],
+    [launchSuccessFlight],
   );
 
   const startPendingCallTo = useCallback(
@@ -289,6 +316,41 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       }
     },
     [call, onClose],
+  );
+
+  const confirmScheduleToPeer = useCallback(
+    async (candidate: PingokExecuteCandidate, fireAtIso: string, reminderTitle: string) => {
+      setStage("processing");
+      setPickBusyId(candidate.id);
+      try {
+        const ex = await pingokMicroConfirmScheduleCall(candidate.id, fireAtIso, reminderTitle);
+        setExecuteResult(ex);
+        if (ex.ok) {
+          setPendingVoiceAction(null);
+          triggerSuccessFeedback();
+          launchSuccessFlight(ex);
+          setParseResult({
+            intent: "call",
+            commandText: "",
+            reply: ex.reply,
+            slots: {},
+          });
+        } else {
+          setParseResult({
+            intent: "call",
+            commandText: "",
+            reply: ex.reply,
+            slots: {},
+          });
+        }
+      } catch (e) {
+        setExecError(e instanceof Error ? e.message : "Не удалось запланировать звонок");
+      } finally {
+        setPickBusyId(null);
+        setStage("result");
+      }
+    },
+    [launchSuccessFlight],
   );
 
   const handleVoiceFollowup = useCallback(
@@ -358,6 +420,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       if (picked) {
         if (pending.kind === "pick_user") {
           await sendPendingMessageTo(picked, pending.pendingMessage);
+        } else if (pending.kind === "pick_schedule_call_user") {
+          await confirmScheduleToPeer(picked, pending.fireAtIso, pending.reminderTitle);
         } else {
           await startPendingCallTo(picked, pending.mode);
         }
@@ -367,27 +431,36 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         setPendingVoiceAction(null);
         setExecuteResult(null);
         setStage("result");
+        const isMsg = pending.kind === "pick_user";
+        const isSched = pending.kind === "pick_schedule_call_user";
         setParseResult({
-          intent: pending.kind === "pick_user" ? "message" : "call",
+          intent: isMsg ? "message" : "call",
           commandText: spoken,
-          reply: pending.kind === "pick_user" ? "Ок, отменил отправку. Назовите получателя заново." : "Ок, отменил звонок. Назовите контакт заново.",
+          reply: isMsg
+            ? "Ок, отменил отправку. Назовите получателя заново."
+            : isSched
+              ? "Ок, отменил планирование. Скажите команду заново."
+              : "Ок, отменил звонок. Назовите контакт заново.",
           slots: {},
         });
         return true;
       }
       setStage("result");
+      const isMsg2 = pending.kind === "pick_user";
+      const isSched2 = pending.kind === "pick_schedule_call_user";
       setParseResult({
-        intent: pending.kind === "pick_user" ? "message" : "call",
+        intent: isMsg2 ? "message" : "call",
         commandText: spoken,
-        reply:
-          pending.kind === "pick_user"
-            ? "Не распознал адресата. Скажите имя или номер из списка."
+        reply: isMsg2
+          ? "Не распознал адресата. Скажите имя или номер из списка."
+          : isSched2
+            ? "Не распознал контакт. Скажите имя из списка для плана звонка."
             : "Не распознал контакт. Скажите имя или номер из списка.",
         slots: {},
       });
       return true;
     },
-    [pendingVoiceAction, sendPendingMessageTo, startPendingCallTo],
+    [pendingVoiceAction, sendPendingMessageTo, startPendingCallTo, confirmScheduleToPeer],
   );
 
   const { phase, liveLine, start, abort, submitStream } = usePingokMicroStt({
@@ -413,7 +486,6 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
           });
           return;
         }
-        pushRecentCommand(effectiveCommand);
         await runParse(effectiveCommand);
       })();
     },
@@ -425,24 +497,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
   abortRef.current = abort;
 
   useEffect(() => {
-    try {
-      if (typeof window === "undefined") return;
-      const raw = window.localStorage.getItem(RECENT_COMMANDS_KEY);
-      if (!raw) return;
-      const arr = JSON.parse(raw) as unknown;
-      if (!Array.isArray(arr)) return;
-      setRecentCommands(
-        arr
-          .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-          .slice(0, 3),
-      );
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  useEffect(() => {
     if (!open) {
+      overlaySessionOpenRef.current = false;
       abortRef.current();
       setStage("listening");
       setExecPhase(null);
@@ -454,23 +510,32 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       setExecuteResult(null);
       setPickBusyId(null);
       setPendingVoiceAction(null);
+      setSuccessFlight(null);
       return;
     }
-    setStage("listening");
-    setExecPhase(null);
-    setTranscript("");
-    setParseResult(null);
-    setMemorySearch(null);
-    setShowPosts(null);
-    setExecError(null);
-    setExecuteResult(null);
-    setPickBusyId(null);
-    setPendingVoiceAction(null);
+    const freshSession = !overlaySessionOpenRef.current;
+    overlaySessionOpenRef.current = true;
+    if (freshSession) {
+      setStage("listening");
+      setExecPhase(null);
+      setTranscript("");
+      setParseResult(null);
+      setMemorySearch(null);
+      setShowPosts(null);
+      setExecError(null);
+      setExecuteResult(null);
+      setPickBusyId(null);
+      setPendingVoiceAction(null);
+      setSuccessFlight(null);
+      window.setTimeout(() => {
+        if (overlaySessionOpenRef.current && !reduced) playPingokReadySound();
+      }, 140);
+    }
     void startRef.current();
     return () => {
       abortRef.current();
     };
-  }, [open, voiceMode]);
+  }, [open, voiceMode, reduced]);
 
   useEffect(() => {
     if (!open || !pendingVoiceAction) return;
@@ -490,7 +555,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
       (executeResult.code === "confirm_user" ||
         executeResult.code === "pick_user" ||
         executeResult.code === "confirm_call_user" ||
-        executeResult.code === "pick_call_user");
+        executeResult.code === "pick_call_user" ||
+        executeResult.code === "pick_schedule_call_peer");
     if (waitingForPick) return;
     const shouldAutoRearm =
       parseResult?.intent === "unknown" ||
@@ -499,7 +565,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         executeResult.code !== "confirm_user" &&
         executeResult.code !== "pick_user" &&
         executeResult.code !== "confirm_call_user" &&
-        executeResult.code !== "pick_call_user");
+        executeResult.code !== "pick_call_user" &&
+        executeResult.code !== "pick_schedule_call_peer");
     if (!shouldAutoRearm) return;
     const t = window.setTimeout(() => {
       setStage("listening");
@@ -509,7 +576,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
   }, [open, stage, pendingVoiceAction, executeResult, parseResult]);
 
   const handleClose = () => {
-    triggerTapFeedback({ haptic: true, sound: false });
+    triggerTapFeedback({ haptic: true, sound: true });
+    setSuccessFlight(null);
     abort();
     onClose();
   };
@@ -553,14 +621,24 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         ? executeResult.reply.split(/[.!?]\s/)[0]?.trim() || executeResult.reply
         : parseResult?.reply?.split(/[.!?]\s/)[0]?.trim() || "Готово";
 
+  const needsUserPickOrConfirm =
+    !!executeResult &&
+    !executeResult.ok &&
+    !!executeResult.candidates?.length &&
+    (executeResult.code === "pick_user" ||
+      executeResult.code === "pick_call_user" ||
+      executeResult.code === "pick_schedule_call_peer" ||
+      executeResult.code === "confirm_user" ||
+      executeResult.code === "confirm_call_user");
+
   const doneSubtitle =
     execError || phase === "error"
-      ? "Попробуйте ещё раз"
-      : memorySearch ||
-          showPosts !== null ||
-          (executeResult && !executeResult.ok && executeResult.candidates?.length)
-        ? "Смотрите варианты ниже"
-        : "Команда обработана";
+      ? "Скажите ещё раз или закройте панель"
+      : needsUserPickOrConfirm
+        ? "Выберите ниже или ответьте голосом"
+        : memorySearch || showPosts !== null
+          ? "Откройте нужное касанием"
+          : "Можно закрыть или нажать «Новая команда»";
 
   useEffect(() => {
     if (!open) return;
@@ -568,36 +646,44 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
     if (prev !== visualPhase && visualPhase === "done") {
       if (execError || phase === "error") {
         triggerErrorFeedback();
-      } else {
+      } else if (executeResult?.ok) {
         triggerSuccessFeedback();
+      } else if (needsUserPickOrConfirm) {
+        if (!reduced) playPingokReadySound();
+        else triggerTapFeedback({ haptic: true, sound: false });
+      } else {
+        triggerTapFeedback({ haptic: true, sound: !reduced });
       }
     }
     lastVisualPhaseRef.current = visualPhase;
-  }, [visualPhase, open, execError, phase]);
-
-  const handleReplayCommand = (text: string) => {
-    triggerTapFeedback({ haptic: true, sound: false });
-    setTranscript(text);
-    void runParse(text);
-  };
+  }, [visualPhase, open, execError, phase, executeResult, needsUserPickOrConfirm, reduced]);
 
   const micLabel =
     phase === "error"
-      ? "Нет доступа к микрофону"
+      ? "Разрешите микрофон в настройках браузера"
       : pendingVoiceAction?.kind === "confirm_user"
-        ? "Ожидаю ответ: да или нет"
+        ? "Скажите «да» или «нет»"
         : pendingVoiceAction?.kind === "confirm_call_user"
-          ? "Подтвердите звонок: да или нет"
+          ? "«Да» — звоним, «нет» — отмена"
         : pendingVoiceAction?.kind === "pick_user"
-          ? "Назовите получателя"
+          ? "Имя или «первый» / «второй»"
           : pendingVoiceAction?.kind === "pick_call_user"
-            ? "Назовите контакт для звонка"
+            ? "Контакт или номер из списка"
+          : pendingVoiceAction?.kind === "pick_schedule_call_user"
+            ? "Кому звонок — имя из списка"
           : phase === "listening"
-            ? "Микрофон активен"
-            : "Микрофон готов";
+            ? "Слушаю"
+            : "Готов";
 
   const handlePickCandidate = async (c: PingokExecuteCandidate) => {
     if (!executeResult || executeResult.ok) return;
+    if (executeResult.code === "pick_schedule_call_peer") {
+      const fire = executeResult.pendingScheduleFireAt;
+      const title = executeResult.pendingScheduleReminderTitle?.trim();
+      if (!fire || !title) return;
+      await confirmScheduleToPeer(c, fire, title);
+      return;
+    }
     if (executeResult.code === "pick_user" || executeResult.code === "confirm_user") {
       const pending = executeResult.pendingMessage;
       if (!pending?.trim()) return;
@@ -607,6 +693,8 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
         setExecuteResult(ex);
         if (ex.ok) {
           setPendingVoiceAction(null);
+          triggerSuccessFeedback();
+          launchSuccessFlight(ex, { messageBody: pending.trim() });
           setParseResult((prev) =>
             prev ? { ...prev, reply: ex.reply } : { intent: "message", commandText: "", reply: ex.reply, slots: {} },
           );
@@ -622,46 +710,46 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
     await startPendingCallTo(c, mode);
   };
 
-  return (
-    <AnimatePresence>
-      {open ? (
-        <>
-          <motion.button
-            key="pingok-scrim"
-            type="button"
-            aria-label="Закрыть голосовое управление"
-            className="fixed inset-0 z-[105] bg-black/50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduced ? 0 : DURATION_NORMAL_MS / 1000, ease: EASING_OUT_BEZIER }}
-            onClick={handleClose}
-          />
-          <PingokVoicePanel
-            key="pingok-voice"
-            visualPhase={visualPhase}
-            recognizedText={recognizedText}
-            doneTitle={doneTitle}
-            doneSubtitle={doneSubtitle}
-            processingLabel={processingLabel}
-            streamMode={voiceMode === "stream"}
-            reducedMotion={reduced}
-            onClose={handleClose}
-            onSubmitStream={() => submitStream()}
-          >
+  const overlayNode =
+    typeof document !== "undefined" ? (
+      <AnimatePresence>
+        {open ? (
+          <>
+            <motion.button
+              key="pingok-scrim"
+              type="button"
+              aria-label="Закрыть голосовое управление"
+              className="fixed inset-0 z-[105] bg-black/50"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduced ? 0 : DURATION_NORMAL_MS / 1000, ease: EASING_OUT_BEZIER }}
+              onClick={handleClose}
+            />
+            <PingokVoicePanel
+              key="pingok-voice"
+              visualPhase={visualPhase}
+              recognizedText={recognizedText}
+              doneTitle={doneTitle}
+              doneSubtitle={doneSubtitle}
+              processingLabel={processingLabel}
+              streamMode={voiceMode === "stream"}
+              reducedMotion={reduced}
+              onClose={handleClose}
+              onSubmitStream={() => submitStream()}
+            >
                 {parseResult ? (
                   <div
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[12px] leading-snug"
-                    style={{ color: "rgba(255,255,255,.65)" }}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-[13px] leading-snug text-white/88"
+                    role="status"
                   >
-                    <span className="font-medium text-white/90">Ответ: </span>
                     {parseResult.reply}
                   </div>
                 ) : null}
 
                 {stage === "listening" ? (
-                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                    <div className="inline-flex items-center gap-1.5 text-[11px] text-white/60">
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 min-h-[var(--uix-touch-min)] flex items-center">
+                    <div className="inline-flex items-center gap-2 text-[12px] text-white/65">
                       <span
                         className="inline-block h-1.5 w-1.5 rounded-full"
                         style={{
@@ -674,28 +762,6 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                         }}
                       />
                       {micLabel}
-                    </div>
-                  </div>
-                ) : null}
-
-                {stage === "listening" && recentCommands.length > 0 ? (
-                  <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2.5">
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-white/50">
-                      Последние команды
-                    </div>
-                    <div className="space-y-1.5">
-                      {recentCommands.map((c) => (
-                        <TapScaleButton
-                          key={c}
-                          type="button"
-                          haptic
-                          subtle
-                          className="w-full min-h-[var(--uix-touch-min)] rounded-lg border border-white/10 bg-white/5 px-2 py-2 text-left text-[12px] text-white/80 hover:bg-white/10"
-                          onClick={() => handleReplayCommand(c)}
-                        >
-                          {c}
-                        </TapScaleButton>
-                      ))}
                     </div>
                   </div>
                 ) : null}
@@ -713,24 +779,26 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                           <TapScaleButton
                             type="button"
                             haptic
-                            className="mt-2 w-full rounded-xl border border-indigo-400/40 bg-indigo-500/15 py-2 text-left text-[13px] font-medium text-indigo-100"
+                            className="mt-2 w-full min-h-[var(--uix-touch-min)] rounded-xl border border-indigo-400/40 bg-indigo-500/15 py-2.5 text-left text-[13px] font-semibold text-indigo-100"
                             onClick={() => openChat(memorySearch.payload.bestMatch!.chatId)}
                           >
-                            Открыть чат: {memorySearch.payload.bestMatch.chatTitle}
+                            Открыть: {memorySearch.payload.bestMatch.chatTitle}
                           </TapScaleButton>
                         ) : null}
                         {memorySearch.payload.alternatives?.length ? (
-                          <ul className="mt-2 space-y-1.5">
+                          <ul className="mt-2 space-y-2">
                             {memorySearch.payload.alternatives.map((alt) => (
                               <li key={alt.messageId}>
-                                <button
+                                <TapScaleButton
                                   type="button"
-                                  className="w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-left text-[11px] text-white/50 transition-colors hover:bg-white/5"
+                                  haptic
+                                  subtle
+                                  className="w-full min-h-[var(--uix-touch-min)] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left text-[12px] text-white/55 transition-colors hover:bg-white/8"
                                   onClick={() => openChat(alt.chatId)}
                                 >
-                                  <span className="font-medium text-white/85">{alt.chatTitle}</span>
-                                  <span className="mt-0.5 line-clamp-2 block">{alt.excerpt}</span>
-                                </button>
+                                  <span className="font-semibold text-white/88">{alt.chatTitle}</span>
+                                  <span className="mt-0.5 line-clamp-2 block text-[11px]">{alt.excerpt}</span>
+                                </TapScaleButton>
                               </li>
                             ))}
                           </ul>
@@ -748,14 +816,15 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                 executeResult.candidates?.[0] &&
                 (executeResult.code === "confirm_call_user" || executeResult.pendingMessage) ? (
                   <div className="rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 py-2.5">
-                    <p className="mb-2 text-[12px] text-cyan-100/90">{executeResult.reply}</p>
+                    <p className="mb-1 text-[13px] leading-snug text-cyan-50/95">{executeResult.reply}</p>
+                    <p className="mb-3 text-[11px] text-cyan-200/55">Голосом: «да» / «нет» · или кнопки</p>
                     <div className="grid grid-cols-2 gap-2">
                       <TapScaleButton
                         type="button"
                         haptic
                         subtle
                         disabled={pickBusyId !== null}
-                        className="min-h-[var(--uix-touch-min)] rounded-lg border border-cyan-300/30 bg-cyan-500/15 px-2 py-2 text-[13px] font-medium text-cyan-100"
+                        className="min-h-[var(--uix-touch-min)] rounded-xl border border-cyan-300/30 bg-cyan-500/15 px-2 py-2.5 text-[13px] font-semibold text-cyan-100"
                         onClick={() =>
                           void handlePickCandidate(executeResult.candidates![0]!)
                         }
@@ -770,7 +839,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                         type="button"
                         haptic
                         subtle
-                        className="min-h-[var(--uix-touch-min)] rounded-lg border border-white/10 bg-black/20 px-2 py-2 text-[13px] font-medium text-white/80"
+                        className="min-h-[var(--uix-touch-min)] rounded-xl border border-white/10 bg-black/20 px-2 py-2.5 text-[13px] font-semibold text-white/85"
                         onClick={() => {
                           setPendingVoiceAction(null);
                           setExecuteResult(null);
@@ -803,13 +872,24 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
 
                 {executeResult &&
                 !executeResult.ok &&
-                (executeResult.code === "pick_user" || executeResult.code === "pick_call_user") &&
+                (executeResult.code === "pick_user" ||
+                  executeResult.code === "pick_call_user" ||
+                  executeResult.code === "pick_schedule_call_peer") &&
                 executeResult.candidates?.length ? (
                   <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2.5">
-                    <p className="mb-2 text-[12px] text-amber-100/90">{executeResult.reply}</p>
-                    <ul className="space-y-1.5">
-                      {executeResult.candidates.map((c) => {
+                    <p className="mb-1 text-[13px] leading-snug text-amber-50/95">{executeResult.reply}</p>
+                    <p className="mb-2.5 text-[11px] text-amber-200/55">
+                      Касание или голос: «первый», «второй»… или имя
+                    </p>
+                    <ul className="space-y-2">
+                      {executeResult.candidates.map((c, idx) => {
                         const label = [c.displayName, c.surname].filter(Boolean).join(" ").trim() || "Пользователь";
+                        const busyLabel =
+                          executeResult.code === "pick_schedule_call_peer"
+                            ? "Планирую…"
+                            : executeResult.code === "pick_call_user"
+                              ? "Запускаю звонок…"
+                              : "Отправка…";
                         return (
                           <li key={c.id}>
                             <TapScaleButton
@@ -817,14 +897,14 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                               haptic
                               subtle
                               disabled={pickBusyId !== null}
-                              className="w-full min-h-[var(--uix-touch-min)] rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-left text-[13px] font-medium text-white/90 transition-colors hover:bg-white/10 disabled:opacity-50"
+                              className="w-full min-h-[var(--uix-touch-min)] rounded-xl border border-white/12 bg-black/30 px-3 py-2.5 text-left text-[13px] font-semibold text-white/92 transition-colors hover:bg-white/10 disabled:opacity-50"
                               onClick={() => void handlePickCandidate(c)}
+                              aria-label={`${idx + 1}: ${label}`}
                             >
-                              {pickBusyId === c.id
-                                ? executeResult.code === "pick_call_user"
-                                  ? "Запускаю звонок…"
-                                  : "Отправка…"
-                                : label}
+                              <span className="mr-2 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-md bg-white/10 text-[11px] font-bold text-white/70">
+                                {idx + 1}
+                              </span>
+                              {pickBusyId === c.id ? busyLabel : label}
                             </TapScaleButton>
                           </li>
                         );
@@ -842,19 +922,21 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                     {showPosts.length === 0 ? (
                       <p className="text-[13px] text-white/55">По запросу ничего не нашлось.</p>
                     ) : (
-                      <ul className="space-y-1.5">
+                      <ul className="space-y-2">
                         {showPosts.slice(0, 10).map((p) => (
                           <li key={p.id}>
-                            <button
+                            <TapScaleButton
                               type="button"
-                              className="w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-left text-[12px] text-white/55 transition-colors hover:bg-white/5"
+                              haptic
+                              subtle
+                              className="w-full min-h-[var(--uix-touch-min)] rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left text-[12px] text-white/55 transition-colors hover:bg-white/8"
                               onClick={() => openPost(p)}
                             >
-                              <span className="font-medium text-white/90">
+                              <span className="font-semibold text-white/90">
                                 {p.author.displayName ?? ""} {p.author.surname ?? ""}
                               </span>
-                              <span className="mt-0.5 line-clamp-2 block">{p.text || "Медиа"}</span>
-                            </button>
+                              <span className="mt-0.5 line-clamp-2 block text-[11px]">{p.text || "Медиа"}</span>
+                            </TapScaleButton>
                           </li>
                         ))}
                       </ul>
@@ -866,7 +948,7 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                   <TapScaleButton
                     type="button"
                     haptic
-                    className="w-full rounded-2xl border border-indigo-400/35 bg-indigo-500/15 py-2.5 text-sm font-medium text-indigo-100"
+                    className="w-full min-h-[var(--uix-touch-min)] rounded-2xl border border-indigo-400/35 bg-indigo-500/15 py-3 text-sm font-semibold text-indigo-100"
                     onClick={() => {
                       setStage("listening");
                       setExecPhase(null);
@@ -881,12 +963,23 @@ export function PingokMicroOverlay({ open, voiceMode, onClose }: Props) {
                       void start();
                     }}
                   >
-                    Ещё раз
+                    Новая команда
                   </TapScaleButton>
                 ) : null}
-          </PingokVoicePanel>
-        </>
-      ) : null}
-    </AnimatePresence>
+            </PingokVoicePanel>
+          </>
+        ) : null}
+      </AnimatePresence>
+    ) : null;
+
+  return (
+    <>
+      <PingokSuccessFlight
+        payload={successFlight}
+        reducedMotion={reduced}
+        onComplete={() => setSuccessFlight(null)}
+      />
+      {overlayNode ? createPortal(overlayNode, document.body) : null}
+    </>
   );
 }

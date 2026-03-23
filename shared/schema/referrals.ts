@@ -1,4 +1,4 @@
-import { integer, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 /** Пригласительные коды: читаемый код из 4 слов, срок действия; 1 = одноразовый, -1 = без лимита до истечения */
 export const referralCodes = pgTable("referral_codes", {
@@ -16,6 +16,8 @@ export const referralCodes = pgTable("referral_codes", {
   maxUses: integer("max_uses").notNull().default(1),
   /** Сколько раз код уже применили при регистрации */
   useCount: integer("use_count").notNull().default(0),
+  /** true — при регистрации не проверять лимит приглашений у inviter (кампания EDGE). */
+  bypassInviterLimit: boolean("bypass_inviter_limit").notNull().default(false),
 });
 
 export type ReferralCode = typeof referralCodes.$inferSelect;

@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile, writeFile } from "fs/promises";
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -82,19 +83,75 @@ async function buildAll() {
     },
   });
 
-  console.log("building pingok-micro (standalone)...");
+  const pingokEntry = path.join(root, "ПИНГОК МИКРО", "server", "index.ts");
+  if (existsSync(pingokEntry)) {
+    console.log("building pingok-micro (standalone)...");
+    await esbuild({
+      entryPoints: [pingokEntry],
+      platform: "node",
+      bundle: true,
+      format: "cjs",
+      outfile: path.join(root, "dist/pingok-micro.cjs"),
+      define: {
+        "process.env.NODE_ENV": '"production"',
+      },
+      minify: true,
+      external: externals,
+      logLevel: "info",
+    });
+  } else {
+    console.warn("skip pingok-micro: нет ПИНГОК МИКРО/server/index.ts");
+  }
+
+  console.log("building edge (standalone)...");
   await esbuild({
-    entryPoints: [path.join(root, "ПИНГОК МИКРО", "server", "index.ts")],
+    entryPoints: [path.join(root, "EDGE", "server", "index.ts")],
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: path.join(root, "dist/pingok-micro.cjs"),
+    outfile: path.join(root, "dist/edge.cjs"),
     define: {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
     external: externals,
     logLevel: "info",
+  });
+
+  console.log("building parser (standalone)...");
+  await esbuild({
+    entryPoints: [path.join(root, "PARSER", "server", "index.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/parser.cjs"),
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
+  });
+
+  console.log("building feed-worker (standalone)...");
+  await esbuild({
+    entryPoints: [path.join(root, "server", "feed-worker", "index.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/feed-worker.cjs"),
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
   });
 
   console.log("building seed-admin...");

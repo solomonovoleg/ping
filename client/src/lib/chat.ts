@@ -1,5 +1,15 @@
 import { API, apiFetch } from "@/lib/api-base";
 
+/** Ошибка HTTP при операции с чатом (например 403 при блокировке). */
+export class ChatRequestError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ChatRequestError";
+    this.status = status;
+  }
+}
+
 export type MessageType =
   | "text"
   | "system"
@@ -69,6 +79,8 @@ export async function transcribeVoiceOrVideoNoteMessage(
 export type SearchMessageHit = {
   messageId: string;
   chatId: string;
+  /** Тип сообщения (text, story_reply, …) — для человекочитаемого превью в поиске. */
+  type?: string;
   content: string;
   createdAt: string;
   chatName: string;
@@ -303,7 +315,8 @@ export async function sendMessage(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error((err as { message?: string }).message || "Не удалось отправить");
+    const msg = (err as { message?: string }).message || "Не удалось отправить";
+    throw new ChatRequestError(msg, res.status);
   }
   return res.json();
 }

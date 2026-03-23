@@ -25,6 +25,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         isVideo={call.mediaType === "video"}
         isMuted={call.isMuted}
         onSetMuted={call.setMuted}
+        audioOutputSpeaker={call.audioOutputSpeaker}
+        onSetAudioOutputSpeaker={call.setAudioOutputSpeaker}
         onEndCall={call.hangup}
         onAccept={call.acceptCall}
         onReject={call.rejectCall}

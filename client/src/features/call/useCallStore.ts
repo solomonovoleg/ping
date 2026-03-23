@@ -43,6 +43,7 @@ const INITIAL_SNAPSHOT: CallControllerSnapshot = {
   otherAvatarUrl: null,
   chatId: null,
   callMessageContext: { kind: "unknown" },
+  audioOutputSpeaker: true,
 };
 
 /**
@@ -77,10 +78,11 @@ export function useCallStore() {
       unsub();
       ctrl.destroy();
       controllerRef.current = null;
+      setSnapshot(INITIAL_SNAPSHOT);
     };
   }, [user?.id]);
 
-  // Wire call message handler into the realtime transport
+  // Один обработчик на весь транспорт: ref-объект стабилен → эффект не дублируется при ререндерах.
   useEffect(() => {
     const signaling = signalingRef.current;
     if (!signaling) return;
@@ -117,7 +119,7 @@ export function useCallStore() {
         return;
       }
       const callerDisplayName =
-        [user.displayName, user.surname].filter(Boolean).join(" ").trim() || user.phone || "Абонент";
+        [user.displayName, user.surname].filter(Boolean).join(" ").trim() || `ID ${user.publicId}`;
       const mediaType: CallMediaType = video ? "video" : "audio";
 
       try {
@@ -163,6 +165,10 @@ export function useCallStore() {
     controllerRef.current?.setMuted(muted);
   }, []);
 
+  const setAudioOutputSpeaker = useCallback((speaker: boolean) => {
+    controllerRef.current?.setAudioOutputSpeaker(speaker);
+  }, []);
+
   const toggleCameraEnabled = useCallback(() => {
     controllerRef.current?.toggleCameraEnabled();
   }, []);
@@ -202,6 +208,7 @@ export function useCallStore() {
       rejectCall,
       hangup,
       setMuted,
+      setAudioOutputSpeaker,
       toggleCameraEnabled,
       switchCamera,
       toggleScreenShare,
@@ -217,6 +224,7 @@ export function useCallStore() {
       rejectCall,
       hangup,
       setMuted,
+      setAudioOutputSpeaker,
       toggleCameraEnabled,
       switchCamera,
       toggleScreenShare,

@@ -17,9 +17,20 @@ export function getIceServers(): RTCIceServer[] {
         : "";
   const urls = urlRaw ? urlRaw.split(",").map((u) => u.trim()).filter(Boolean) : [];
   if (urls.length === 0) return stun;
-  const username = typeof import.meta?.env?.VITE_TURN_USERNAME === "string" ? import.meta.env.VITE_TURN_USERNAME : undefined;
-  const credential = typeof import.meta?.env?.VITE_TURN_CREDENTIAL === "string" ? import.meta.env.VITE_TURN_CREDENTIAL : undefined;
-  return [...stun, { urls, username, credential }];
+
+  const userRaw =
+    typeof import.meta?.env?.VITE_TURN_USERNAME === "string" ? import.meta.env.VITE_TURN_USERNAME.trim() : "";
+  const passRaw =
+    typeof import.meta?.env?.VITE_TURN_CREDENTIAL === "string" ? import.meta.env.VITE_TURN_CREDENTIAL.trim() : "";
+  /** lt-cred-mech (coturn): нужны оба поля; иначе не передаём — иначе браузер шлёт пустой пароль. */
+  const useCreds = userRaw.length > 0 && passRaw.length > 0;
+  if (!useCreds && (userRaw.length > 0 || passRaw.length > 0) && import.meta.env?.DEV) {
+    console.warn(
+      "[call-ice] Задан только VITE_TURN_USERNAME или только VITE_TURN_CREDENTIAL — для TURN нужны оба; креды не передаём.",
+    );
+  }
+
+  return [...stun, { urls, ...(useCreds ? { username: userRaw, credential: passRaw } : {}) }];
 }
 
 export function getMediaConstraints(

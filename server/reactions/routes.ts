@@ -44,6 +44,8 @@ export function registerReactionsRoutes(app: Express): void {
           set: { emoji },
         });
       notifyReaction(postId, userId, emoji).catch((e) => console.error("[reactions] notify:", e));
+      const { scheduleEdgeTaskAfterPostAction } = await import("../posts/edge-task-hook");
+      scheduleEdgeTaskAfterPostAction(userId, postId, "react_post");
       res.status(204).end();
     } catch (e) {
       console.error("Post reaction error:", e);

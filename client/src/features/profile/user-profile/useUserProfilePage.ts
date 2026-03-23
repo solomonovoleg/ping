@@ -19,6 +19,7 @@ import {
   type StoryExpiresHours,
 } from "@/lib/stories";
 import { sendMessage, uploadChatMedia } from "@/lib/chat";
+import { isNavigatorShareCancelled } from "@/lib/navigator-share";
 import { playLikeActionSound } from "@/lib/send-sound";
 import { userProfileRu } from "./i18n.ru";
 import { parseProfilePagePayload } from "./model/parse-profile-page";
@@ -187,24 +188,55 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
   const handleFollowToggle = useCallback(async () => {
     if (!apiProfile || followLoading) return;
     setFollowLoading(true);
+    const prevProfile = apiProfile;
     try {
       if (apiProfile.isFollowing) {
         await unfollowUser(apiProfile.id);
-        toast({ title: t.toast.unsubscribed });
+        toast({ title: t.toast.unsubscribed, duration: 2200 });
+        setApiProfile((p) =>
+          p
+            ? {
+                ...p,
+                isFollowing: false,
+                isMutualFollow: false,
+                followersCount: Math.max(0, (p.followersCount ?? 0) - 1),
+              }
+            : p,
+        );
       } else {
         await followUser(apiProfile.id);
-        toast({ title: t.toast.subscribed });
+        toast({ title: t.toast.subscribed, duration: 2200 });
+        setApiProfile((p) =>
+          p
+            ? {
+                ...p,
+                isFollowing: true,
+                isInMyContacts: true,
+                isMutualFollow: !!p.isFollowedByTarget,
+                followersCount: (p.followersCount ?? 0) + 1,
+              }
+            : p,
+        );
       }
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       queryClient.invalidateQueries({ queryKey: ["contacts"] });
-      const next = await fetchUserProfile(id);
-      if (next) setApiProfile(next);
+      void fetchProfilePage(id, 50).then((pack) => {
+        if (!pack?.profile) return;
+        flushSync(() => {
+          setApiProfile(pack.profile);
+          if (!isMe) {
+            setPagePosts(pack.posts);
+            setPageStories(Array.isArray(pack.stories) ? (pack.stories as StoryItem[]) : []);
+          }
+        });
+      });
     } catch (e) {
+      setApiProfile(prevProfile);
       toast({ title: e instanceof Error ? e.message : t.toast.genericError, variant: "destructive" });
     } finally {
       setFollowLoading(false);
     }
-  }, [apiProfile, followLoading, id, queryClient, toast]);
+  }, [apiProfile, followLoading, id, isMe, queryClient, toast]);
 
   const handleStartChat = useCallback(async () => {
     if (!apiProfile?.canMessage) return;
@@ -221,7 +253,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
       storyId: string;
       authorId: string;
       text: string;
-      story: { id: string; image: string; userName: string; userAvatar: string; time: string };
+      story: { id: string; image: string; thumbnailUrl?: string; userName: string; userAvatar: string; time: string };
     }) => {
       if (!user?.id) {
         toast({ title: t.toast.storyReplyNeedLogin, variant: "destructive" });
@@ -236,6 +268,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
         const storyPayload = {
           storyId: payload.story.id,
           mediaUrl: payload.story.image,
+          ...(payload.story.thumbnailUrl ? { thumbnailUrl: payload.story.thumbnailUrl } : {}),
           authorId: payload.authorId,
           authorName: payload.story.userName,
           authorAvatar: payload.story.userAvatar,
@@ -243,6 +276,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
           replyText: payload.text.trim(),
         };
         await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
+        void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
         toast({ title: t.toast.storyReplySent });
       } catch (e) {
         const msg = e instanceof Error ? e.message : t.toast.genericError;
@@ -250,7 +284,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
         throw e instanceof Error ? e : new Error(msg);
       }
     },
-    [toast, user?.id]
+    [queryClient, toast, user?.id]
   );
 
   const handleStoryLikeToggle = useCallback(
@@ -268,6 +302,7 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
         if (!liked && result.isLiked) {
           playLikeActionSound();
         }
+        void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
       } catch (err) {
         setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
         setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
@@ -277,14 +312,19 @@ export function useUserProfilePage(paramsProp?: { id: string }) {
         });
       }
     },
-    [likedStoryIds, likesCountByStoryId, toast]
+    [likedStoryIds, likesCountByStoryId, queryClient, toast]
   );
 
   const handleStoryShare = useCallback(
     async (story: { id: string; image: string; userName: string; time: string }) => {
       const shareText = t.toast.storyShareTitle(story.userName);
       if (navigator.share) {
-        await navigator.share({ title: shareText, text: shareText, url: story.image });
+        try {
+          await navigator.share({ title: shareText, text: shareText, url: story.image });
+        } catch (e) {
+          if (isNavigatorShareCancelled(e)) return;
+          throw e;
+        }
         return;
       }
       if (navigator.clipboard?.writeText) {

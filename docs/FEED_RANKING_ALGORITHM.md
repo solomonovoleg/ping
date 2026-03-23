@@ -6,7 +6,10 @@
 ## Где находится логика
 
 - Конфигурация алгоритма: `server/feed/config.ts`
-- Основная сборка и ранжирование ленты: `server/posts/service.ts` (`listPostsForViewer`)
+- Общая лента без хештега/поиска: при **свежем** снапшоте порядок читается из таблицы `feed_global_snapshot` (`server/feed/load-global-feed-page.ts` → `tryLoadGlobalPublicFeedPage`). Иначе — расчёт на запросе (`loadGlobalPublicFeedPageInline`) или старая ветка для `?hashtag=` / `?q=`.
+- Пересчёт снапшота (отдельный процесс): `server/feed-worker/index.ts` → сборка `dist/feed-worker.cjs`, PM2 при `FEED_WORKER_PM2_ENABLED=1`.
+- Общая математика ранга: `server/feed/rank-global-public-feed.ts`
+- Основная сборка ответа ленты (метаданные постов): `server/posts/service.ts` (`listPostsForViewer`)
 - HTTP-роут списка постов: `server/posts/routes.ts` (`GET /api/posts`)
 - Подсчет просмотров: `shared/schema/post-views.ts` + `recordPostView()` в `server/posts/service.ts`
 

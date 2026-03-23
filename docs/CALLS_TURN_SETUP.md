@@ -23,6 +23,25 @@
 
 После сборки клиента с заданными переменными в браузере при звонке в WebRTC будут использоваться указанные TURN-серверы. В логах coturn (`/var/log/turnserver.log` или stdout) должны появляться сессии при звонках из проблемных сетей.
 
+### Убедиться, что TURN попал в бандл (после `npm run build` / деплоя)
+
+1. **Переменные только на этапе сборки:** `VITE_*` читает Vite при `npm run build`. В `deploy.sh` все `VITE_*` из `deploy.env` экспортируются перед сборкой — без них в бандле будет только STUN.
+2. **Проверка артефакта:** подставь свой хост из `VITE_TURN_URLS` и выполни из корня репозитория:
+   ```bash
+   rg -l "turn:" dist/public/assets/*.js 2>/dev/null | head -3
+   ```
+   Должен найтись хотя бы один chunk со строкой `turn:` (URL подставляется как литерал).
+3. **Код:** единая точка — `client/src/features/call/call-ice-config.ts` → `getIceServers()`. Её используют **личные звонки** (`call-controller.ts` / `webrtc-peer.ts`) и **групповые** (`mesh-registry.ts`, `mesh-link.ts`).
+4. **Pre-deploy:** `scripts/pre-deploy-check.sh` напоминает, если TURN URL не задан (остаётся только STUN), и предупреждает, если задан **только один** из `VITE_TURN_USERNAME` / `VITE_TURN_CREDENTIAL` (неполная пара). Анонимный TURN (оба пустые) — без этого предупреждения.
+
+### Типичные ошибки
+
+| Симптом | Что проверить |
+|--------|----------------|
+| В проде нет TURN | В `deploy.env` нет `VITE_TURN_*` или деплой без экспорта `VITE_*` перед сборкой. |
+| Coturn отклоняет | Заданы **оба** `VITE_TURN_USERNAME` и `VITE_TURN_CREDENTIAL`, совпадают с `user=…` в `turnserver.conf`. Если задан только URL без пары логин/пароль — клиент намеренно не шлёт креды (см. `call-ice-config.ts`). |
+| Порты | UDP/TCP **3478** и диапазон relay (часто **49152–65535** UDP) открыты на фаерволе и в облаке. |
+
 ## Облачные TURN
 
 Можно использовать коммерческие TURN (Twilio, Xirsys, Metered и др.): вы получите URL и учётные данные, их нужно прописать в `VITE_TURN_URLS`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` и пересобрать клиент.

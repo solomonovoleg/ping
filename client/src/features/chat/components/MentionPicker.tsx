@@ -64,6 +64,7 @@ function MentionPickerInner({
             "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
             i === safeIndex ? "bg-primary/15 text-primary" : "hover:bg-muted/70",
           )}
+          onPointerDown={(e) => e.preventDefault()}
           onClick={() => onPickEveryone?.()}
           onMouseEnter={() => onSelectedIndexChange(i)}
         >
@@ -86,6 +87,7 @@ function MentionPickerInner({
           "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
           i === safeIndex ? "bg-primary/15 text-primary" : "hover:bg-muted/70",
         )}
+        onPointerDown={(e) => e.preventDefault()}
         onClick={() => onSelect(m)}
         onMouseEnter={() => onSelectedIndexChange(i)}
       >

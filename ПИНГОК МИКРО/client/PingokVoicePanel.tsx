@@ -62,7 +62,10 @@ export function PingokVoicePanel({
 
   return (
     <motion.div
-      className="pingok-voice-panel fixed left-3 right-3 z-[110] mx-auto max-w-md overflow-hidden rounded-[20px] border shadow-[0_20px_56px_rgba(0,0,0,0.8)]"
+      className={cn(
+        "pingok-voice-panel fixed z-[110] w-full max-w-none overflow-hidden rounded-[20px] border shadow-[0_20px_56px_rgba(0,0,0,0.8)]",
+        "left-0 right-0 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]",
+      )}
       style={{
         bottom: "calc(var(--uix-nav-bottom) + 10px)",
         borderColor: done ? "rgba(238,42,123,0.22)" : "rgba(255,255,255,0.09)",
@@ -127,7 +130,7 @@ export function PingokVoicePanel({
             haptic
             subtle
             onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-white/40 hover:bg-white/5 hover:text-white/70"
+            className="inline-flex h-10 w-10 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full text-white/40 hover:bg-white/5 hover:text-white/70"
             aria-label="Закрыть голосовое управление"
           >
             <X className="h-5 w-5" strokeWidth={2} />
@@ -159,8 +162,8 @@ export function PingokVoicePanel({
               {done && "Готово"}
             </div>
             <div className="mt-1 text-[11px]" style={{ color: "rgba(255,255,255,.32)" }}>
-              {listening && (streamMode ? "Стрим — говорите, затем «Готово»" : "Голосовое управление")}
-              {recognized && (processingLabel || "Обрабатываю…")}
+              {listening && (streamMode ? "Говорите, затем нажмите «Готово»" : "Команда сразу в микрофон")}
+              {recognized && (processingLabel || "Секунду…")}
               {done && doneSubtitle}
             </div>
           </div>
@@ -173,8 +176,11 @@ export function PingokVoicePanel({
             </div>
           )}
           {recognized && (
-            <span className="shrink-0 text-[10px]" style={{ color: "rgba(129,140,248,.65)" }}>
-              AI
+            <span
+              className="shrink-0 rounded-full border border-indigo-400/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+              style={{ color: "rgba(199,210,254,.85)" }}
+            >
+              Пингок
             </span>
           )}
         </div>
@@ -231,7 +237,7 @@ export function PingokVoicePanel({
           >
             {recognizedText && recognizedText !== "…"
               ? recognizedText
-              : "Скажите команду сразу, например: «Напиши Илоне привет» — текст появится здесь вживую"}
+              : "Например: «Напиши Илоне, что я задержусь» — текст появится здесь"}
           </div>
         ) : null}
 
@@ -239,18 +245,18 @@ export function PingokVoicePanel({
           <TapScaleButton
             type="button"
             haptic
-            className="mb-2 w-full rounded-xl border border-cyan-500/35 bg-cyan-500/10 py-2 text-[12px] font-medium text-cyan-200/90"
+            className="mb-2 w-full min-h-[var(--uix-touch-min)] rounded-xl border border-cyan-500/35 bg-cyan-500/10 py-2.5 text-[13px] font-semibold text-cyan-100"
             onClick={onSubmitStream}
           >
-            Готово — обработать
+            Готово
           </TapScaleButton>
         ) : null}
 
         {recognized ? (
           <div className="pingok-voice-v-in">
             <div className="mb-2.5 inline-flex items-center gap-1.5 rounded-full border border-indigo-300/25 bg-indigo-500/15 px-2.5 py-1 text-[10px] font-medium text-indigo-200/90">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {processingLabel || "Обрабатываю команду"}
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              <span>{processingLabel || "Делаю…"}</span>
             </div>
             <div
               className="rounded-xl border px-3.5 py-2.5"

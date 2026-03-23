@@ -2,6 +2,7 @@ import "dotenv/config";
 import "./admin/telemetry/express-request";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { hasExplicitParserUpstreamEnv } from "./parser/proxy";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { randomUUID } from "crypto";
@@ -192,6 +193,11 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      if (process.env.NODE_ENV === "production" && !hasExplicitParserUpstreamEnv()) {
+        console.warn(
+          "[parser-proxy] PARSER_UPSTREAM_URL не задан — админка «Парсер ВК» отвечает 503. Укажите URL PARSER, PARSER_SERVICE_SECRET и запустите процесс парсера (PM2: PARSER_PM2_ENABLED=1, см. deploy.env.example).",
+        );
+      }
       if (process.env.DATABASE_URL) {
         const { processScheduledMessages } = require("./messages/service");
         const { processServiceChatWorker } = require("./service-chat/worker");

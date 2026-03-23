@@ -272,23 +272,24 @@ export async function processServiceChatQueue(limit = 30): Promise<number> {
     const result = await claimClient.query<{ id: string; thread_id: string; content: string; media_json: string | null; host_user_id: string; chat_id: string }>(
       `
       WITH due AS (
-        SELECT ss.id
-        FROM service_chat_step_states ss
-        WHERE ss.status = 'scheduled'
-          AND ss.sent_at IS NULL
-          AND ss.next_send_at IS NOT NULL
-          AND ss.next_send_at <= NOW()
-        ORDER BY ss.next_send_at ASC
+        SELECT cand.id
+        FROM service_chat_step_states cand
+        WHERE cand.status = 'scheduled'
+          AND cand.sent_at IS NULL
+          AND cand.next_send_at IS NOT NULL
+          AND cand.next_send_at <= NOW()
+        ORDER BY cand.next_send_at ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED
       )
-      UPDATE service_chat_step_states ss
+      UPDATE service_chat_step_states sc
       SET status = 'sending'
       FROM due
-      JOIN service_chat_threads t ON t.id = ss.thread_id
-      JOIN service_chat_template_steps st ON st.id = ss.step_id
-      WHERE ss.id = due.id
-      RETURNING ss.id, ss.thread_id, st.content, st.media_json, t.host_user_id, t.chat_id
+      INNER JOIN service_chat_step_states picked ON picked.id = due.id
+      INNER JOIN service_chat_threads t ON t.id = picked.thread_id
+      INNER JOIN service_chat_template_steps st ON st.id = picked.step_id
+      WHERE sc.id = due.id
+      RETURNING sc.id, sc.thread_id, st.content, st.media_json, t.host_user_id, t.chat_id
       `,
       [Math.max(1, Math.min(limit, 100))],
     );

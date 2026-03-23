@@ -47,6 +47,12 @@ const WS_OPEN_TIMEOUT_MS = 12000;
 const BACKGROUND_CONNECT_MAX_RETRIES = 5;
 const OUTGOING_QUEUE_MAX = 300;
 const OUTGOING_QUEUE_TTL_MS = 30_000;
+const RECONNECT_BASE_MS = 900;
+const RECONNECT_MAX_MS = 15_000;
+const RECONNECT_JITTER_RATIO = 0.3;
+const RECONNECT_WINDOW_MS = 60_000;
+const RECONNECT_WINDOW_LIMIT = 12;
+const RECONNECT_CIRCUIT_BREAKER_MS = 20_000;
 
 type QueuedOutgoingItem = {
   payload: string;
@@ -70,6 +76,10 @@ export class RealtimeSocketTransport {
   private outgoingQueue: QueuedOutgoingItem[] = [];
   /** Один одновременный коннект: иначе два параллельных `ensureOpenWs` (звонок + фон) открывают два WS → лишняя нагрузка на сервер. */
   private wsOpenInflight: Promise<WebSocket> | null = null;
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimestamps: number[] = [];
+  private reconnectCircuitOpenUntil = 0;
 
   constructor(params: TransportParams) {
     this.wsRef = params.wsRef;
@@ -82,6 +92,10 @@ export class RealtimeSocketTransport {
     this.wsRef.current?.close();
     this.wsRef.current = null;
     this.outgoingQueue = [];
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   };
 
   sendJson = (data: Record<string, unknown>, opts?: SendJsonOptions): boolean => {
@@ -328,9 +342,22 @@ export class RealtimeSocketTransport {
         console.error("[realtime] ws message parse/handle error", e);
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
+      /** Не трогаем ref, если это уже другой сокет — иначе «хвост» старого WS обнуляет активный. */
+      if (this.wsRef.current !== ws) return;
       this.wsRef.current = null;
       this.onSocketDisconnectedRef.current();
+      const superseded =
+        event.code === 4001 &&
+        typeof event.reason === "string" &&
+        event.reason.includes("superseded_by_new_connection");
+      if (superseded) {
+        // Избегаем пинг-понга между двумя клиентами одного пользователя:
+        // текущий сокет вытеснен новым, поэтому не стартуем мгновенный auto-reconnect.
+        console.info("[realtime] /calls socket superseded by newer connection; skip immediate reconnect");
+        return;
+      }
+      this.logCloseReason(event);
       this.scheduleReconnect?.();
     };
     const sendAllChatSubscriptions = () => {
@@ -338,14 +365,54 @@ export class RealtimeSocketTransport {
       this.flushOutgoingQueue();
     };
     ws.onopen = () => {
+      this.reconnectAttempt = 0;
+      this.reconnectTimestamps = [];
+      this.reconnectCircuitOpenUntil = 0;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       sendAllChatSubscriptions();
       this.onSocketConnectedRef.current();
     };
   };
 
+  private logCloseReason(event: CloseEvent): void {
+    const reason = (() => {
+      if (event.code === 1000) return "normal";
+      if (event.code === 1006) return "abnormal_or_network";
+      if (event.code === 1008 || event.code === 4401 || event.code === 4003) return "auth_or_policy";
+      if (event.code === 1011) return "server_error";
+      return "other";
+    })();
+    console.warn("[realtime] /calls ws closed", {
+      code: event.code,
+      reasonText: event.reason || "",
+      classifiedReason: reason,
+      wasClean: event.wasClean,
+    });
+  }
+
+  private computeReconnectDelayMs(attempt: number): number {
+    const base = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1));
+    const jitter = base * RECONNECT_JITTER_RATIO;
+    const withJitter = base - jitter + Math.random() * (jitter * 2);
+    return Math.max(350, Math.round(withJitter));
+  }
+
   private openWsWithNewToken = async (): Promise<WebSocket> => {
     const token = await getCallToken();
     const socket = openCallRealtimeWebSocket(token);
+    const prev = this.wsRef.current;
+    if (prev && prev !== socket) {
+      try {
+        if (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING) {
+          prev.close();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     this.wsRef.current = socket;
     this.attachWsHandlers(socket);
     await new Promise<void>((resolve, reject) => {
@@ -428,28 +495,71 @@ export class RealtimeSocketTransport {
     let mounted = true;
     const connect = (retryCount = 0) => {
       if (!mounted) return;
+      const now = Date.now();
+      if (now < this.reconnectCircuitOpenUntil) {
+        const remaining = this.reconnectCircuitOpenUntil - now;
+        if (!this.reconnectTimer) {
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            connect(Math.min(retryCount + 1, BACKGROUND_CONNECT_MAX_RETRIES));
+          }, remaining);
+        }
+        return;
+      }
       if (this.wsRef.current?.readyState === 1) return;
       void this.ensureOpenWs().catch((err) => {
         if (!mounted) return;
+        const ts = Date.now();
+        this.reconnectTimestamps = this.reconnectTimestamps.filter((x) => ts - x <= RECONNECT_WINDOW_MS);
+        this.reconnectTimestamps.push(ts);
+        if (this.reconnectTimestamps.length >= RECONNECT_WINDOW_LIMIT) {
+          this.reconnectCircuitOpenUntil = ts + RECONNECT_CIRCUIT_BREAKER_MS;
+          this.reconnectAttempt = 0;
+          console.warn("[realtime] reconnect circuit breaker enabled", {
+            failuresInWindow: this.reconnectTimestamps.length,
+            windowMs: RECONNECT_WINDOW_MS,
+            cooldownMs: RECONNECT_CIRCUIT_BREAKER_MS,
+          });
+          return;
+        }
         if (err instanceof CallTokenUnauthorizedError) {
           if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
-            setTimeout(() => connect(retryCount + 1), 1200 * (retryCount + 1));
+            const delay = this.computeReconnectDelayMs(this.reconnectAttempt + 1);
+            this.reconnectAttempt += 1;
+            if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = setTimeout(() => {
+              this.reconnectTimer = null;
+              connect(retryCount + 1);
+            }, delay);
           } else {
             refetchAuth().catch(() => {});
           }
           return;
         }
         if (retryCount < BACKGROUND_CONNECT_MAX_RETRIES) {
-          setTimeout(() => connect(retryCount + 1), 1000 * (retryCount + 1));
+          const delay = this.computeReconnectDelayMs(this.reconnectAttempt + 1);
+          this.reconnectAttempt += 1;
+          if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            connect(retryCount + 1);
+          }, delay);
         }
       });
     };
 
     this.scheduleReconnect = () => {
       if (!mounted || !userId) return;
-      setTimeout(() => connect(0), 2000);
+      if (this.reconnectTimer) return;
+      const delay = this.computeReconnectDelayMs(this.reconnectAttempt + 1);
+      this.reconnectAttempt += 1;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        connect(0);
+      }, delay);
     };
-    const connectTimer = setTimeout(connect, 1500);
+    /** Сразу после входа — иначе call.incoming приходит в пустоту, пока ждали 1.5s. */
+    const connectTimer = setTimeout(connect, 0);
 
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible" || !mounted || !userId) return;
@@ -464,6 +574,10 @@ export class RealtimeSocketTransport {
       mounted = false;
       this.scheduleReconnect = null;
       clearTimeout(connectTimer);
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       document.removeEventListener("visibilitychange", onVisibilityChange);
       this.closeWs();
     };

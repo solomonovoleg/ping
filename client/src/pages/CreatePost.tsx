@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Image as ImageIcon, Mic, Video, X, Heading1, Heading2, Heading3, Sparkles, Eye, Plus, Files } from "lucide-react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
@@ -100,8 +100,19 @@ async function getImageAspectFromDataUrl(dataUrl: string): Promise<number | null
   }
 }
 
+function parseEdgeIdFromSearch(search: string): string {
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  try {
+    return new URLSearchParams(raw).get("edgeId")?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export default function CreatePost() {
   const [, setLocation] = useLocation();
+  const search = useSearch();
+  const presetEdgeId = useMemo(() => parseEdgeIdFromSearch(search), [search]);
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -496,6 +507,7 @@ export default function CreatePost() {
         text: trimmed,
         mediaUrls: mediaUrls.length ? mediaUrls : undefined,
         mediaLayout,
+        ...(presetEdgeId ? { edgeId: presetEdgeId } : {}),
       });
       if (user?.id) {
         const channelName = [user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль";
@@ -506,6 +518,7 @@ export default function CreatePost() {
           imageUrl: mediaUrls[0] ?? null,
           mediaUrls: mediaUrls.length ? mediaUrls : null,
           mediaLayout,
+          edgeId: presetEdgeId || null,
           reactions: [],
           myReaction: null,
           viewsCount: 0,
@@ -597,6 +610,18 @@ export default function CreatePost() {
               </TapScaleButton>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {presetEdgeId ? (
+        <div
+          className="border-b border-primary/25 bg-primary/10 uix-content-x py-2.5"
+          role="status"
+        >
+          <p className="text-[12px] leading-snug text-foreground/90">
+            К посту будет привязана кампания EDGE:{" "}
+            <span className="font-mono text-[11px] break-all opacity-90">{presetEdgeId}</span>
+          </p>
         </div>
       ) : null}
 

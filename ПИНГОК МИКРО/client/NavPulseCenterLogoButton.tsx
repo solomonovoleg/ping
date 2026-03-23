@@ -10,7 +10,8 @@ import { PINGOK_LOGO_LONG_PRESS_MS } from "./constants";
 const RING_C = 2 * Math.PI * 24;
 const ACCENT = "#818cf8";
 const SWIPE_UP_PX = 36;
-const PULSE_BUTTON_SCALE = 1.4;
+/** Соответствует viewBox кольца (52×52) и укладывается в `--uix-nav-height` без налёта на контент. */
+const PULSE_BUTTON_SCALE = 1;
 const BUTTON_SIZE_PX = Math.round(52 * PULSE_BUTTON_SCALE);
 const INNER_SIZE_PX = Math.round(44 * PULSE_BUTTON_SCALE);
 const LOGO_IDLE_SIZE_PX = Math.round(24 * PULSE_BUTTON_SCALE);
@@ -121,8 +122,8 @@ export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Pr
       />
       <div
         className={cn(
-          "relative flex flex-1 max-w-[100px] min-w-0 items-center justify-center",
-          "min-h-[var(--uix-touch-min)] pb-1 pt-1",
+          "relative flex min-w-0 items-center justify-center overflow-visible",
+          "pb-0 pt-0",
         )}
       >
         {holding && !reducedMotion ? (
@@ -260,10 +261,7 @@ export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Pr
             <img
               src={logoSrc}
               alt=""
-              className={cn(
-                "object-contain select-none pointer-events-none transition-[width,height] duration-200",
-                holding || voiceActive ? "size-[36px]" : "size-[34px]",
-              )}
+              className="object-contain select-none pointer-events-none transition-[width,height] duration-200"
               style={{
                 width: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,
                 height: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,

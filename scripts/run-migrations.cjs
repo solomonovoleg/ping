@@ -62,6 +62,7 @@ process.env.DATABASE_URL = dbUrl;
 
 const scripts = [
   "scripts/migrate-user-columns.cjs",
+  "scripts/migrate-users-columns.cjs", // модерация users: is_blocked, banned_*, deleted_at, hide_from_search, …
   "scripts/migrate-posts.cjs",
   "scripts/migrate-post-comments.cjs",
   "scripts/migrate-missed-calls.cjs",
@@ -86,9 +87,15 @@ const scripts = [
   "scripts/migrate-profile-pins.cjs",
   "scripts/migrate-chat-member-prefs.cjs",
   "scripts/migrate-user-block-restrictions.cjs",
+  "scripts/migrate-user-block-note.cjs",
   "scripts/migrate-user-reminders-voice-tasks.cjs",
   "scripts/migrate-service-chat.cjs",
   "scripts/migrate-posts-edge-id.cjs",
+  "scripts/migrate-profile-page-views.cjs",
+  "scripts/migrate-user-dm-group-policies.cjs",
+  "scripts/migrate-dm-scheduled-calls.cjs",
+  "scripts/migrate-feed-global-snapshot.cjs",
+  "scripts/migrate-referral-codes-bypass-inviter-limit.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

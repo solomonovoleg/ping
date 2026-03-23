@@ -1,7 +1,7 @@
 /**
  * Очередь исходящих сообщений офлайн: текст и голос → IndexedDB, отправка при появлении сети.
  */
-import { sendMessage, uploadVoice, type ChatMessage } from "@/lib/chat";
+import { sendMessage, uploadVoice, ChatRequestError, type ChatMessage } from "@/lib/chat";
 import { getAuthToken } from "@/lib/api-base";
 import type { ApiMessage } from "@/features/chat/types";
 
@@ -273,7 +273,14 @@ export async function flushChatOutbox(): Promise<void> {
           await removeOutboxItem(row.localId);
           dispatchFlushed(row.chatId, row.localId, sent);
         }
-      } catch {
+      } catch (e) {
+        if (
+          e instanceof ChatRequestError &&
+          e.status === 403 &&
+          e.message.includes("ограничил вам переписку")
+        ) {
+          await removeOutboxItem(row.localId);
+        }
         break;
       }
     }

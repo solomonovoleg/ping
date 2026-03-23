@@ -2,7 +2,8 @@
   "include": [
     "client/src/**/*",
     "shared/**/*",
-    "EDGE/src/**/*",
+    "EDGE/**/*.ts",
+    "PARSER/**/*.ts",
     "server/**/*",
     "ПИНГОК МИКРО/client/**/*",
     "ПИНГОК МИКРО/server/**/*",

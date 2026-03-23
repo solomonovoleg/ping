@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { Search, X, MessageCircle, UserPlus, AlertCircle, UserCircle } from "lucide-react";
-import { searchUsers, startDm, formatUserDisplayName, type SearchUser } from "@/lib/search";
+import { searchUsers, startDm, formatUserDisplayName, formatSearchUserSubtitle, type SearchUser } from "@/lib/search";
 import { followUser } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ type GlobalSearchProps = {
 export function GlobalSearch({
   value: query,
   onChange: setQuery,
-  placeholder = "Поиск по номеру, ID или имени...",
+  placeholder = "Имя, @ник, ID или полный номер…",
   className,
   onClear,
 }: GlobalSearchProps) {
@@ -196,9 +196,7 @@ export function GlobalSearch({
                     />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[15px] font-medium">{formatUserDisplayName(user)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        ID {user.publicId} · {user.phone}
-                      </p>
+                      <p className="text-xs text-muted-foreground">{formatSearchUserSubtitle(user)}</p>
                     </div>
                   </button>
                   <div className="flex shrink-0 items-center gap-0.5">

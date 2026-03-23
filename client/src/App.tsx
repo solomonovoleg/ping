@@ -93,7 +93,11 @@ const BoardCallHistory = lazyWithRetry(() => import("@/pages/BoardCallHistory"),
 const BoardCallHistoryDetail = lazyWithRetry(() => import("@/pages/BoardCallHistoryDetail"), "board-calls-detail");
 const BoardTracksList = lazyWithRetry(() => import("@/features/board/tracks/TracksListPage").then((m) => ({ default: m.TracksListPage })), "board-tracks");
 const BoardTracksDetail = lazyWithRetry(() => import("@/pages/BoardTracksDetail"), "board-tracks-detail");
+const BoardEdgeHub = lazyWithRetry(() => import("@/pages/BoardEdgeHub"), "board-edge-hub");
+const BoardEdgeManage = lazyWithRetry(() => import("@/pages/BoardEdgeManage"), "board-edge-manage");
+const BoardEdgeNew = lazyWithRetry(() => import("@/pages/BoardEdgeNew"), "board-edge-new");
 const Settings = lazyWithRetry(() => import("@/pages/Settings"), "settings");
+const SettingsData = lazyWithRetry(() => import("@/pages/SettingsData"), "settings-data");
 const SavedMessages = lazyWithRetry(() => import("@/pages/SavedMessages"), "saved-messages");
 const EdgeCompanion = lazyWithRetry(() => import("@/pages/EdgeCompanion"), "edge-companion");
 const Subscribers = lazyWithRetry(() => import("@/pages/Subscribers"), "subscribers");
@@ -157,10 +161,15 @@ function Router() {
           <Route path="/board/calls" component={BoardCallHistory} />
           <Route path="/board/tracks/:trackId" component={BoardTracksDetail} />
           <Route path="/board/tracks" component={BoardTracksList} />
+          <Route path="/board/edge/new" component={BoardEdgeNew} />
+          <Route path="/board/edge/manage" component={BoardEdgeManage} />
+          <Route path="/board/edge" component={BoardEdgeHub} />
           <Route path="/board" component={Board} />
+          <Route path="/settings/data" component={SettingsData} />
           <Route path="/settings" component={Settings} />
           <Route path="/saved" component={SavedMessages} />
           <Route path="/edge/companion" component={EdgeCompanion} />
+          <Route path="/edge/:edgeId" component={EdgeCompanion} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>
@@ -239,6 +248,7 @@ function App() {
             <Route path="/admin/referrals" component={AdminApp} />
             <Route path="/admin/admins" component={AdminApp} />
             <Route path="/admin/settings" component={AdminApp} />
+            <Route path="/admin/vk-parser" component={AdminApp} />
             <Route path="/admin/service-chat" component={AdminApp} />
             <Route path="/admin/audit" component={AdminApp} />
             <Route path="/admin/ops" component={AdminApp} />

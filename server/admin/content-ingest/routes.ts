@@ -73,7 +73,6 @@ export function registerAdminContentIngestRoutes(app: Express): void {
           publicId: u.publicId,
           displayName: u.displayName,
           surname: u.surname,
-          phone: u.phone,
         }));
 
       res.json({ users });

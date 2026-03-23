@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode, type UIEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare,
@@ -17,9 +17,12 @@ import {
   Volume2,
   VolumeX,
   SmilePlus,
+  Copy,
+  EyeOff,
 } from "lucide-react";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { isNavigatorShareCancelled } from "@/lib/navigator-share";
 import { useLocation } from "wouter";
 import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
@@ -42,6 +45,10 @@ import {
 import { applyReactionOptimistic, updateFeedPostInCache } from "@/lib/feed-query-cache";
 import { createComment } from "@/lib/comments";
 import { PostMedia } from "@/components/PostMedia";
+import { PostExternalVideoEmbed } from "@/components/PostExternalVideoEmbed";
+import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
+import { extractFirstExternalVideoUrl, isExternalVideoOnlyCaption } from "@/lib/post-external-video";
+import { parseExternalVideoUrl } from "@/lib/external-video";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { startDm } from "@/lib/search";
 import { sendMessage } from "@/lib/chat";
@@ -51,12 +58,13 @@ import {
   archiveStory,
   createStory,
   deleteStory,
-  fetchStoriesFeed,
+  fetchStoriesFeedPage,
   fetchStoryViewers,
   likeStory,
   recordStoryView,
   unlikeStory,
   uploadStoryMedia,
+  type StoriesFeedAuthor,
   type StoryViewerUser,
 } from "@/lib/stories";
 import { compressImage } from "@/lib/compress-image";
@@ -72,9 +80,23 @@ import { ShatterEffect } from "@/components/ShatterEffect";
 import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
 import { FeedHeader } from "@/features/feed/components/FeedHeader";
 import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
+import { buildEdgeCompanionOpenHref } from "@/features/edge-companion/edge-companion-navigation";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 import { playLikeActionSound } from "@/lib/send-sound";
 import { FeedScrollRootContext } from "@/contexts/FeedScrollRootContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  feedHiddenPostIdsStorageKey,
+  loadHiddenFeedPostIds,
+  persistHiddenFeedPostIds,
+  withHiddenFeedPostId,
+} from "@/lib/feed-hidden-posts";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 import avatarAlisa from "@/assets/images/avatar-alisa.png";
@@ -92,8 +114,22 @@ const OTHER_STORIES = [
 const EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
 const FEED_PAGE_SIZE = 5;
 const FEED_RENDER_WINDOW_SIZE = 15;
-const FEED_RENDER_OVERSCAN = 2;
+/** Чуть шире видимой зоны — посты и медиа монтируются до скролла до них */
+const FEED_RENDER_OVERSCAN = 5;
+/** Картинки постов ниже окна виртуализации — прогрев через `Image()` до появления в DOM */
+const FEED_MEDIA_PREFETCH_AHEAD = 10;
 const FEED_POST_ESTIMATED_HEIGHT_PX = 560;
+/** Пагинация ленты сториз по авторам (сервер: server/stories/service.ts DEFAULT_STORIES_FEED_AUTHOR_LIMIT). */
+const STORIES_FEED_AUTHOR_PAGE = 18;
+
+function collectFeedPostVisualMediaUrls(post: FeedPost): string[] {
+  const raw = post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : [];
+  return raw.filter((u) => !/\.(mp3|m4a|aac|wav|ogg)(\?|$)/i.test(u));
+}
+
+function isFeedPostVideoMediaUrl(url: string): boolean {
+  return /\.(mp4|webm|mov)(\?|$)/i.test(url);
+}
 
 function MeasuredFeedItem({
   postId,
@@ -163,15 +199,6 @@ function findPostIndexByOffset(offsets: number[], totalItems: number, targetOffs
   return Math.min(totalItems - 1, Math.max(0, low));
 }
 
-function splitPostTextParts(text: string): string[] {
-  return text.split(/(https?:\/\/[^\s]+|www\.[^\s]+|#[a-zA-Zа-яёА-ЯЁ0-9_]+)/g);
-}
-
-function normalizeHref(part: string): string {
-  if (/^https?:\/\//i.test(part)) return part;
-  return `https://${part}`;
-}
-
 function FeedPostCaption({
   postId,
   text,
@@ -187,6 +214,11 @@ function FeedPostCaption({
 }) {
   const paragraphRef = useRef<HTMLParagraphElement>(null);
   const [showToggle, setShowToggle] = useState(false);
+  const primaryVideoUrl = useMemo(() => extractFirstExternalVideoUrl(text), [text]);
+  const maskEmbed = useMemo(
+    () => (primaryVideoUrl ? parseExternalVideoUrl(primaryVideoUrl) : null),
+    [primaryVideoUrl],
+  );
 
   useLayoutEffect(() => {
     const el = paragraphRef.current;
@@ -205,6 +237,7 @@ function FeedPostCaption({
   }, [text, expanded, postId]);
 
   if (!text.trim()) return null;
+  if (isExternalVideoOnlyCaption(text, primaryVideoUrl)) return null;
 
   return (
     <div className="min-w-0">
@@ -221,40 +254,13 @@ function FeedPostCaption({
             !expanded && "line-clamp-2"
           )}
         >
-          {splitPostTextParts(text).map((part, i) => {
-            if (!part) return null;
-            if (part.startsWith("#")) {
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  className="text-primary font-medium hover:underline underline-offset-2"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onHashtagClick(part.slice(1).toLowerCase());
-                  }}
-                >
-                  {part}
-                </button>
-              );
-            }
-            if (/^(https?:\/\/|www\.)/i.test(part)) {
-              const href = normalizeHref(part);
-              return (
-                <a
-                  key={i}
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer noopener nofollow"
-                  className="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {part}
-                </a>
-              );
-            }
-            return <span key={i}>{part}</span>;
-          })}
+          <PostCaptionInlineParts
+            text={text}
+            maskExternalEmbed={maskEmbed}
+            onHashtagClick={onHashtagClick}
+            linkClassName="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
+            hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
+          />
         </p>
       </div>
       {showToggle && (
@@ -362,7 +368,6 @@ export default function Posts() {
   const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
   const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
   const [sharePostId, setSharePostId] = useState<string | null>(null);
-  const [menuPostId, setMenuPostId] = useState<string | null>(null);
   const [editPost, setEditPost] = useState<FeedPost | null>(null);
   const [editText, setEditText] = useState("");
   const [editImageUrl, setEditImageUrl] = useState("");
@@ -382,6 +387,7 @@ export default function Posts() {
   const [feedViewportHeight, setFeedViewportHeight] = useState(0);
   const [feedHeightsVersion, setFeedHeightsVersion] = useState(0);
   const storyFileRef = useRef<HTMLInputElement | null>(null);
+  const storiesStripRef = useRef<HTMLDivElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const postHeightsRef = useRef<Record<string, number>>({});
@@ -425,6 +431,56 @@ export default function Posts() {
     },
   });
   const feedPosts: FeedPost[] = Array.isArray(feedData?.pages) ? feedData.pages.flat() : [];
+  const hiddenStorageKey = useMemo(() => feedHiddenPostIdsStorageKey(user?.id), [user?.id]);
+  const [hiddenPostIds, setHiddenPostIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setHiddenPostIds(loadHiddenFeedPostIds(hiddenStorageKey));
+  }, [hiddenStorageKey]);
+
+  const visibleFeedPosts = useMemo(
+    () => feedPosts.filter((p) => !hiddenPostIds.has(p.id)),
+    [feedPosts, hiddenPostIds],
+  );
+
+  const copyFeedPostLink = useCallback(
+    (post: FeedPost) => {
+      const url = `${window.location.origin}${buildProfilePostPath({
+        postId: post.id,
+        isMe: post.authorId === user?.id,
+        publicId: post.author?.publicId,
+        userId: post.authorId,
+        fallbackPath: "/posts",
+      })}`;
+      if (!navigator.clipboard?.writeText) {
+        toast({ title: "Копирование недоступно", variant: "destructive" });
+        return;
+      }
+      void navigator.clipboard.writeText(url).then(
+        () => toast({ title: "Ссылка скопирована" }),
+        () => toast({ title: "Не удалось скопировать", variant: "destructive" }),
+      );
+    },
+    [toast, user?.id],
+  );
+
+  const hidePostFromFeed = useCallback(
+    (postId: string) => {
+      setHiddenPostIds((prev) => {
+        const next = withHiddenFeedPostId(prev, postId);
+        persistHiddenFeedPostIds(hiddenStorageKey, next);
+        return next;
+      });
+      toast({ title: "Пост скрыт из ленты", description: "Только на этом устройстве." });
+    },
+    [hiddenStorageKey, toast],
+  );
+
+  const clearHiddenFeedPosts = useCallback(() => {
+    setHiddenPostIds(new Set());
+    persistHiddenFeedPostIds(hiddenStorageKey, new Set());
+  }, [hiddenStorageKey]);
+
   const updateFeedPostHeight = useCallback((postId: string, height: number) => {
     if (!Number.isFinite(height) || height <= 0) return;
     const rounded = Math.round(height);
@@ -463,7 +519,7 @@ export default function Posts() {
   }, []);
 
   const feedVirtualization = useMemo(() => {
-    const totalItems = feedPosts.length;
+    const totalItems = visibleFeedPosts.length;
     if (totalItems === 0) {
       return {
         startIndex: 0,
@@ -476,7 +532,7 @@ export default function Posts() {
     const offsets = new Array<number>(totalItems + 1);
     offsets[0] = 0;
     for (let i = 0; i < totalItems; i += 1) {
-      const row = feedPosts[i];
+      const row = visibleFeedPosts[i];
       const h = row ? (postHeightsRef.current[row.id] ?? FEED_POST_ESTIMATED_HEIGHT_PX) : FEED_POST_ESTIMATED_HEIGHT_PX;
       offsets[i + 1] = offsets[i] + h;
     }
@@ -498,7 +554,30 @@ export default function Posts() {
     const topSpacerPx = offsets[startIndex] ?? 0;
     const bottomSpacerPx = Math.max(0, (offsets[totalItems] ?? 0) - (offsets[endIndexExclusive] ?? 0));
     return { startIndex, endIndexExclusive, topSpacerPx, bottomSpacerPx };
-  }, [feedPosts, feedScrollTop, feedViewportHeight, feedHeightsVersion]);
+  }, [visibleFeedPosts, feedScrollTop, feedViewportHeight, feedHeightsVersion]);
+
+  const feedEndExclusive = feedVirtualization.endIndexExclusive;
+  useEffect(() => {
+    if (!Array.isArray(feedData?.pages)) return;
+    const posts = feedData.pages.flat() as FeedPost[];
+    const start = feedEndExclusive;
+    const end = Math.min(posts.length, start + FEED_MEDIA_PREFETCH_AHEAD);
+    if (start >= end) return;
+    const seen = new Set<string>();
+    for (let i = start; i < end; i++) {
+      const post = posts[i];
+      if (!post) continue;
+      for (const u of collectFeedPostVisualMediaUrls(post)) {
+        if (isFeedPostVideoMediaUrl(u)) continue;
+        const abs = resolveUrl(u);
+        if (seen.has(abs)) continue;
+        seen.add(abs);
+        const img = new Image();
+        img.decoding = "async";
+        img.src = abs;
+      }
+    }
+  }, [feedData?.pages, feedEndExclusive]);
 
   const renderedFeedPosts = feedPosts.slice(feedVirtualization.startIndex, feedVirtualization.endIndexExclusive);
   const feedErrorText =
@@ -515,7 +594,7 @@ export default function Posts() {
       (entries) => {
         if (entries[0]?.isIntersecting) fetchNextPage();
       },
-      { rootMargin: "200px", threshold: 0.1 }
+      { rootMargin: "520px 0px 520px 0px", threshold: 0.1 }
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -545,11 +624,73 @@ export default function Posts() {
     enabled: sharePostId !== null,
   });
 
-  const { data: storiesFeed = [], isLoading: storiesLoading, isError: storiesError, refetch: refetchStories } = useQuery({
+  const {
+    data: storiesPagesData,
+    isLoading: storiesLoading,
+    isError: storiesError,
+    refetch: refetchStories,
+    fetchNextPage: fetchNextStoriesPage,
+    hasNextPage: storiesHasNextPage,
+    isFetchingNextPage: storiesFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["stories", "feed"],
-    queryFn: fetchStoriesFeed,
+    queryFn: ({ pageParam }) =>
+      fetchStoriesFeedPage({
+        offset: typeof pageParam === "number" ? pageParam : 0,
+        limit: STORIES_FEED_AUTHOR_PAGE,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.hasMore ? last.nextOffset : undefined),
     enabled: !!user,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
   });
+
+  const storiesFeed = useMemo(() => {
+    const pages = storiesPagesData?.pages;
+    if (!pages?.length) return [];
+    const ordered: StoriesFeedAuthor[] = [];
+    const seen = new Set<string>();
+    for (const p of pages) {
+      for (const a of p.authors) {
+        if (seen.has(a.authorId)) continue;
+        seen.add(a.authorId);
+        ordered.push(a);
+      }
+    }
+    return ordered;
+  }, [storiesPagesData?.pages]);
+
+  const onStoriesStripScroll = useCallback(
+    (e: UIEvent<HTMLDivElement>) => {
+      const t = e.currentTarget;
+      if (t.scrollLeft + t.clientWidth >= t.scrollWidth - 120 && storiesHasNextPage && !storiesFetchingNextPage) {
+        void fetchNextStoriesPage();
+      }
+    },
+    [fetchNextStoriesPage, storiesHasNextPage, storiesFetchingNextPage],
+  );
+
+  /** Прогрев превью последних подгруженных кружков — быстрее открытие просмотра. */
+  useEffect(() => {
+    if (!storiesFeed.length) return;
+    const tail = storiesFeed.slice(-4);
+    const seen = new Set<string>();
+    for (const a of tail) {
+      const first = a.stories?.[0];
+      const raw = first?.mediaUrl?.trim();
+      if (!raw) continue;
+      if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(raw)) continue;
+      const abs = resolveUrl(raw);
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      const img = new Image();
+      img.decoding = "async";
+      img.src = abs;
+    }
+  }, [storiesFeed]);
+
   const { data: activeStoryViewers = [], isLoading: activeStoryViewersLoading } = useQuery({
     queryKey: ["stories", "viewers", activeViewersStoryId],
     queryFn: () => fetchStoryViewers(activeViewersStoryId!),
@@ -671,7 +812,11 @@ export default function Posts() {
     ? (() => {
         const mapped = storiesFeed.map((a) => {
           const author = a.author ?? { id: a.authorId, publicId: 0, displayName: null, avatarUrl: null };
-          const stories = Array.isArray(a.stories) ? a.stories : [];
+          const now = Date.now();
+          const stories = (Array.isArray(a.stories) ? a.stories : []).filter((s) => {
+            const ex = Date.parse(String(s.expiresAt ?? ""));
+            return Number.isFinite(ex) && ex > now;
+          });
           const hasLocalUnseen = stories.some((s) => !viewedStoryIds.has(s.id) && s.isViewed !== true);
           const isMe = user ? a.authorId === user.id : false;
           return {
@@ -686,7 +831,7 @@ export default function Posts() {
             stories,
             author,
           };
-        });
+        }).filter((row) => row.stories.length > 0 || (user && row.id === user.id));
 
         const myIndex = mapped.findIndex((s) => s.isMe);
         if (myIndex >= 0) {
@@ -740,24 +885,34 @@ export default function Posts() {
     const author = (item as { author?: { id?: string; displayName: string | null; avatarUrl: string | null; publicId: number } }).author;
     const name = author?.displayName || (item as { name?: string }).name || `ID ${author?.publicId ?? ""}`;
     const avatar = author?.avatarUrl ? resolveUrl(author.avatarUrl) : (item as { avatar?: string }).avatar ?? avatarMain;
+    const circleUserId =
+      typeof (item as { id?: unknown }).id === "string" && (item as { id: string }).id !== "me"
+        ? (item as { id: string }).id
+        : "";
     return (item.stories as {
       id: string;
       mediaUrl: string;
+      thumbnailUrl?: string | null;
       createdAt: string;
       expiresAt?: string;
       likesCount?: number;
       isLiked?: boolean;
-    }[]).map((s) => ({
-      id: s.id,
-      image: resolveUrl(s.mediaUrl),
-      userName: name,
-      userAvatar: avatar,
-      time: formatPostTime(s.createdAt),
-      authorId: author?.id ?? (item as { authorId?: string }).authorId,
-      expiresAt: s.expiresAt,
-      likesCount: Number(s.likesCount ?? 0),
-      isLiked: s.isLiked === true,
-    }));
+    }[]).map((s) => {
+      const slideAuthorId = author?.id ?? (item as { authorId?: string }).authorId ?? circleUserId;
+      const thumb = s.thumbnailUrl?.trim();
+      return {
+        id: s.id,
+        image: resolveUrl(s.mediaUrl),
+        ...(thumb ? { thumbnailUrl: resolveUrl(thumb) } : {}),
+        userName: name,
+        userAvatar: avatar,
+        time: formatPostTime(s.createdAt),
+        authorId: slideAuthorId || undefined,
+        expiresAt: s.expiresAt,
+        likesCount: Number(s.likesCount ?? 0),
+        isLiked: s.isLiked === true,
+      };
+    });
   }, [storyCircles]);
 
   /** Для записи просмотра: в цепочке сториз автор слайда не совпадает с кругом, с которого открыли. */
@@ -816,7 +971,7 @@ export default function Posts() {
     storyId: string;
     authorId: string;
     text: string;
-    story: { id: string; image: string; userName: string; userAvatar: string; time: string };
+    story: { id: string; image: string; thumbnailUrl?: string; userName: string; userAvatar: string; time: string };
   }) => {
     if (!user?.id) {
       toast({ title: "Войдите, чтобы ответить на сториз", variant: "destructive" });
@@ -831,6 +986,7 @@ export default function Posts() {
       const storyPayload = {
         storyId: payload.story.id,
         mediaUrl: payload.story.image,
+        ...(payload.story.thumbnailUrl ? { thumbnailUrl: payload.story.thumbnailUrl } : {}),
         authorId: payload.authorId,
         authorName: payload.story.userName,
         authorAvatar: payload.story.userAvatar,
@@ -838,6 +994,7 @@ export default function Posts() {
         replyText: payload.text.trim(),
       };
       await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
+      void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
       toast({ title: "Ответ на сториз отправлен" });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Не удалось отправить ответ";
@@ -860,6 +1017,7 @@ export default function Posts() {
       if (!liked && result.isLiked) {
         playLikeActionSound();
       }
+      void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
     } catch (err) {
       setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
       setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
@@ -870,7 +1028,12 @@ export default function Posts() {
   const handleStoryShare = async (story: { id: string; image: string; userName: string; time: string }) => {
     const shareText = `Сториз ${story.userName}`;
     if (navigator.share) {
-      await navigator.share({ title: shareText, text: shareText, url: story.image });
+      try {
+        await navigator.share({ title: shareText, text: shareText, url: story.image });
+      } catch (e) {
+        if (isNavigatorShareCancelled(e)) return;
+        throw e;
+      }
       return;
     }
     if (navigator.clipboard?.writeText) {
@@ -1032,7 +1195,11 @@ export default function Posts() {
           <FeedScrollRootContext.Provider value={feedScrollRef}>
           {/* Stories Section */}
           <div className="py-4 border-b border-border/50 bg-background/50">
-            <div className="flex gap-4 overflow-x-auto hide-scrollbar uix-content-x items-center">
+            <div
+              ref={storiesStripRef}
+              onScroll={onStoriesStripScroll}
+              className="flex gap-4 overflow-x-auto hide-scrollbar uix-content-x items-center"
+            >
               {storiesError && storyCircles.length === 0 && user && (
                 <button
                   type="button"
@@ -1157,6 +1324,15 @@ export default function Posts() {
               {storiesLoading && storyCircles.length === 0 && (
                 <div className="flex-shrink-0 text-xs text-muted-foreground">Загрузка сториз...</div>
               )}
+              {storiesFetchingNextPage && (
+                <div
+                  className="flex flex-col items-center gap-1.5 flex-shrink-0 py-1"
+                  aria-label="Подгрузка сториз"
+                >
+                  <div className="h-16 w-16 shrink-0 rounded-full bg-muted/55 animate-pulse" />
+                  <div className="h-2.5 w-10 rounded-full bg-muted/45 animate-pulse" />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1194,6 +1370,14 @@ export default function Posts() {
                 actionLabel="Написать первый пост"
                 onAction={() => setLocation("/create-post")}
               />
+            ) : visibleFeedPosts.length === 0 ? (
+              <ListEmptyState
+                icon={EyeOff}
+                title="Посты скрыты"
+                description="Вы скрыли все видимые посты на этом устройстве. Новые посты появятся в ленте как обычно."
+                actionLabel="Показать скрытые снова"
+                onAction={clearHiddenFeedPosts}
+              />
             ) : (
               <>
               {feedVirtualization.topSpacerPx > 0 && (
@@ -1230,6 +1414,7 @@ export default function Posts() {
                 const mediaList = post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : [];
                 const postHasVideo = mediaList.some((u) => /\.(mp4|webm|mov)(\?|$)/i.test(u));
                 const feedVideoSoundOn = feedSoundPostId === post.id;
+                const primaryExternalVideoUrl = extractFirstExternalVideoUrl(safeText);
                 const article = (
               <article className="overflow-x-hidden border-b border-border/40 transition-colors duration-200 ease-out hover:bg-secondary/15">
                 <div className="flex items-start justify-between gap-[var(--uix-space-3)] uix-content-x pb-[var(--uix-space-3)] pt-[var(--uix-space-4)]">
@@ -1281,51 +1466,65 @@ export default function Posts() {
                         {post.isSaved ? <Check className="h-5 w-5 text-primary" strokeWidth={2.25} /> : <Plus className="h-5 w-5" />}
                       </button>
                     )}
-                    <div className="relative">
-                      <button
-                        type="button"
-                        className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMenuPostId(menuPostId === post.id ? null : post.id);
-                        }}
-                        aria-label="Меню поста"
-                      >
-                        <MoreHorizontal className="h-5 w-5" />
-                      </button>
-                      {post.authorId === user?.id && menuPostId === post.id && (
-                        <div className="absolute right-0 top-full z-50 mt-[var(--uix-space-2)] min-w-[168px] overflow-hidden rounded-xl border border-border/80 bg-background py-[var(--uix-space-1)] shadow-lg">
+                    <div className="relative" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            className="flex min-h-[44px] w-full items-center gap-[var(--uix-space-2)] px-[var(--uix-space-3)] py-2.5 text-left text-[14px] hover:bg-secondary/70"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditPost(post);
-                              setEditText(post.text);
-                              setEditImageUrl(post.imageUrl ?? "");
-                              setMenuPostId(null);
-                            }}
+                            className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                            aria-label="Меню поста"
                           >
-                            <PenSquare className="h-4 w-4" />
-                            Редактировать
+                            <MoreHorizontal className="h-5 w-5" />
                           </button>
-                          <button
-                            type="button"
-                            className="flex min-h-[44px] w-full items-center gap-[var(--uix-space-2)] px-[var(--uix-space-3)] py-2.5 text-left text-[14px] text-red-600 hover:bg-red-500/10"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm("Удалить пост?")) {
-                                setShatteringPostIds((s) => new Set(s).add(post.id));
-                                setMenuPostId(null);
-                                deletePostMutation.mutate(post.id);
-                              }
-                            }}
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={(e) => e.preventDefault()}>
+                          <DropdownMenuItem
+                            className="min-h-[var(--uix-touch-min)]"
+                            onClick={() => copyFeedPostLink(post)}
                           >
-                            <Trash2 className="h-4 w-4" />
-                            Удалить пост
-                          </button>
-                        </div>
-                      )}
+                            <Copy className="h-4 w-4" />
+                            Скопировать ссылку
+                          </DropdownMenuItem>
+                          {user && post.authorId !== user.id ? (
+                            <DropdownMenuItem
+                              className="min-h-[var(--uix-touch-min)]"
+                              onClick={() => hidePostFromFeed(post.id)}
+                            >
+                              <EyeOff className="h-4 w-4" />
+                              Скрыть из ленты
+                            </DropdownMenuItem>
+                          ) : null}
+                          {post.authorId === user?.id ? (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="min-h-[var(--uix-touch-min)]"
+                                onClick={() => {
+                                  setEditPost(post);
+                                  setEditText(post.text);
+                                  setEditImageUrl(post.imageUrl ?? "");
+                                }}
+                              >
+                                <PenSquare className="h-4 w-4" />
+                                Редактировать
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="min-h-[var(--uix-touch-min)] text-destructive focus:text-destructive"
+                                onClick={() => {
+                                  if (window.confirm("Удалить пост?")) {
+                                    setShatteringPostIds((s) => new Set(s).add(post.id));
+                                    deletePostMutation.mutate(post.id);
+                                  }
+                                }}
+                                disabled={deletePostMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Удалить пост
+                              </DropdownMenuItem>
+                            </>
+                          ) : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                 </div>
@@ -1336,6 +1535,7 @@ export default function Posts() {
                       mediaUrls={mediaList}
                       layout={post.mediaLayout ?? null}
                       edgeToEdge
+                      feedEagerImages
                       feedVideoAutoplay
                       feedVideoSoundOn={feedVideoSoundOn}
                       feedReelsInteraction={
@@ -1413,9 +1613,15 @@ export default function Posts() {
                           });
                           return;
                         }
-                        setLocation(`/edge/companion?edgeId=${encodeURIComponent(post.edgeId!)}`);
+                        setLocation(buildEdgeCompanionOpenHref(post.edgeId!, "/posts"));
                       }}
                     />
+                  </div>
+                ) : null}
+
+                {primaryExternalVideoUrl ? (
+                  <div className="relative w-full">
+                    <PostExternalVideoEmbed url={primaryExternalVideoUrl} flush autoplayInViewport />
                   </div>
                 ) : null}
 
@@ -1523,7 +1729,6 @@ export default function Posts() {
                           onClick={(e) => {
                             e.stopPropagation();
                             import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
-                            setMenuPostId(null);
                             setSharePostId(post.id);
                           }}
                         >

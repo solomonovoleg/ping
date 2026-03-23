@@ -14,6 +14,7 @@ import {
   requestVoiceOrVideoNoteTranscription,
   sendChatMessage,
 } from "./service";
+import { ServiceChatError } from "../service-chat/service";
 
 function param(p: Record<string, string | string[] | undefined>, key: string): string {
   const v = p[key];
@@ -78,6 +79,10 @@ export function registerMessagesRoutes(app: Express): void {
       res.status(201).json(message);
     } catch (error) {
       if (error instanceof MessagesServiceError) {
+        res.status(error.status).json({ message: error.message });
+        return;
+      }
+      if (error instanceof ServiceChatError) {
         res.status(error.status).json({ message: error.message });
         return;
       }

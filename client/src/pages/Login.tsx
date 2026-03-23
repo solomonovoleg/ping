@@ -15,6 +15,7 @@ import { triggerLightHaptic } from "@/lib/capacitor-native";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { FormError } from "@/components/ui/form-error";
 import { getPrivacyPolicyUrl } from "@/lib/legal";
+import { getAuthSocialProof } from "@/lib/auth-social-proof";
 import { Eye, EyeOff } from "lucide-react";
 
 export default function Login() {
@@ -29,6 +30,7 @@ export default function Login() {
   const [phoneTouched, setPhoneTouched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [{ registeredBase, todayGrowth }] = useState(() => getAuthSocialProof());
   const hapticLastRef = useRef(0);
   const HAPTIC_THROTTLE_MS = 80;
 
@@ -283,6 +285,9 @@ export default function Login() {
             >
               Политика конфиденциальности
             </a>
+          </p>
+          <p className="text-[11px] text-center text-muted-foreground/80">
+            Зарегистрировано {registeredBase} (+{todayGrowth} за сегодня)
           </p>
         </form>
       </div>

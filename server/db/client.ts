@@ -78,6 +78,52 @@ export async function ensureUserColumns(): Promise<void> {
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS vibe_enabled BOOLEAN NOT NULL DEFAULT false");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS vibe_share_with_partner BOOLEAN NOT NULL DEFAULT false");
     await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_lookup_hash VARCHAR(64)");
+    await p.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_cipher TEXT");
+    await p.query(
+      "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_lookup_hash_uidx ON users(phone_lookup_hash) WHERE phone_lookup_hash IS NOT NULL",
+    );
+    try {
+      await p.query("ALTER TABLE users ALTER COLUMN phone DROP NOT NULL");
+    } catch {
+      /* уже nullable или нет прав */
+    }
+    try {
+      await p.query("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_key");
+    } catch {
+      /* нет ограничения */
+    }
+    try {
+      await p.query("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_unique");
+    } catch {
+      /* нет ограничения */
+    }
+    await p.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS users_phone_plain_uidx ON users(phone)
+      WHERE phone IS NOT NULL AND btrim(phone) <> ''
+    `);
+    try {
+      const { isPhoneAtRestEnabled, preparePhoneForStorage } = await import("../auth/phone-at-rest");
+      const { normalizePhone } = await import("../auth/phone");
+      if (isPhoneAtRestEnabled()) {
+        const r = await p.query(
+          `SELECT id, phone FROM users WHERE phone IS NOT NULL AND btrim(phone) <> '' AND phone_lookup_hash IS NULL`,
+        );
+        for (const row of r.rows as { id: string; phone: string }[]) {
+          if (row.phone === "admin") continue;
+          const norm = normalizePhone(row.phone);
+          if (!norm) continue;
+          const { phoneLookupHash: h, phoneCipher: c } = preparePhoneForStorage(norm);
+          await p.query(`UPDATE users SET phone_lookup_hash = $1, phone_cipher = $2, phone = NULL WHERE id = $3`, [
+            h,
+            c,
+            row.id,
+          ]);
+        }
+      }
+    } catch (e) {
+      console.warn("[db] phone-at-rest backfill skipped:", e);
+    }
     userColumnsEnsured = true;
     const { ensureReplySchema } = await import("../messages/reply");
     await ensureReplySchema(p);
@@ -110,6 +156,37 @@ export async function ensureUserColumns(): Promise<void> {
     console.log("[db] ensureUserColumns: last_seen_at, fcm_token OK");
   } catch (e) {
     console.error("[db] ensureUserColumns failed (повторим при следующем запросе):", e);
+  }
+}
+
+let storiesFeedBoostColumnsEnsured = false;
+
+/** Колонки ранжирования ленты сторис (если не накатили migrations/0025 на VPS). */
+export async function ensureStoriesFeedBoostColumns(): Promise<void> {
+  if (storiesFeedBoostColumnsEnsured || !process.env.DATABASE_URL) return;
+  const p = getPool();
+  try {
+    await p.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS feed_boost_like_at TIMESTAMPTZ`);
+    await p.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS feed_boost_reply_at TIMESTAMPTZ`);
+    await p.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'stories' AND column_name = 'feed_boosted_at'
+        ) THEN
+          UPDATE stories
+          SET
+            feed_boost_like_at = COALESCE(feed_boost_like_at, feed_boosted_at),
+            feed_boost_reply_at = COALESCE(feed_boost_reply_at, feed_boosted_at)
+          WHERE feed_boosted_at IS NOT NULL;
+          ALTER TABLE stories DROP COLUMN feed_boosted_at;
+        END IF;
+      END $$;
+    `);
+    storiesFeedBoostColumnsEnsured = true;
+  } catch (e) {
+    console.error("[db] ensureStoriesFeedBoostColumns failed (повторим при следующем запросе):", e);
   }
 }
 

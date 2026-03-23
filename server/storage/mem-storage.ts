@@ -1,5 +1,6 @@
 import type { IStorage } from "./types";
 import type {
+  Chat,
   ChatFolder,
   ChatVibeState,
   ChatVibeBatch,
@@ -27,7 +28,12 @@ const foldersByChat = new Map<string, ChatFolder[]>();
 /** In-memory follows: followerId -> Set of followingId */
 const followsMap = new Map<string, Set<string>>();
 
-type MemBlockFlags = { restrictProfile: boolean; restrictChat: boolean; restrictSocial: boolean };
+type MemBlockFlags = {
+  restrictProfile: boolean;
+  restrictChat: boolean;
+  restrictSocial: boolean;
+  blockNote: string | null;
+};
 
 function memBlockFull(f: MemBlockFlags): boolean {
   return f.restrictProfile === true && f.restrictChat === true && f.restrictSocial === true;
@@ -48,6 +54,19 @@ function chatMemberPrefsKey(userId: string, chatId: string): string {
 
 const memUserReminders: UserReminder[] = [];
 const memVoiceTasks: VoiceTask[] = [];
+
+type MemDmScheduledCall = {
+  id: string;
+  chatId: string;
+  createdByUserId: string;
+  peerUserId: string;
+  fireAt: Date;
+  title: string;
+  plannerReminderId: string | null;
+  initiatorDismissedAt: Date | null;
+  peerDismissedAt: Date | null;
+};
+const memDmScheduledCalls: MemDmScheduledCall[] = [];
 
 export class MemStorage implements IStorage {
   private users = createUsersStore();
@@ -86,14 +105,16 @@ export class MemStorage implements IStorage {
     return Promise.resolve(set ? Array.from(set) : []);
   }
 
-  async addFollow(followerId: string, followingId: string): Promise<void> {
-    if (followerId === followingId) return;
+  async addFollow(followerId: string, followingId: string): Promise<boolean> {
+    if (followerId === followingId) return false;
     let set = followsMap.get(followerId);
     if (!set) {
       set = new Set();
       followsMap.set(followerId, set);
     }
+    if (set.has(followingId)) return false;
     set.add(followingId);
+    return true;
   }
 
   async removeFollow(followerId: string, followingId: string): Promise<void> {
@@ -205,15 +226,18 @@ export class MemStorage implements IStorage {
   async addBlock(
     blockerId: string,
     blockedId: string,
-    flags?: Partial<MemBlockFlags>,
+    flags?: Partial<Omit<MemBlockFlags, "blockNote">>,
+    blockNote?: string | null,
   ): Promise<void> {
     if (blockerId === blockedId) return;
+    let inner = blocksMap.get(blockerId);
+    const prev = inner?.get(blockedId);
     const next: MemBlockFlags = {
       restrictProfile: flags?.restrictProfile !== false,
       restrictChat: flags?.restrictChat !== false,
       restrictSocial: flags?.restrictSocial !== false,
+      blockNote: blockNote !== undefined ? blockNote : (prev?.blockNote ?? null),
     };
-    let inner = blocksMap.get(blockerId);
     if (!inner) {
       inner = new Map();
       blocksMap.set(blockerId, inner);
@@ -234,7 +258,8 @@ export class MemStorage implements IStorage {
   async getBlockFlags(blockerId: string, blockedId: string): Promise<MemBlockFlags | null> {
     const inner = blocksMap.get(blockerId);
     const f = inner?.get(blockedId);
-    return Promise.resolve(f ? { ...f } : null);
+    if (!f) return Promise.resolve(null);
+    return Promise.resolve({ ...f, blockNote: f.blockNote ?? null });
   }
 
   async getBlockedRelationIds(viewerId: string): Promise<string[]> {
@@ -326,7 +351,6 @@ export class MemStorage implements IStorage {
       list.map((u) => ({
         id: u.id,
         publicId: u.publicId,
-        phone: u.phone,
         displayName: u.displayName,
         surname: u.surname,
         platformRole: u.platformRole,
@@ -340,18 +364,31 @@ export class MemStorage implements IStorage {
     return Promise.resolve(u);
   }
 
-  async createReferralCode(inviterUserId: string, code: string, expiresAt: Date, opts?: { maxUses?: number }) {
+  async createReferralCode(
+    inviterUserId: string,
+    code: string,
+    expiresAt: Date,
+    opts?: { maxUses?: number; bypassInviterLimit?: boolean },
+  ) {
     let maxUses = opts?.maxUses ?? 1;
     if (maxUses === 0 || maxUses < -1) maxUses = 1;
     if (maxUses > 10_000) maxUses = 10_000;
-    const row = this.referralCodes.create(inviterUserId, code, expiresAt, maxUses);
+    const row = this.referralCodes.create(inviterUserId, code, expiresAt, {
+      maxUses,
+      bypassInviterLimit: opts?.bypassInviterLimit,
+    });
     return Promise.resolve({ id: row.id, code: row.code, expiresAt: row.expiresAt, maxUses: row.maxUses });
   }
 
   async getReferralCodeByCode(code: string) {
     const row = this.referralCodes.getByCode(code);
     if (!row) return Promise.resolve(undefined);
-    return Promise.resolve({ id: row.id, inviterUserId: row.inviterUserId, expiresAt: row.expiresAt });
+    return Promise.resolve({
+      id: row.id,
+      inviterUserId: row.inviterUserId,
+      expiresAt: row.expiresAt,
+      bypassInviterLimit: row.bypassInviterLimit === true,
+    });
   }
 
   async consumeReferralCode(codeId: string) {
@@ -656,8 +693,9 @@ export class MemStorage implements IStorage {
     const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
     const list = this.messages.getByChatId(chatId);
     const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
-    if (!since) return list.filter(fromOthers).length;
-    return list.filter((m) => fromOthers(m) && new Date(m.createdAt) > since).length;
+    const unreadEligible = (m: { type?: string | null }) => m.type !== "system" && m.type !== "missed_call";
+    if (!since) return list.filter((m) => fromOthers(m) && unreadEligible(m)).length;
+    return list.filter((m) => fromOthers(m) && unreadEligible(m) && new Date(m.createdAt) > since).length;
   }
 
   async getUnreadCountByFolder(chatId: string, folderId: string | null, userId: string): Promise<number> {
@@ -665,8 +703,9 @@ export class MemStorage implements IStorage {
     const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
     const list = this.messages.getByChatId(chatId, undefined, undefined, folderId);
     const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
-    if (!since) return list.filter(fromOthers).length;
-    return list.filter((m) => fromOthers(m) && new Date(m.createdAt) > since).length;
+    const unreadEligible = (m: { type?: string | null }) => m.type !== "system" && m.type !== "missed_call";
+    if (!since) return list.filter((m) => fromOthers(m) && unreadEligible(m)).length;
+    return list.filter((m) => fromOthers(m) && unreadEligible(m) && new Date(m.createdAt) > since).length;
   }
 
   async getMessageCountByFolder(chatId: string, folderId: string): Promise<number> {
@@ -678,7 +717,7 @@ export class MemStorage implements IStorage {
     _userId: string,
     _query: string,
     _limit: number
-  ): Promise<{ messageId: string; chatId: string; content: string; createdAt: Date; chatName: string }[]> {
+  ): Promise<{ messageId: string; chatId: string; type: string; content: string; createdAt: Date; chatName: string }[]> {
     return Promise.resolve([]);
   }
 
@@ -992,6 +1031,13 @@ export class MemStorage implements IStorage {
     return true;
   }
 
+  async updateUserReminderFireAt(userId: string, id: string, fireAt: Date): Promise<boolean> {
+    const row = memUserReminders.find((r) => r.id === id && r.userId === userId && !r.dismissedAt);
+    if (!row) return false;
+    row.fireAt = fireAt;
+    return true;
+  }
+
   async createVoiceTask(data: { userId: string; title: string }): Promise<VoiceTask> {
     const row: VoiceTask = {
       id: crypto.randomUUID(),
@@ -1017,5 +1063,186 @@ export class MemStorage implements IStorage {
     if (!row) return false;
     row.doneAt = new Date();
     return true;
+  }
+
+  async ensurePingokTrackSourceChat(userId: string): Promise<Chat> {
+    const mine = this.chats.getByUserId(userId);
+    const existing = mine.find(
+      (c) =>
+        c.type === "group" &&
+        c.name === "__pingok_track_src" &&
+        this.chats.getMemberIds(c.id).length === 1,
+    );
+    if (existing) {
+      await this.upsertChatMemberPrefs(userId, existing.id, { hiddenAt: new Date() });
+      return existing;
+    }
+    const chat = this.chats.create({ type: "group", name: "__pingok_track_src" });
+    this.chats.addMember({ chatId: chat.id, userId, role: "admin" });
+    await this.upsertChatMemberPrefs(userId, chat.id, { hiddenAt: new Date() });
+    return chat;
+  }
+
+  async findBestUserTrackByName(_userId: string, _nameQuery: string): Promise<{ id: string; name: string } | null> {
+    return null;
+  }
+
+  async createDmScheduledCall(data: {
+    chatId: string;
+    createdByUserId: string;
+    peerUserId: string;
+    fireAt: Date;
+    title: string;
+    plannerReminderId?: string | null;
+  }): Promise<{ id: string }> {
+    const id = randomUUID();
+    memDmScheduledCalls.push({
+      id,
+      chatId: data.chatId,
+      createdByUserId: data.createdByUserId,
+      peerUserId: data.peerUserId,
+      fireAt: data.fireAt,
+      title: data.title,
+      plannerReminderId: data.plannerReminderId ?? null,
+      initiatorDismissedAt: null,
+      peerDismissedAt: null,
+    });
+    return { id };
+  }
+
+  async getActiveDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+  ): Promise<{
+    id: string;
+    fireAt: Date;
+    title: string;
+    createdByUserId: string;
+    peerUserId: string;
+    iAmInitiator: boolean;
+  } | null> {
+    const memberIds = this.chats.getMemberIds(chatId);
+    if (!memberIds.includes(userId)) return null;
+    const now = Date.now();
+    const rows = memDmScheduledCalls
+      .filter((x) => x.chatId === chatId)
+      .sort((a, b) => b.fireAt.getTime() - a.fireAt.getTime());
+    for (const r of rows) {
+      if (now > r.fireAt.getTime() + 5 * 60_000) continue;
+      const iAmInitiator = r.createdByUserId === userId;
+      if (iAmInitiator && r.initiatorDismissedAt) continue;
+      if (!iAmInitiator && r.peerDismissedAt) continue;
+      return {
+        id: r.id,
+        fireAt: r.fireAt,
+        title: r.title,
+        createdByUserId: r.createdByUserId,
+        peerUserId: r.peerUserId,
+        iAmInitiator,
+      };
+    }
+    return null;
+  }
+
+  async dismissDmScheduledCallForChatMember(
+    userId: string,
+    chatId: string,
+    rowId: string,
+    options: { forBoth: boolean },
+  ): Promise<boolean> {
+    const row = memDmScheduledCalls.find((x) => x.id === rowId && x.chatId === chatId);
+    if (!row) return false;
+    const isInitiator = row.createdByUserId === userId;
+    const isPeer = row.peerUserId === userId;
+    if (!isInitiator && !isPeer) return false;
+    const now = new Date();
+    if (options.forBoth) {
+      row.initiatorDismissedAt = now;
+      row.peerDismissedAt = now;
+    } else if (isInitiator) {
+      row.initiatorDismissedAt = now;
+    } else {
+      row.peerDismissedAt = now;
+    }
+    return true;
+  }
+
+  async listPlannerActiveDmScheduledCalls(userId: string): Promise<
+    Array<{
+      id: string;
+      chatId: string;
+      peerUserId: string;
+      fireAt: Date;
+      title: string;
+      plannerReminderId: string | null;
+    }>
+  > {
+    const cutoff = Date.now() - 2 * 60_000;
+    return memDmScheduledCalls
+      .filter(
+        (r) =>
+          r.createdByUserId === userId &&
+          !r.initiatorDismissedAt &&
+          r.fireAt.getTime() > cutoff,
+      )
+      .sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime())
+      .map((r) => ({
+        id: r.id,
+        chatId: r.chatId,
+        peerUserId: r.peerUserId,
+        fireAt: r.fireAt,
+        title: r.title,
+        plannerReminderId: r.plannerReminderId,
+      }));
+  }
+
+  async updateDmScheduledCallFireAsPlanner(
+    userId: string,
+    rowId: string,
+    fireAt: Date,
+    title: string,
+  ): Promise<{ chatId: string; peerUserId: string } | null> {
+    const row = memDmScheduledCalls.find(
+      (x) => x.id === rowId && x.createdByUserId === userId && !x.initiatorDismissedAt,
+    );
+    if (!row) return null;
+    row.fireAt = fireAt;
+    row.title = title.trim() || row.title;
+    if (row.plannerReminderId) {
+      const rem = memUserReminders.find((u) => u.id === row.plannerReminderId && u.userId === userId && !u.dismissedAt);
+      if (rem) rem.fireAt = fireAt;
+    }
+    return { chatId: row.chatId, peerUserId: row.peerUserId };
+  }
+
+  async cancelDmScheduledCallAsPlanner(userId: string, rowId: string): Promise<{ chatId: string; peerUserId: string } | null> {
+    const row = memDmScheduledCalls.find(
+      (x) => x.id === rowId && x.createdByUserId === userId && !x.initiatorDismissedAt,
+    );
+    if (!row) return null;
+    const now = new Date();
+    row.initiatorDismissedAt = now;
+    row.peerDismissedAt = now;
+    if (row.plannerReminderId) {
+      await this.dismissUserReminder(userId, row.plannerReminderId);
+    }
+    return { chatId: row.chatId, peerUserId: row.peerUserId };
+  }
+
+  async listDmScheduledCallsInPreEventWindow(userId: string): Promise<
+    Array<{ id: string; chatId: string; title: string; fireAt: Date }>
+  > {
+    const now = Date.now();
+    const until = now + 5 * 60_000;
+    return memDmScheduledCalls
+      .filter((r) => {
+        const t = r.fireAt.getTime();
+        if (t <= now || t > until) return false;
+        if (r.createdByUserId === userId && !r.initiatorDismissedAt) return true;
+        if (r.peerUserId === userId && !r.peerDismissedAt) return true;
+        return false;
+      })
+      .sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime())
+      .map((r) => ({ id: r.id, chatId: r.chatId, title: r.title, fireAt: r.fireAt }));
   }
 }

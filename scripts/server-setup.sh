@@ -117,6 +117,20 @@ else
   echo "DATABASE_URL не задан в .env — миграции пропущены (приложение будет без БД)."
 fi
 
+# Миграции БД микросервиса EDGE (опционально, не влияют на основное приложение)
+if [ -f EDGE/db/run-migrations.cjs ] && grep -q '^EDGE_DATABASE_URL=.\+' .env 2>/dev/null; then
+  EDGE_DB_RAW=$(grep '^EDGE_DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
+  export EDGE_DATABASE_URL=$(echo "$EDGE_DB_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
+  echo "Миграции БД EDGE..."
+  node EDGE/db/run-migrations.cjs || echo "Предупреждение: миграции EDGE завершились с ошибкой (проверь EDGE_DATABASE_URL)."
+fi
+
+# Миграции PARSER (ВК): та же PostgreSQL, что у платформы (PARSER_DATABASE_URL или DATABASE_URL)
+if [ -f PARSER/db/run-migrations.cjs ]; then
+  echo "Миграции PARSER..."
+  node PARSER/db/run-migrations.cjs || echo "Предупреждение: миграции PARSER (проверь DATABASE_URL в .env)."
+fi
+
 # Бесплатный self-hosted ASR для титров групповых звонков (Vosk)
 if grep -q '^GROUP_CALLS_SERVER_ASR_ENABLED=1' .env 2>/dev/null; then
   echo "Настройка Vosk ASR для групповых титров..."
@@ -161,5 +175,13 @@ echo "Приложение запущено на порту $PORT (PM2, имя �
 PN="${PINGOK_PM2_NAME:-pingok-micro}"
 if pm2 describe "$PN" >/dev/null 2>&1; then
   echo "ПИНГОК МИКРО: pm2 describe $PN | pm2 logs $PN (порт PINGOK_MICRO_PORT в .env, по умолчанию 3091)"
+fi
+EN="${EDGE_PM2_NAME:-ping-moot-edge}"
+if pm2 describe "$EN" >/dev/null 2>&1; then
+  echo "EDGE: pm2 describe $EN | pm2 logs $EN (EDGE_PORT в .env, по умолчанию 3092; прокси: EDGE_UPSTREAM_URL на платформе)"
+fi
+PR="${PARSER_PM2_NAME:-ping-moot-parser}"
+if pm2 describe "$PR" >/dev/null 2>&1; then
+  echo "PARSER: pm2 describe $PR | pm2 logs $PR (PARSER_PORT, PARSER_UPSTREAM_URL + PARSER_SERVICE_SECRET на платформе)"
 fi
 echo "Команды: pm2 status | pm2 logs $PM2_APP_NAME | pm2 restart $PM2_APP_NAME"

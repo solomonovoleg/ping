@@ -74,7 +74,9 @@ export function GroupCallProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const myDisplayName =
-    [user?.displayName, user?.surname].filter(Boolean).join(" ").trim() || user?.phone?.trim() || "Вы";
+    [user?.displayName, user?.surname].filter(Boolean).join(" ").trim() ||
+    (user?.publicId != null ? `ID ${user.publicId}` : "") ||
+    "Вы";
 
   return (
     <GroupCallContext.Provider value={{ active, startGroupCall, joinGroupCall, dismissGroupCall }}>

@@ -2,6 +2,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { storage } from "../storage";
 import { hashPassword, verifyPassword } from "./password";
 import { normalizePhone } from "./phone";
+import { buildUserInsertWithPhone } from "./phone-at-rest";
 import { loginLimiter, registerLimiter } from "./rate-limit";
 import { normalizeReferralCodeInput } from "../referrals/code-generator";
 import { createToken } from "./token";
@@ -69,7 +70,8 @@ export function registerAuthRoutes(app: Express): void {
       }
       const inviter = await storage.getUser(referral.inviterUserId);
       const isAdminInviter = inviter && ["admin", "moderator", "super_admin"].includes(inviter.platformRole ?? "user");
-      if (!isAdminInviter) {
+      const bypassLimit = referral.bypassInviterLimit === true;
+      if (!isAdminInviter && !bypassLimit) {
         const limit = getInviterReferralLimit(inviter);
         const usedCount = await storage.countReferralsByInviter(referral.inviterUserId);
         if (usedCount >= limit) {
@@ -82,12 +84,13 @@ export function registerAuthRoutes(app: Express): void {
     }
 
     const publicId = await storage.getNextPublicId();
-    const user = await storage.createUser({
-      phone,
-      password: hashPassword(password),
-      publicId,
-      ...(invitedById && { invitedById }),
-    });
+    const user = await storage.createUser(
+      buildUserInsertWithPhone(phone, {
+        password: hashPassword(password),
+        publicId,
+        ...(invitedById && { invitedById }),
+      }),
+    );
     if (referralCodeId) {
       const consumed = await storage.consumeReferralCode(referralCodeId);
       if (!consumed) {
@@ -134,7 +137,6 @@ export function registerAuthRoutes(app: Express): void {
       res.status(201).json({
         id: user.id,
         publicId: user.publicId,
-        phone: user.phone,
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
         nickname: user.nickname ?? null,
@@ -214,7 +216,6 @@ export function registerAuthRoutes(app: Express): void {
         res.json({
           id: user.id,
           publicId: user.publicId,
-          phone: user.phone,
           displayName: user.displayName ?? null,
           surname: user.surname ?? null,
           nickname: user.nickname ?? null,
@@ -289,7 +290,6 @@ export function registerAuthRoutes(app: Express): void {
       res.json({
         id: user.id,
         publicId: user.publicId,
-        phone: user.phone,
         displayName: user.displayName ?? null,
         surname: user.surname ?? null,
         nickname: user.nickname ?? null,
@@ -306,6 +306,8 @@ export function registerAuthRoutes(app: Express): void {
         pushEnabled: (user as { pushEnabled?: boolean }).pushEnabled !== false,
         vibeEnabled: (user as { vibeEnabled?: boolean }).vibeEnabled === true,
         vibeShareWithPartner: (user as { vibeShareWithPartner?: boolean }).vibeShareWithPartner === true,
+        dmPolicy: (user as { dmPolicy?: string }).dmPolicy ?? "all",
+        groupAddMePolicy: (user as { groupAddMePolicy?: string }).groupAddMePolicy ?? "all",
       });
     } catch (err) {
       console.error("[auth/me]", err);

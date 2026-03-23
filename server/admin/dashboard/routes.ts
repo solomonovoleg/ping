@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { storage } from "../../storage";
 import { getAdminMetricHistory, getAdminMetricSnapshot } from "../metrics-collector";
+import { getCallsReliabilityMetrics } from "../../calls/ws";
 
 export function registerAdminDashboardRoutes(app: Express): void {
   app.get("/api/admin/dashboard/stats", async (_req: Request, res: Response) => {
@@ -26,8 +27,9 @@ export function registerAdminDashboardRoutes(app: Express): void {
           current: getAdminMetricSnapshot(),
           history: getAdminMetricHistory(),
         },
+        callsReliability: getCallsReliabilityMetrics(),
         metricsNote:
-          "Онлайн — пользователи с активным WebSocket /calls. История точек — каждые 5 минут после старта процесса.",
+          "Онлайн — пользователи с активным WebSocket /calls. История точек — каждые 5 минут после старта процесса. callsReliability — счетчики переходов и причин закрытия /calls WS.",
       });
     } catch (e) {
       console.error("admin dashboard analytics", e);

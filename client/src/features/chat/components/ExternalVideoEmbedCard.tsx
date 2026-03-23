@@ -2,17 +2,11 @@ import { useMemo, useState } from "react";
 import { Play, ExternalLink } from "lucide-react";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { cn } from "@/lib/utils";
-import { parseExternalVideoUrl } from "@/lib/external-video";
+import { externalVideoProviderLabel, parseExternalVideoUrl } from "@/lib/external-video";
 
 type ExternalVideoEmbedCardProps = {
   url: string;
   className?: string;
-};
-
-const PROVIDER_LABEL: Record<"youtube" | "rutube" | "yandex", string> = {
-  youtube: "YouTube",
-  rutube: "RuTube",
-  yandex: "Яндекс Видео",
 };
 
 export function ExternalVideoEmbedCard({ url, className = "" }: ExternalVideoEmbedCardProps) {
@@ -22,6 +16,9 @@ export function ExternalVideoEmbedCard({ url, className = "" }: ExternalVideoEmb
 
   if (!video) return null;
 
+  const label = externalVideoProviderLabel(video.provider);
+  const canEmbed = Boolean(video.embedUrl);
+
   return (
     <div
       className={cn(
@@ -30,18 +27,30 @@ export function ExternalVideoEmbedCard({ url, className = "" }: ExternalVideoEmb
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {!isOpen ? (
+      {!isOpen || !canEmbed ? (
         <div className="p-2.5">
-          <p className="text-[11px] text-muted-foreground mb-1.5">{PROVIDER_LABEL[video.provider]}</p>
-          <TapScaleButton
-            type="button"
-            onClick={() => setIsOpen(true)}
-            className="min-h-[var(--uix-touch-min)] w-full rounded-lg bg-primary text-primary-foreground text-sm font-medium inline-flex items-center justify-center gap-1.5"
-            aria-label={`Смотреть видео ${PROVIDER_LABEL[video.provider]} в чате`}
-          >
-            <Play className="w-4 h-4" aria-hidden />
-            Смотреть в чате
-          </TapScaleButton>
+          <p className="text-[11px] text-muted-foreground mb-1.5">{label}</p>
+          {canEmbed ? (
+            <TapScaleButton
+              type="button"
+              onClick={() => setIsOpen(true)}
+              className="min-h-[var(--uix-touch-min)] w-full rounded-lg bg-primary text-primary-foreground text-sm font-medium inline-flex items-center justify-center gap-1.5"
+              aria-label={`Смотреть видео ${label} в чате`}
+            >
+              <Play className="w-4 h-4" aria-hidden />
+              Смотреть в чате
+            </TapScaleButton>
+          ) : (
+            <TapScaleButton
+              type="button"
+              onClick={() => window.open(video.watchUrl, "_blank", "noopener,noreferrer")}
+              className="min-h-[var(--uix-touch-min)] w-full rounded-lg bg-primary text-primary-foreground text-sm font-medium inline-flex items-center justify-center gap-1.5"
+              aria-label={`Открыть ${label}`}
+            >
+              <ExternalLink className="w-4 h-4" aria-hidden />
+              Открыть в {label}
+            </TapScaleButton>
+          )}
         </div>
       ) : (
         <div className="relative">
@@ -56,7 +65,7 @@ export function ExternalVideoEmbedCard({ url, className = "" }: ExternalVideoEmb
             allowFullScreen
             sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"
             referrerPolicy="strict-origin-when-cross-origin"
-            title={`Видео ${PROVIDER_LABEL[video.provider]}`}
+            title={`Видео ${label}`}
             onLoad={() => setIsLoaded(true)}
           />
         </div>

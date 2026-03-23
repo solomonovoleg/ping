@@ -4,6 +4,8 @@ import {
   Phone,
   Mic,
   MicOff,
+  Volume2,
+  Smartphone,
   RefreshCw,
   MonitorUp,
   Video,
@@ -69,6 +71,8 @@ import { parseMessageDate } from "@/features/chat/utils/format";
 import { toast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useLocation } from "wouter";
+import { isCallAudioRouteSupported } from "@/lib/call-audio-route";
+import { triggerLightHaptic } from "@/lib/capacitor-native";
 
 type Props = {
   /** DM/чат с собеседником — для отправки текста из панели «в звонке» в обычный чат. */
@@ -81,6 +85,8 @@ type Props = {
   isVideo: boolean;
   isMuted: boolean;
   onSetMuted: (m: boolean) => void;
+  audioOutputSpeaker: boolean;
+  onSetAudioOutputSpeaker: (speaker: boolean) => void;
   onEndCall: () => void;
   onAccept: () => void;
   onReject: () => void;
@@ -115,24 +121,25 @@ type Props = {
 };
 
 const STATE_LABELS: Partial<Record<CallState, string>> = {
-  outgoing_ringing: "Вызов...",
+  initializing: "Инициализация вызова...",
+  outgoing_ringing: "Идет подключение...",
   incoming_ringing: "Входящий звонок",
-  accepting: "Подключение...",
-  connecting: "Подключение...",
-  reconnecting: "Восстановление соединения...",
+  accepting: "Идет подключение...",
+  connecting: "Идет подключение...",
+  reconnecting: "Идет переподключение...",
   ended: "Звонок завершён",
   rejected: "Отклонено",
-  missed: "Не ответили",
+  missed: "Недозвон",
   busy: "Абонент занят",
   failed: "Соединение не установлено",
 };
 
 const ACTIVE_STATES: ReadonlySet<CallState> = new Set<CallState>([
-  "outgoing_ringing", "accepting", "connecting", "connected", "reconnecting",
+  "initializing", "outgoing_ringing", "accepting", "connecting", "connected", "reconnecting",
 ]);
 
 const SHOW_MODAL_STATES: ReadonlySet<CallState> = new Set<CallState>([
-  "outgoing_ringing", "incoming_ringing", "accepting", "connecting",
+  "initializing", "outgoing_ringing", "incoming_ringing", "accepting", "connecting",
   "connected", "reconnecting", "failed", "ended", "rejected", "missed", "busy",
 ]);
 
@@ -193,6 +200,8 @@ export function CallModal({
   isVideo,
   isMuted,
   onSetMuted,
+  audioOutputSpeaker,
+  onSetAudioOutputSpeaker,
   onEndCall,
   onAccept,
   onReject,
@@ -340,6 +349,8 @@ export function CallModal({
     const el = localVideoRef.current;
     if (!el || !localStream) return;
     el.srcObject = localStream;
+    /** Симметрично remote: на iOS/WebView после смены ref (PiP ↔ split) без play() превью иногда не стартует. */
+    void el.play().catch(() => {});
     return () => { el.srcObject = null; };
   }, [localStream, state, videoLayoutMode, pipPrimary]);
 
@@ -363,7 +374,7 @@ export function CallModal({
   }, [remoteStream, state, videoLayoutMode, pipPrimary]);
 
   useEffect(() => {
-    if (state === "outgoing_ringing" || state === "incoming_ringing" || state === "accepting" || state === "connecting") {
+    if (state === "initializing" || state === "outgoing_ringing" || state === "incoming_ringing" || state === "accepting" || state === "connecting") {
       setPipPrimary(direction === "outgoing" ? "local" : "remote");
     }
   }, [state, direction]);
@@ -530,10 +541,16 @@ export function CallModal({
 
   if (!SHOW_MODAL_STATES.has(state) && !incoming) return null;
 
-  const label = STATE_LABELS[state] ?? "";
+  const label = state === "missed"
+    ? direction === "incoming"
+      ? "Пропущенный звонок"
+      : "Недозвон"
+    : (STATE_LABELS[state] ?? "");
   const poorConnection = state === "connected" && (connectionState === "disconnected" || connectionState === "failed");
   const isTerminal = state === "ended" || state === "rejected" || state === "missed" || state === "busy" || state === "failed";
   const showActiveControls = ACTIVE_STATES.has(state);
+  /** Голосовой звонок в приложении iOS/Android — переключение динамика. */
+  const showAudioRouteSwitch = !isVideo && isCallAudioRouteSupported();
   /** Входящий на ответ / отклонение — в т.ч. после обрыва WS до принятия. */
   const showIncomingAnswerUi =
     incoming != null && (state === "incoming_ringing" || state === "reconnecting");
@@ -1578,6 +1595,52 @@ export function CallModal({
                     <div className="pointer-events-none absolute inset-0 rounded-full" style={pulseMediaOffGlowStyle} />
                   ) : null}
                 </TapScaleButton>
+                {showAudioRouteSwitch ? (
+                  <>
+                    <div className="h-4 w-px shrink-0" style={pulseToolbarDividerStyle} aria-hidden />
+                    <TapScaleButton
+                      type="button"
+                      onClick={() => {
+                        triggerLightHaptic();
+                        onSetAudioOutputSpeaker(!audioOutputSpeaker);
+                      }}
+                      className="group/b relative flex h-14 w-14 min-h-[var(--uix-touch-min)] shrink-0 items-center justify-center rounded-full transition-all duration-300 active:scale-90"
+                      aria-label={
+                        audioOutputSpeaker
+                          ? "Переключить на разговорный динамик"
+                          : "Переключить на громкую связь"
+                      }
+                    >
+                      <div
+                        className={cn(
+                          "absolute inset-0 rounded-full transition-all duration-300",
+                          audioOutputSpeaker
+                            ? isMobile
+                              ? "bg-emerald-500/14 group-hover/b:bg-emerald-500/22"
+                              : "bg-emerald-500/12 group-hover/b:bg-emerald-500/20"
+                            : isMobile
+                              ? "bg-white/[0.06] group-hover/b:bg-white/[0.12]"
+                              : "bg-white/[0.06] group-hover/b:bg-white/12",
+                        )}
+                      />
+                      {audioOutputSpeaker ? (
+                        <Volume2
+                          className={cn(
+                            "relative z-10 h-[19px] w-[19px] transition-colors",
+                            isMobile ? "text-emerald-300 group-hover/b:text-emerald-200" : "text-emerald-300/95",
+                          )}
+                        />
+                      ) : (
+                        <Smartphone
+                          className={cn(
+                            "relative z-10 h-[19px] w-[19px] transition-colors",
+                            isMobile ? "text-white/92 group-hover/b:text-white" : "text-white/78 group-hover/b:text-white",
+                          )}
+                        />
+                      )}
+                    </TapScaleButton>
+                  </>
+                ) : null}
                 <div className="h-4 w-px shrink-0" style={pulseToolbarDividerStyle} aria-hidden />
                 {isVideo ? (
                   <TapScaleButton

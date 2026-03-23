@@ -61,6 +61,7 @@
 	<string>PING использует локальную сеть для аудио- и видеозвонков (в т.ч. в вашей Wi‑Fi сети).</string>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>audio</string>
 		<string>remote-notification</string>
 	</array>
 </dict>

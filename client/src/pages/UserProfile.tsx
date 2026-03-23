@@ -1,3 +1,4 @@
+import { useState } from "react";
 import StoryViewer from "@/components/StoryViewer";
 import CommentsModal from "@/components/CommentsModal";
 import { formatPostTime } from "@/lib/posts";
@@ -22,11 +23,20 @@ import {
   UserProfileMoreSheet,
   StoryDurationPickerSheet,
   StoryViewersSheet,
+  ProfileAnalyticsSheet,
 } from "@/features/profile/user-profile";
 import { ProfilePinsSection } from "@/features/profile/user-profile/components/profile-pins/ProfilePinsSection";
+import {
+  UserBlockAlertDialog,
+  UserUnblockAlertDialog,
+  BlockedByPeerComposer,
+} from "@/features/user-blocking";
 
 export default function UserProfile({ params: paramsProp }: { params?: { id: string } }) {
   const p = useUserProfilePage(paramsProp);
+  const [profileBlockOpen, setProfileBlockOpen] = useState(false);
+  const [profileUnblockOpen, setProfileUnblockOpen] = useState(false);
+  const [profileAnalyticsOpen, setProfileAnalyticsOpen] = useState(false);
 
   if (p.hasInvalidRouteId) return null;
 
@@ -72,6 +82,14 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         className="min-h-0 flex-1"
         disabled={p.pullRefreshDisabled}
       >
+        {!p.isMe && p.apiProfile?.blockedByProfileOwner?.restrictChat ? (
+          <div className="relative z-[1] shrink-0 px-3 pt-2">
+            <BlockedByPeerComposer
+              note={p.apiProfile.blockedByProfileOwner.note}
+              className="rounded-2xl border border-border/50 bg-muted/20 px-3 py-3 text-center text-sm text-muted-foreground"
+            />
+          </div>
+        ) : null}
         {p.isMe ? (
           <input
             ref={p.storyFileInputRef}
@@ -112,10 +130,15 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           }
           actionRow={
             p.isMe ? (
-              <ProfileMePulseActions onEdit={() => p.setLocation("/profile/edit")} onShare={p.handleCopyLink} />
+              <ProfileMePulseActions
+                onEdit={() => p.setLocation("/profile/edit")}
+                onShare={p.handleCopyLink}
+                onStats={() => setProfileAnalyticsOpen(true)}
+              />
             ) : (
               <ProfileOtherPulseActions
                 isFollowing={!!p.apiProfile?.isFollowing}
+                isMutualFollow={!!p.apiProfile?.isMutualFollow}
                 followLoading={p.followLoading}
                 onFollow={p.handleFollowToggle}
                 onMessage={p.handleStartChat}
@@ -179,12 +202,38 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
         />
       </PullToRefresh>
 
+      <ProfileAnalyticsSheet open={profileAnalyticsOpen} onClose={() => setProfileAnalyticsOpen(false)} />
+
       <UserProfileMoreSheet
         open={p.profileMoreOpen}
         onClose={() => p.setProfileMoreOpen(false)}
         isMe={p.isMe}
         onCopyLink={p.handleCopyLink}
         onOpenSettings={() => p.setLocation("/settings")}
+        isBlockedByMe={!p.isMe && !!p.apiProfile?.isBlockedByMe}
+        onUnblockUser={
+          !p.isMe && p.apiProfile?.isBlockedByMe && p.authorId ? () => setProfileUnblockOpen(true) : undefined
+        }
+        onBlockUser={
+          !p.isMe && p.authorId && !p.apiProfile?.isBlockedByMe ? () => setProfileBlockOpen(true) : undefined
+        }
+      />
+
+      <UserBlockAlertDialog
+        open={profileBlockOpen}
+        onOpenChange={setProfileBlockOpen}
+        targetUserId={!p.isMe && p.authorId ? p.authorId : null}
+        targetDisplayName={p.displayName}
+        initialPreset="full"
+        onBlocked={() => void p.handlePullRefresh()}
+      />
+
+      <UserUnblockAlertDialog
+        open={profileUnblockOpen}
+        onOpenChange={setProfileUnblockOpen}
+        targetUserId={!p.isMe && p.authorId ? p.authorId : null}
+        targetDisplayName={p.displayName}
+        onUnblocked={() => void p.handlePullRefresh()}
       />
 
       {p.activeStoryIndex !== null && (p.apiStories ?? []).length > 0 && (
@@ -192,6 +241,9 @@ export default function UserProfile({ params: paramsProp }: { params?: { id: str
           stories={(p.apiStories ?? []).map((s) => ({
             id: s.id,
             image: resolveUrl((s as { mediaUrl?: string }).mediaUrl ?? ""),
+            ...((s as { thumbnailUrl?: string | null }).thumbnailUrl
+              ? { thumbnailUrl: resolveUrl(String((s as { thumbnailUrl?: string | null }).thumbnailUrl)) }
+              : {}),
             userName: p.displayName,
             userAvatar:
               resolveUrl(p.avatarUrl ?? "") ||

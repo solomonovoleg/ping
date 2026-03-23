@@ -30,7 +30,7 @@ export default function SettingsScreen() {
           size={80}
         />
         <Text style={styles.name}>{name}</Text>
-        <Text style={styles.phone}>{user?.phone}</Text>
+        <Text style={styles.phone}>Номер не отображается — только для входа</Text>
         <Text style={styles.profileLink}>Профиль →</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.logout} onPress={handleLogout}>

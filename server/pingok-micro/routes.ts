@@ -6,7 +6,13 @@ import {
   looksLikeGlobalMemorySearchIntent,
   tryGlobalMemorySearch,
 } from "../ai-chat/memory-search";
-import { executePingokCommand, sendDmToUser, startCallWithUser } from "./execute-service";
+import { storage } from "../storage";
+import {
+  executePingokCommand,
+  sendDmToUser,
+  startCallWithUser,
+  confirmScheduleDmCall,
+} from "./execute-service";
 
 /**
  * ПИНГОК МИКРО: разбор голосовой команды на том же origin, что и приложение (сессия + Bearer).
@@ -71,6 +77,50 @@ export function registerPingokMicroRoutes(app: Express): void {
     } catch (e) {
       console.error("[pingok-micro] send-dm", e);
       res.status(500).json({ ok: false, reply: "Ошибка отправки" });
+    }
+  });
+
+  app.post("/api/pingok-micro/v1/confirm-schedule-call", requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: "Необходимо войти в аккаунт" });
+      return;
+    }
+    const targetUserId = typeof req.body?.targetUserId === "string" ? req.body.targetUserId.trim() : "";
+    const fireAtIso = typeof req.body?.fireAtIso === "string" ? req.body.fireAtIso.trim() : "";
+    const reminderTitle = typeof req.body?.reminderTitle === "string" ? req.body.reminderTitle.trim() : "";
+    if (!targetUserId || !fireAtIso || !reminderTitle) {
+      res.status(400).json({ error: "targetUserId, fireAtIso, reminderTitle required" });
+      return;
+    }
+    try {
+      const result = await confirmScheduleDmCall(userId, { targetUserId, fireAtIso, reminderTitle });
+      res.json(result);
+    } catch (e) {
+      console.error("[pingok-micro] confirm-schedule-call", e);
+      res.status(500).json({ ok: false, reply: "Ошибка" });
+    }
+  });
+
+  app.get("/api/pingok-micro/v1/scheduled-calls-pre-window", requireAuth, async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    if (!userId) {
+      res.status(401).json({ message: "Необходимо войти в аккаунт" });
+      return;
+    }
+    try {
+      const rows = await storage.listDmScheduledCallsInPreEventWindow(userId);
+      res.json({
+        calls: rows.map((r) => ({
+          id: r.id,
+          chatId: r.chatId,
+          title: r.title,
+          fireAt: r.fireAt.toISOString(),
+        })),
+      });
+    } catch (e) {
+      console.error("[pingok-micro] scheduled-calls-pre-window", e);
+      res.status(500).json({ message: "Ошибка" });
     }
   });
 

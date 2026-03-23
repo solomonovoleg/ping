@@ -43,6 +43,7 @@ import { registerPingokMicroRoutes } from "./pingok-micro/routes";
 import { registerRemindersRoutes } from "./reminders/routes";
 import { registerServiceChatRoutes } from "./service-chat/routes";
 import { registerEdgeRoutes } from "./edge/routes";
+import { registerInternalParserPublishRoutes } from "./internal/parser-publish";
 import {
   apiTrafficRecordMiddleware,
   createApiShieldMutationLimiter,
@@ -75,6 +76,7 @@ export async function registerRoutes(
   // CORS для /uploads не перезаписываем: глобальный CORS уже выставил Allow-Origin (origin или capacitor://localhost при Bearer).
   // Раньше здесь ставили "*", из-за чего в приложении с Bearer браузер отклонял ответ (с credentials нельзя *).
   ensureUploadsDirs();
+  registerInternalParserPublishRoutes(app);
   app.use(
     "/uploads",
     express.static(UPLOADS_ROOT, {

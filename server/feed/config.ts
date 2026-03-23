@@ -17,6 +17,22 @@ export type FeedAlgoConfig = {
   newAccountFactor: number;
 };
 
+export type FeedSnapshotConfig = {
+  /** Читать готовый порядок из feed_global_snapshot (если свежий и совпадает algo). */
+  snapshotReadEnabled: boolean;
+  /** Максимальный возраст снапшота для использования в API (сек). */
+  snapshotMaxAgeSec: number;
+};
+
+function boolEnv(name: string, defaultTrue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return defaultTrue;
+  const v = raw.trim().toLowerCase();
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
+  return defaultTrue;
+}
+
 function numEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw == null || raw.trim() === "") return fallback;
@@ -57,5 +73,21 @@ export function setFeedAlgoConfig(next: Partial<FeedAlgoConfig>): FeedAlgoConfig
     ...next,
   };
   return getFeedAlgoConfig();
+}
+
+const snapshotDefaults: FeedSnapshotConfig = {
+  snapshotReadEnabled: boolEnv("FEED_SNAPSHOT_READ_ENABLED", true),
+  snapshotMaxAgeSec: Math.max(30, numEnv("FEED_SNAPSHOT_MAX_AGE_SEC", 180)),
+};
+
+let snapshotRuntime: FeedSnapshotConfig = { ...snapshotDefaults };
+
+export function getFeedSnapshotConfig(): FeedSnapshotConfig {
+  return { ...snapshotRuntime };
+}
+
+export function setFeedSnapshotConfig(next: Partial<FeedSnapshotConfig>): FeedSnapshotConfig {
+  snapshotRuntime = { ...snapshotRuntime, ...next };
+  return getFeedSnapshotConfig();
 }
 

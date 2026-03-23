@@ -13,6 +13,8 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { usePrefersReducedMotion, DURATION_NORMAL_MS, EASING_OUT_BEZIER } from "@/lib/motion";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { ListEmptyState } from "@/components/ui/empty";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { UserBlockAlertDialog } from "@/features/user-blocking";
 
 import avatarMain from "@/assets/images/avatar-main.png";
 
@@ -37,6 +39,7 @@ export default function CommentsModal({ isOpen, onClose, postId, postAuthorId }:
   const [newComment, setNewComment] = useState("");
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [blockTarget, setBlockTarget] = useState<{ userId: string; name: string } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -242,60 +245,84 @@ export default function CommentsModal({ isOpen, onClose, postId, postAuthorId }:
                   className="py-8"
                 />
               ) : (
-                displayComments.map((comment) => (
-                  <div key={comment.id} className="flex gap-3">
-                    <img
-                      src={comment.avatar}
-                      alt={comment.user}
-                      className="w-9 h-9 rounded-full object-cover shrink-0"
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-semibold text-[14px]">{comment.user}</span>
-                        <span className="text-muted-foreground text-xs">{comment.time}</span>
+                displayComments.map((comment) => {
+                  const canBlockCommentAuthor =
+                    !!user?.id && !!comment.userId && comment.userId !== user.id;
+                  const row = (
+                    <div className="flex gap-3">
+                      <img
+                        src={comment.avatar}
+                        alt={comment.user}
+                        className="w-9 h-9 rounded-full object-cover shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="font-semibold text-[14px]">{comment.user}</span>
+                          <span className="text-muted-foreground text-xs">{comment.time}</span>
+                        </div>
+                        <p className="text-[14px] leading-relaxed mb-1">{comment.text}</p>
+                        <button
+                          type="button"
+                          className="text-muted-foreground text-xs font-medium hover:text-foreground min-h-[var(--uix-touch-min)] py-1 -mb-1"
+                          aria-label={`Ответить на комментарий ${comment.user}`}
+                        >
+                          Ответить
+                        </button>
                       </div>
-                      <p className="text-[14px] leading-relaxed mb-1">{comment.text}</p>
-                      <button
-                        type="button"
-                        className="text-muted-foreground text-xs font-medium hover:text-foreground min-h-[var(--uix-touch-min)] py-1 -mb-1"
-                        aria-label={`Ответить на комментарий ${comment.user}`}
-                      >
-                        Ответить
-                      </button>
-                    </div>
-                    <div className="flex flex-col items-center gap-1 shrink-0 pt-1">
-                      {canDeleteComment(comment) ? (
+                      <div className="flex flex-col items-center gap-1 shrink-0 pt-1">
+                        {canDeleteComment(comment) ? (
+                          <TapScaleButton
+                            type="button"
+                            onClick={() => void handleDeleteComment(comment.id)}
+                            haptic
+                            disabled={deletingId === comment.id}
+                            className="p-1.5 rounded-full hover:bg-destructive/15 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center text-muted-foreground hover:text-destructive"
+                            aria-label="Удалить комментарий"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </TapScaleButton>
+                        ) : null}
                         <TapScaleButton
                           type="button"
-                          onClick={() => void handleDeleteComment(comment.id)}
+                          onClick={() => toggleLike(comment.id)}
                           haptic
-                          disabled={deletingId === comment.id}
-                          className="p-1.5 rounded-full hover:bg-destructive/15 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center text-muted-foreground hover:text-destructive"
-                          aria-label="Удалить комментарий"
+                          className="p-1.5 rounded-full hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+                          aria-label={comment.isLiked ? "Убрать лайк" : "Нравится"}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Heart
+                            className={cn(
+                              "w-4 h-4 transition-colors",
+                              comment.isLiked ? "fill-red-500 text-red-500" : "text-muted-foreground"
+                            )}
+                          />
                         </TapScaleButton>
-                      ) : null}
-                      <TapScaleButton
-                        type="button"
-                        onClick={() => toggleLike(comment.id)}
-                        haptic
-                        className="p-1.5 rounded-full hover:bg-secondary transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
-                        aria-label={comment.isLiked ? "Убрать лайк" : "Нравится"}
-                      >
-                        <Heart
-                          className={cn(
-                            "w-4 h-4 transition-colors",
-                            comment.isLiked ? "fill-red-500 text-red-500" : "text-muted-foreground"
-                          )}
-                        />
-                      </TapScaleButton>
-                      {comment.likes > 0 && (
-                        <span className="text-xs text-muted-foreground">{comment.likes}</span>
-                      )}
+                        {comment.likes > 0 && (
+                          <span className="text-xs text-muted-foreground">{comment.likes}</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                  return canBlockCommentAuthor ? (
+                    <ContextMenu key={comment.id}>
+                      <ContextMenuTrigger asChild>
+                        <div className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}</div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent className="min-w-[200px]">
+                        <ContextMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() =>
+                            comment.userId &&
+                            setBlockTarget({ userId: comment.userId, name: comment.user })
+                          }
+                        >
+                          Заблокировать…
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  ) : (
+                    <div key={comment.id}>{row}</div>
+                  );
+                })
               )}
             </div>
 
@@ -330,5 +357,22 @@ export default function CommentsModal({ isOpen, onClose, postId, postAuthorId }:
   );
 
   if (typeof document === "undefined") return null;
-  return createPortal(modalNode, document.body);
+  return (
+    <>
+      {createPortal(modalNode, document.body)}
+      <UserBlockAlertDialog
+        open={!!blockTarget}
+        onOpenChange={(o) => {
+          if (!o) setBlockTarget(null);
+        }}
+        targetUserId={blockTarget?.userId ?? null}
+        targetDisplayName={blockTarget?.name}
+        initialPreset="socialOnly"
+        onBlocked={() => {
+          setBlockTarget(null);
+          bumpPostQueries();
+        }}
+      />
+    </>
+  );
 }

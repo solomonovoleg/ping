@@ -90,9 +90,16 @@ export function registerStoriesRoutes(app: Express): void {
 
   app.get("/api/stories/feed", requireAuth, async (req: Request, res: Response) => {
     const viewerId = getUserId(req)!;
+    const limitRaw = req.query.limit;
+    const offsetRaw = req.query.offset;
+    const limit = typeof limitRaw === "string" ? Number.parseInt(limitRaw, 10) : undefined;
+    const offset = typeof offsetRaw === "string" ? Number.parseInt(offsetRaw, 10) : undefined;
     try {
-      const list = await storiesService.getStoriesFeed(viewerId);
-      res.json(list);
+      const page = await storiesService.getStoriesFeedPage(viewerId, {
+        limit: Number.isFinite(limit) ? limit : undefined,
+        offset: Number.isFinite(offset) ? offset : undefined,
+      });
+      res.json(page);
     } catch (e) {
       console.error("Stories feed error:", e);
       res.status(500).json({ message: "Ошибка загрузки ленты сторис" });

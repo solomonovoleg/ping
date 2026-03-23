@@ -69,6 +69,27 @@ export function onIncomingChatMessageHint(handler: (detail: IncomingChatMessageH
   return on(EVT_INCOMING_CHAT_MESSAGE_HINT, handler);
 }
 
+export function emitChatPendingUnread(detail: { chatId: string }): void {
+  emit(EVT_CHAT_PENDING_UNREAD, detail);
+}
+
+export function onChatPendingUnread(handler: (detail: { chatId: string }) => void): () => void {
+  return on(EVT_CHAT_PENDING_UNREAD, handler);
+}
+
+export function emitChatPendingUnreadClear(detail: { chatId: string }): void {
+  emit(EVT_CHAT_PENDING_UNREAD_CLEAR, detail);
+}
+
+export function onChatPendingUnreadClear(handler: (detail: { chatId: string }) => void): () => void {
+  return on(EVT_CHAT_PENDING_UNREAD_CLEAR, handler);
+}
+
+/** Входящее сообщение по WS: клиент может показать бейдж до refetch /chats (если серверный unread ещё не пришёл). */
+const EVT_CHAT_PENDING_UNREAD = "ping:chat-pending-unread";
+/** Локально после успешного PUT /read (сервер не шлёт chat-read самому читателю). */
+const EVT_CHAT_PENDING_UNREAD_CLEAR = "ping:chat-pending-unread-clear";
+
 const EVT_GROUP_CALL_INVITE = "ping:group-call-invite";
 
 export type GroupCallInviteDetail = {

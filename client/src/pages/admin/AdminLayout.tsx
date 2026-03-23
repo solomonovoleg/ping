@@ -15,6 +15,8 @@ import {
   Activity,
   HardDrive,
   MessageSquareText,
+  Download,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/lib/auth";
@@ -24,7 +26,10 @@ const STORAGE_KEY = "ping:admin-desktop-mode";
 function getDesktopMode(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return localStorage.getItem(STORAGE_KEY) === "1";
+    const v = localStorage.getItem(STORAGE_KEY);
+    if (v === "1") return true;
+    if (v === "0") return false;
+    return window.matchMedia("(min-width: 1024px)").matches;
   } catch {
     return false;
   }
@@ -38,7 +43,9 @@ const NAV = [
   { path: "/admin/referrals", label: "Пригласительные", icon: Ticket },
   { path: "/admin/admins", label: "Админы", icon: Shield },
   { path: "/admin/settings", label: "Настройки", icon: Settings },
+  { path: "/admin/vk-parser", label: "Парсер ВК", icon: Download },
   { path: "/admin/service-chat", label: "Service Chat", icon: MessageSquareText },
+  { path: "/admin/edge-companion", label: "EDGE Companion", icon: Sparkles },
   { path: "/admin/ops", label: "Операции", icon: SlidersHorizontal },
   { path: "/admin/audit", label: "Аудит", icon: History },
 ];
@@ -54,7 +61,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const toggleDesktop = () => {
     const next = !desktopMode;
     try {
-      localStorage.setItem(STORAGE_KEY, next ? "1" : "");
+      localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
     } catch {}
     setDesktopMode(next);
   };
@@ -146,8 +153,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
           ))}
         </aside>
-        <main className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-6 overscroll-contain">
-          <div className={cn("mx-auto", forceDesktop ? "max-w-6xl" : "max-w-4xl")}>{children}</div>
+        <main className="min-h-0 min-w-0 flex-1 basis-0 overflow-y-auto overflow-x-hidden p-4 sm:p-6 overscroll-contain">
+          <div className="w-full max-w-full min-w-0">{children}</div>
         </main>
       </div>
     </div>

@@ -9,10 +9,16 @@ export interface ReferralCodeRow {
   createdAt: Date;
   maxUses: number;
   useCount: number;
+  bypassInviterLimit: boolean;
 }
 
 export interface ReferralCodesStore {
-  create(inviterUserId: string, code: string, expiresAt: Date, maxUses?: number): ReferralCodeRow;
+  create(
+    inviterUserId: string,
+    code: string,
+    expiresAt: Date,
+    opts?: { maxUses?: number; bypassInviterLimit?: boolean },
+  ): ReferralCodeRow;
   getByCode(code: string): ReferralCodeRow | undefined;
   consume(id: string): boolean;
   listActiveByInviter(inviterUserId: string): ReferralCodeRow[];
@@ -35,7 +41,10 @@ export function createReferralCodesStore(): ReferralCodesStore {
   const byCode = new Map<string, ReferralCodeRow>();
 
   return {
-    create(inviterUserId: string, code: string, expiresAt: Date, maxUses = 1) {
+    create(inviterUserId: string, code: string, expiresAt: Date, opts?: { maxUses?: number; bypassInviterLimit?: boolean }) {
+      let maxUses = opts?.maxUses ?? 1;
+      if (maxUses === 0 || maxUses < -1) maxUses = 1;
+      if (maxUses > 10_000) maxUses = 10_000;
       const id = randomUUID();
       const row: ReferralCodeRow = {
         id,
@@ -46,6 +55,7 @@ export function createReferralCodesStore(): ReferralCodesStore {
         createdAt: new Date(),
         maxUses: maxUses === -1 || maxUses > 1 ? maxUses : 1,
         useCount: 0,
+        bypassInviterLimit: opts?.bypassInviterLimit === true,
       };
       byId.set(id, row);
       byCode.set(normalizeCode(code), row);

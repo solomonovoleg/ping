@@ -12,7 +12,8 @@ import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
 export type AuthUser = {
   id: string;
   publicId: number;
-  phone: string;
+  /** Номер не отдаётся API; после входа можно хранить только локально из формы, не из /me */
+  phone?: string | null;
   displayName: string | null;
   surname: string | null;
   /** Плашка @ в шапке профиля */
@@ -33,6 +34,10 @@ export type AuthUser = {
   vibeShareWithPartner?: boolean;
   /** Город (необязательно) */
   city?: string | null;
+  /** Кто может писать в ЛС: all | followers | mutual */
+  dmPolicy?: "all" | "followers" | "mutual";
+  /** Кто может добавлять в группы: all | followers | mutual */
+  groupAddMePolicy?: "all" | "followers" | "mutual";
 };
 
 /** Как на сервере: en/ru и короткие коды → male|female|other; иначе null. */
@@ -98,7 +103,8 @@ async function persistAuthMeCacheNative(json: string | null): Promise<void> {
 export async function saveAuthMeCache(user: AuthUser): Promise<void> {
   if (typeof window === "undefined") return;
   try {
-    const json = JSON.stringify(user);
+    const { phone: _omit, ...rest } = user;
+    const json = JSON.stringify(rest);
     localStorage.setItem(AUTH_ME_CACHE_KEY, json);
     await persistAuthMeCacheNative(json);
   } catch {
@@ -119,11 +125,11 @@ export async function clearAuthMeCache(): Promise<void> {
 function userFromMePayload(data: unknown): AuthUser | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
-  if (typeof d.id !== "string" || typeof d.phone !== "string") return null;
+  if (typeof d.id !== "string") return null;
   return {
     id: d.id,
     publicId: typeof d.publicId === "number" ? d.publicId : 100,
-    phone: d.phone,
+    phone: typeof d.phone === "string" ? d.phone : null,
     displayName: (d.displayName as string | null | undefined) ?? null,
     surname: (d.surname as string | null | undefined) ?? null,
     nickname: (d.nickname as string | null | undefined) ?? null,
@@ -271,11 +277,7 @@ export async function register(
     rawTok != null && String(rawTok).trim().length > 0 ? String(rawTok).trim() : null;
   setAuthToken(token);
   const user = data.user ?? data;
-  const parsed = userFromMePayload(
-    typeof user === "object" && user
-      ? { ...user, phone: String((user as { phone?: unknown }).phone ?? phone) }
-      : null
-  );
+  const parsed = userFromMePayload(typeof user === "object" && user ? user : null);
   if (parsed) {
     await saveAuthMeCache(parsed);
     const out: AuthUser & { token?: string } = { ...parsed };
@@ -285,7 +287,7 @@ export async function register(
   const out: AuthUser & { token?: string } = {
     id: String(user?.id ?? ""),
     publicId: typeof user?.publicId === "number" ? user.publicId : 0,
-    phone: String(user?.phone ?? phone),
+    phone: null,
     displayName: typeof user?.displayName === "string" ? user.displayName : null,
     surname: typeof user?.surname === "string" ? user.surname : null,
     avatarUrl: typeof user?.avatarUrl === "string" ? user.avatarUrl : null,
@@ -435,6 +437,8 @@ export async function updateProfile(data: {
   profileLink?: string | null;
   city?: string | null;
   pushEnabled?: boolean;
+  dmPolicy?: "all" | "followers" | "mutual";
+  groupAddMePolicy?: "all" | "followers" | "mutual";
 }): Promise<AuthUser> {
   const res = await apiFetch(`${API}/users/me`, {
     method: "PATCH",
