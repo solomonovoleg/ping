@@ -14,6 +14,8 @@ type SignalListener = (event: ServerCallEvent) => void;
  */
 export class CallSignalingClient {
   private listener: SignalListener | null = null;
+  private signalSeq = 0;
+  private readonly lastServerSeqByCallAndType = new Map<string, number>();
 
   constructor(private sendJson: SendJsonFn) {}
 
@@ -51,7 +53,16 @@ export class CallSignalingClient {
       }
     }
 
-    this.sendJson(event as unknown as Record<string, unknown>, {
+    const envelope: Record<string, unknown> = {
+      ...(event as unknown as Record<string, unknown>),
+      signalSeq: ++this.signalSeq,
+      sentAtMs: Date.now(),
+      traceId:
+        "callId" in event && typeof event.callId === "string" && event.callId
+          ? event.callId
+          : `calls:${this.signalSeq}`,
+    };
+    this.sendJson(envelope, {
       queueOnDisconnect: queueable,
       dedupeKey,
     });
@@ -72,6 +83,16 @@ export class CallSignalingClient {
   handleRawMessage(raw: Record<string, unknown>): boolean {
     const type = raw.type;
     if (typeof type !== "string" || !type.startsWith("call.")) return false;
+    const callId = typeof raw.callId === "string" ? raw.callId : "no-call-id";
+    const seq = typeof raw.signalSeq === "number" && Number.isFinite(raw.signalSeq) ? raw.signalSeq : null;
+    if (seq != null) {
+      const k = `${callId}:${type}`;
+      const prev = this.lastServerSeqByCallAndType.get(k);
+      if (typeof prev === "number" && seq <= prev) {
+        return true;
+      }
+      this.lastServerSeqByCallAndType.set(k, seq);
+    }
     if (this.listener) {
       this.listener(raw as unknown as ServerCallEvent);
     }

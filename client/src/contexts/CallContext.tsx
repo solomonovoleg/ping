@@ -37,6 +37,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         remoteStream={call.remoteStream}
         connectionState={call.connectionState}
         networkQuality={call.networkQuality}
+        videoQualityMode={call.videoQualityMode}
         supports={call.supports}
         isScreenShareActive={call.isScreenShareActive}
         remoteScreenShareActive={call.remoteScreenShareActive}
@@ -53,6 +54,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         onToggleRecording={call.toggleRecording}
         onToggleRecordingPause={call.toggleRecordingPause}
         onToggleCaptions={call.toggleCaptions}
+        onToggleVideoHd={call.toggleVideoHd}
         onRetry={call.retryCall}
         otherDisplayName={otherName}
         otherAvatarUrl={otherAvatar}

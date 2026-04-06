@@ -26,7 +26,7 @@ export function StoryViewersSheet({
       onClick={onClose}
     >
       <div
-        className="mx-auto w-full max-w-[480px] overflow-hidden rounded-t-[28px] border border-white/10 bg-[rgba(10,8,24,0.97)] text-white shadow-2xl backdrop-blur-xl"
+        className="w-full uix-responsive-max-w overflow-hidden rounded-t-[28px] border border-white/10 bg-[rgba(10,8,24,0.97)] text-white shadow-2xl backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-center pt-3 pb-1" aria-hidden>

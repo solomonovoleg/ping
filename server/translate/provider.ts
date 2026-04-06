@@ -5,15 +5,67 @@
 
 /** BCP-47-ish codes from client translate dropdown → English name for the LLM prompt */
 const TARGET_LANG_LABEL: Record<string, string> = {
-  ru: "Russian",
   en: "English",
   de: "German",
-  fr: "French",
+  ru: "Russian",
   es: "Spanish",
-  zh: "Chinese",
-  ja: "Japanese",
-  ko: "Korean",
+  tt: "Tatar",
 };
+
+export const ALLOWED_TARGET_LANG_CODES = new Set(Object.keys(TARGET_LANG_LABEL));
+
+export function normalizeMessageTranslateLang(code: string): string | null {
+  const c = code.trim().toLowerCase().slice(0, 10);
+  return ALLOWED_TARGET_LANG_CODES.has(c) ? c : null;
+}
+
+function localeFromSignupAcceptLanguage(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  const first = raw.split(",")[0]?.trim().toLowerCase();
+  if (!first) return null;
+  const two = first.slice(0, 2);
+  if (ALLOWED_TARGET_LANG_CODES.has(two)) return two;
+  const m = first.match(/^([a-z]{2})-/);
+  if (m && ALLOWED_TARGET_LANG_CODES.has(m[1])) return m[1];
+  return null;
+}
+
+const dmMultilingualCache = new Map<string, boolean>();
+
+export function invalidateDmMultilingualCacheForChat(chatId: string): void {
+  dmMultilingualCache.delete(chatId);
+}
+
+export async function getDmMultilingualEnabledForChat(chatId: string): Promise<boolean> {
+  if (dmMultilingualCache.has(chatId)) return dmMultilingualCache.get(chatId)!;
+  const { storage } = await import("../storage");
+  const chat = await storage.getChatById(chatId);
+  if (!chat || chat.type !== "dm") {
+    dmMultilingualCache.set(chatId, false);
+    return false;
+  }
+  const ids = await storage.getChatMemberIds(chatId);
+  if (ids.length !== 2) {
+    dmMultilingualCache.set(chatId, false);
+    return false;
+  }
+  const on = Boolean((chat as { dmMultilingualEnabled?: boolean }).dmMultilingualEnabled);
+  dmMultilingualCache.set(chatId, on);
+  return on;
+}
+
+/** Язык, на который переводить входящие этому пользователю (мультиязычный DM и др.). */
+export async function resolveUserMessageTranslateLocale(userId: string): Promise<string> {
+  const { storage } = await import("../storage");
+  const user = await storage.getUser(userId);
+  if (!user) return "ru";
+  const stored = (user as { messageTranslateLocale?: string | null }).messageTranslateLocale?.trim().toLowerCase();
+  if (stored && ALLOWED_TARGET_LANG_CODES.has(stored)) return stored;
+  const fromSignup = localeFromSignupAcceptLanguage(
+    (user as { signupAcceptLanguage?: string | null }).signupAcceptLanguage,
+  );
+  return fromSignup ?? "ru";
+}
 
 export interface TranslateResult {
   translatedText: string;
@@ -86,8 +138,32 @@ export function setCachedPref(userId: string, chatId: string, pref: TranslatePre
   prefsCache.set(prefKey(userId, chatId), pref);
 }
 
+export function clearCachedTranslatePrefsForChat(chatId: string): void {
+  const suffix = `:${chatId}`;
+  for (const k of [...prefsCache.keys()]) {
+    if (k.endsWith(suffix)) prefsCache.delete(k);
+  }
+}
+
+export function clearCachedTranslatePrefsForUser(userId: string): void {
+  const prefix = `${userId}:`;
+  for (const k of [...prefsCache.keys()]) {
+    if (k.startsWith(prefix)) prefsCache.delete(k);
+  }
+}
+
 /** Get translate preference: memory cache first, DB fallback. */
 export async function getPref(userId: string, chatId: string): Promise<TranslatePref | undefined> {
+  try {
+    const multi = await getDmMultilingualEnabledForChat(chatId);
+    if (multi) {
+      const targetLang = await resolveUserMessageTranslateLocale(userId);
+      return { enabled: true, targetLang };
+    }
+  } catch {
+    /* ручные prefs */
+  }
+
   const cached = getCachedPref(userId, chatId);
   if (cached) return cached;
   if (!process.env.DATABASE_URL) return undefined;
@@ -124,6 +200,40 @@ export function getCachedTranslation(messageId: string, targetLang: string): Tra
 
 export function setCachedTranslation(messageId: string, targetLang: string, result: TranslateResult): void {
   translationCache.set(cacheKey(messageId, targetLang), result);
+}
+
+/** Удалить кэш переводов сообщения (после редактирования текста и т.п.). */
+export function clearTranslationMemoryCacheForMessage(messageId: string): void {
+  const prefix = `${messageId}:`;
+  for (const k of [...translationCache.keys()]) {
+    if (k.startsWith(prefix)) translationCache.delete(k);
+  }
+}
+
+const translateInFlight = new Map<string, Promise<TranslateResult | null>>();
+
+function translateFlightKey(messageId: string, targetLang: string, useContext: boolean): string {
+  return `${messageId}:${targetLang}:${useContext ? "ctx" : "plain"}`;
+}
+
+/**
+ * Удалить сохранённые переводы сообщения в БД и памяти; сбросить in-flight для этого messageId.
+ */
+export async function invalidateTranslationsForMessage(messageId: string): Promise<void> {
+  clearTranslationMemoryCacheForMessage(messageId);
+  for (const k of [...translateInFlight.keys()]) {
+    if (k.startsWith(`${messageId}:`)) translateInFlight.delete(k);
+  }
+  if (!process.env.DATABASE_URL) return;
+  try {
+    const { getDb } = await import("../db");
+    const { messageTranslations } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const db = getDb();
+    await db.delete(messageTranslations).where(eq(messageTranslations.messageId, messageId));
+  } catch {
+    /* ignore */
+  }
 }
 
 // --------------- OpenRouter ---------------
@@ -238,6 +348,8 @@ export async function callProvider(
  * 1. Check memory cache
  * 2. Check DB (if available)
  * 3. Call OpenRouter, store in DB + memory
+ *
+ * Один in-flight запрос на (messageId, targetLang, plain|ctx) — несколько получателей WS делят один вызов LLM.
  */
 export async function translate(
   text: string,
@@ -252,69 +364,96 @@ export async function translate(
   if (messageId && options?.chatId && anchorOk) {
     priorLines = await loadPriorTextLinesForTranslate(options.chatId, messageId, anchor);
   }
-  const useContext = priorLines && priorLines.length > 0;
+  const useContext = Boolean(priorLines && priorLines.length > 0);
 
-  if (!useContext && messageId) {
-    const cached = getCachedTranslation(messageId, targetLang);
-    if (cached) return cached;
-  }
+  const trimmed = text.trim();
+  const flightKey =
+    messageId && trimmed.length > 0 ? translateFlightKey(messageId, targetLang, useContext) : "";
 
-  if (!useContext && messageId && process.env.DATABASE_URL) {
-    try {
-      const { getDb } = await import("../db");
-      const { messageTranslations } = await import("@shared/schema");
-      const { eq, and } = await import("drizzle-orm");
-      const db = getDb();
-      const [row] = await db
-        .select()
-        .from(messageTranslations)
-        .where(and(eq(messageTranslations.messageId, messageId), eq(messageTranslations.targetLang, targetLang)))
-        .limit(1);
-      if (row) {
-        const result: TranslateResult = { translatedText: row.translatedText, detectedLang: row.detectedLang || "auto" };
-        setCachedTranslation(messageId, targetLang, result);
-        return result;
-      }
-    } catch {}
-  }
+  const run = async (): Promise<TranslateResult | null> => {
+    if (!useContext && messageId) {
+      const cached = getCachedTranslation(messageId, targetLang);
+      if (cached) return cached;
+    }
 
-  const result = await callProvider(text, targetLang, sourceLang, useContext ? priorLines : undefined);
-  if (!result) return null;
-
-  if (messageId) {
-    setCachedTranslation(messageId, targetLang, result);
-    if (process.env.DATABASE_URL) {
+    if (!useContext && messageId && process.env.DATABASE_URL) {
       try {
         const { getDb } = await import("../db");
         const { messageTranslations } = await import("@shared/schema");
+        const { eq, and } = await import("drizzle-orm");
         const db = getDb();
-        if (useContext) {
-          await db
-            .insert(messageTranslations)
-            .values({
+        const [row] = await db
+          .select()
+          .from(messageTranslations)
+          .where(and(eq(messageTranslations.messageId, messageId), eq(messageTranslations.targetLang, targetLang)))
+          .limit(1);
+        if (row) {
+          const rowResult: TranslateResult = {
+            translatedText: row.translatedText,
+            detectedLang: row.detectedLang || "auto",
+          };
+          setCachedTranslation(messageId, targetLang, rowResult);
+          return rowResult;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const result = await callProvider(text, targetLang, sourceLang, useContext ? priorLines : undefined);
+    if (!result) return null;
+
+    if (messageId) {
+      setCachedTranslation(messageId, targetLang, result);
+      if (process.env.DATABASE_URL) {
+        try {
+          const { getDb } = await import("../db");
+          const { messageTranslations } = await import("@shared/schema");
+          const db = getDb();
+          if (useContext) {
+            await db
+              .insert(messageTranslations)
+              .values({
+                messageId,
+                targetLang,
+                translatedText: result.translatedText,
+                detectedLang: result.detectedLang,
+              })
+              .onConflictDoUpdate({
+                target: [messageTranslations.messageId, messageTranslations.targetLang],
+                set: {
+                  translatedText: result.translatedText,
+                  detectedLang: result.detectedLang,
+                },
+              });
+          } else {
+            await db.insert(messageTranslations).values({
               messageId,
               targetLang,
               translatedText: result.translatedText,
               detectedLang: result.detectedLang,
-            })
-            .onConflictDoUpdate({
-              target: [messageTranslations.messageId, messageTranslations.targetLang],
-              set: {
-                translatedText: result.translatedText,
-                detectedLang: result.detectedLang,
-              },
-            });
-        } else {
-          await db.insert(messageTranslations).values({
-            messageId,
-            targetLang,
-            translatedText: result.translatedText,
-            detectedLang: result.detectedLang,
-          }).onConflictDoNothing();
+            }).onConflictDoNothing();
+          }
+        } catch {
+          /* ignore */
         }
-      } catch {}
+      }
     }
+
+    return result;
+  };
+
+  if (!flightKey) {
+    return run();
   }
 
-  return result;
+  const existing = translateInFlight.get(flightKey);
+  if (existing) return existing;
+
+  const p = run();
+  translateInFlight.set(flightKey, p);
+  p.finally(() => {
+    if (translateInFlight.get(flightKey) === p) translateInFlight.delete(flightKey);
+  });
+  return p;
 }

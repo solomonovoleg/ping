@@ -3,8 +3,19 @@ import { cn } from "@/lib/utils";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import type { GroupCallMedia } from "@/lib/group-calls-api";
+import { MAX_GROUP_MESH_PEERS } from "@shared/group-call-limits";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export type ChatDetailGroupFolderTab = {
   id: string;
@@ -36,6 +47,7 @@ export function ChatDetailGroupFolderStrip({
   onDeleteFolder: (folder: ChatDetailGroupFolderTab) => void;
 }) {
   const [sheetFolder, setSheetFolder] = useState<ChatDetailGroupFolderTab | null>(null);
+  const [folderPendingDelete, setFolderPendingDelete] = useState<ChatDetailGroupFolderTab | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -59,69 +71,77 @@ export function ChatDetailGroupFolderStrip({
 
   return (
     <>
-      <div className="shrink-0 uix-content-x border-b border-border/60 bg-background">
+      <div
+        className="shrink-0 uix-content-x border-b border-border/60 bg-background"
+        data-chat-swipe-back-ignore
+      >
         <div className="flex min-w-0 items-center gap-1 py-2">
-          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto touch-pan-x">
-            {folders.map((f) => {
-              const active = f.id === currentFolderId;
-              const unread = Math.max(0, f.unreadCount ?? 0);
-              const badgeLabel = unread <= 0 ? "" : unread > 99 ? "99+" : String(unread);
-              const canLongPress = canManageFolders && !f.isMain;
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => onFolderSelect(f.id)}
-                  onPointerDown={(e) => {
-                    if (!canLongPress || e.button !== 0) return;
-                    longPressOriginRef.current = { x: e.clientX, y: e.clientY };
-                    longPressTimerRef.current = setTimeout(() => {
-                      longPressTimerRef.current = null;
-                      longPressOriginRef.current = null;
-                      void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+          <div
+            className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] touch-pan-x [&::-webkit-scrollbar]:hidden"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            <div className="flex w-max flex-nowrap items-center gap-1">
+              {folders.map((f) => {
+                const active = f.id === currentFolderId;
+                const unread = Math.max(0, f.unreadCount ?? 0);
+                const badgeLabel = unread <= 0 ? "" : unread > 99 ? "99+" : String(unread);
+                const canLongPress = canManageFolders && !f.isMain;
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => onFolderSelect(f.id)}
+                    onPointerDown={(e) => {
+                      if (!canLongPress || e.button !== 0) return;
+                      longPressOriginRef.current = { x: e.clientX, y: e.clientY };
+                      longPressTimerRef.current = setTimeout(() => {
+                        longPressTimerRef.current = null;
+                        longPressOriginRef.current = null;
+                        void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+                        openFolderActions(f);
+                      }, FOLDER_LONG_PRESS_MS);
+                    }}
+                    onPointerMove={(e) => {
+                      const o = longPressOriginRef.current;
+                      if (!o || !longPressTimerRef.current) return;
+                      const dx = e.clientX - o.x;
+                      const dy = e.clientY - o.y;
+                      if (dx * dx + dy * dy > LONG_PRESS_MOVE_CANCEL_PX * LONG_PRESS_MOVE_CANCEL_PX) {
+                        clearLongPress();
+                      }
+                    }}
+                    onPointerUp={clearLongPress}
+                    onPointerLeave={clearLongPress}
+                    onPointerCancel={clearLongPress}
+                    onContextMenu={(e) => {
+                      if (!canLongPress) return;
+                      e.preventDefault();
                       openFolderActions(f);
-                    }, FOLDER_LONG_PRESS_MS);
-                  }}
-                  onPointerMove={(e) => {
-                    const o = longPressOriginRef.current;
-                    if (!o || !longPressTimerRef.current) return;
-                    const dx = e.clientX - o.x;
-                    const dy = e.clientY - o.y;
-                    if (dx * dx + dy * dy > LONG_PRESS_MOVE_CANCEL_PX * LONG_PRESS_MOVE_CANCEL_PX) {
-                      clearLongPress();
-                    }
-                  }}
-                  onPointerUp={clearLongPress}
-                  onPointerLeave={clearLongPress}
-                  onPointerCancel={clearLongPress}
-                  onContextMenu={(e) => {
-                    if (!canLongPress) return;
-                    e.preventDefault();
-                    openFolderActions(f);
-                  }}
-                  className={cn(
-                    "relative inline-flex min-h-[var(--uix-touch-min)] shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground",
-                  )}
-                  aria-label={f.isMain ? `Основной чат: ${f.name}` : unread > 0 ? `${f.name}, ${unread} непрочитанных` : f.name}
-                  aria-pressed={active}
-                >
-                  {f.name}
-                  {badgeLabel ? (
-                    <span
-                      className={cn(
-                        "inline-flex min-h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
-                        active ? "bg-primary-foreground/25 text-primary-foreground" : "bg-primary/90 text-primary-foreground",
-                      )}
-                    >
-                      {badgeLabel}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+                    }}
+                    className={cn(
+                      "relative inline-flex min-h-[var(--uix-touch-min)] shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    )}
+                    aria-label={f.isMain ? `Основной чат: ${f.name}` : unread > 0 ? `${f.name}, ${unread} непрочитанных` : f.name}
+                    aria-pressed={active}
+                  >
+                    {f.name}
+                    {badgeLabel ? (
+                      <span
+                        className={cn(
+                          "inline-flex min-h-[14px] min-w-[14px] items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
+                          active ? "bg-primary-foreground/25 text-primary-foreground" : "bg-primary/90 text-primary-foreground",
+                        )}
+                      >
+                        {badgeLabel}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           {canManageFolders ? (
             <TapScaleButton
@@ -165,7 +185,7 @@ export function ChatDetailGroupFolderStrip({
               onClick={() => {
                 const f = sheetFolder;
                 setSheetFolder(null);
-                if (f) onDeleteFolder(f);
+                if (f) setFolderPendingDelete(f);
               }}
             >
               <Trash2 className="h-4 w-4" aria-hidden />
@@ -174,6 +194,37 @@ export function ChatDetailGroupFolderStrip({
           </div>
         </DrawerContent>
       </Drawer>
+
+      <AlertDialog
+        open={folderPendingDelete != null}
+        onOpenChange={(o) => {
+          if (!o) setFolderPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Удалить папку «{folderPendingDelete?.name ?? ""}»?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Сообщения останутся в основном разделе группы.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => {
+                const f = folderPendingDelete;
+                setFolderPendingDelete(null);
+                if (f) onDeleteFolder(f);
+              }}
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -192,16 +243,29 @@ function lobbyCaption(participantCount: number, mediaType: GroupCallMedia): stri
 export function ChatDetailGroupCallLobbyBanner({
   participantCount,
   mediaType,
+  maxMeshPeers = MAX_GROUP_MESH_PEERS,
   onJoin,
 }: {
   participantCount: number;
   mediaType: GroupCallMedia;
+  /** С сервера в `/api/group-calls/.../active`; иначе константа из shared. */
+  maxMeshPeers?: number;
   onJoin: () => void;
 }) {
+  const nearLimit = participantCount >= Math.max(0, maxMeshPeers - 2);
   return (
     <div className="shrink-0 uix-content-x py-2">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/8 px-3 py-2.5">
-        <p className="min-w-0 flex-1 text-sm font-medium text-foreground">{lobbyCaption(participantCount, mediaType)}</p>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="text-sm font-medium text-foreground">{lobbyCaption(participantCount, mediaType)}</p>
+          {nearLimit ? (
+            <p className="text-xs text-amber-700 dark:text-amber-200/90">
+              Почти лимит участников ({maxMeshPeers}, mesh). Качество может просесть без отдельного сервера звонков.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">До {maxMeshPeers} участников в одной комнате (mesh).</p>
+          )}
+        </div>
         <TapScaleButton
           type="button"
           className="min-h-[var(--uix-touch-min)] shrink-0 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"

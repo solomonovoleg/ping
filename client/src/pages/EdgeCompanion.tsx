@@ -1,21 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchEdgeParticipantState } from "@/lib/edge-participant";
 import { ChevronLeft, Radio, Sparkles } from "lucide-react";
 import { useLocation, useRoute, useSearch } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageTitle } from "@/components/PageTitle";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useAuth } from "@/contexts/AuthContext";
+import { cn } from "@/lib/utils";
 import { fetchEdgeCompanionCampaignConfig } from "@/lib/edge-gamification";
 import { resolveEdgeCompanionBackFromSearch } from "@/features/edge-companion/edge-companion-navigation";
 import { EdgeCompanionCampaignShell } from "@/features/edge-companion/EdgeCompanionCampaignShell";
-import {
-  initialSurfaceIndex,
-  resolveVisibleSurfaces,
-} from "@/features/edge-companion/companion-surfaces/resolve-visible-surfaces";
-import { COMPANION_SURFACE_LABEL } from "@/features/edge-companion/companion-surfaces/surface-labels";
+import { EdgeMoneyTemplateFull } from "@/features/edge-money-template/EdgeMoneyTemplateFull";
+import { resolveLeaderboardVisibility, resolveVisibleSurfaces } from "@/features/edge-companion/companion-surfaces/resolve-visible-surfaces";
+import { buildInteractiveTabs, tabLabel } from "@/features/edge-companion/interactive-template/build-interactive-tabs";
 import { DEFAULT_COMPANION_UI } from "@/features/edge-companion/companion-surfaces/default-ui";
+import { EdgeIntroFootnote } from "@/features/edge-companion/components/EdgeIntroFootnote";
+import { markIntroOpenedFullIfEligible } from "@/features/edge-companion/edge-intro-onboarding";
 
 function parseEdgeIdFromSearch(search: string): string {
   const raw = search.startsWith("?") ? search.slice(1) : search;
@@ -31,6 +33,7 @@ function normalizeSearchForParams(search: string): string {
 }
 
 export default function EdgeCompanion() {
+  const queryClient = useQueryClient();
   const [loc, setLocation] = useLocation();
   const search = useSearch();
   const [matchEdgeId, paramsEdge] = useRoute("/edge/:edgeId");
@@ -72,27 +75,66 @@ export default function EdgeCompanion() {
     retry: 1,
   });
 
+  const participantStateQuery = useQuery({
+    queryKey: ["edge", "participant", "state", edgeCampaignId],
+    queryFn: () => fetchEdgeParticipantState(edgeCampaignId!),
+    enabled: Boolean(user?.id && edgeCampaignId),
+    staleTime: 30_000,
+    retry: 1,
+  });
+
+  useEffect(() => {
+    if (!edgeCampaignId) return;
+    const taps = participantStateQuery.data?.introTapCount ?? 0;
+    markIntroOpenedFullIfEligible(edgeCampaignId, taps);
+  }, [edgeCampaignId, participantStateQuery.data?.introTapCount]);
+
   const campaign = campaignQuery.data;
+
+  const companionVisibleCount = useMemo(() => {
+    if (!campaign) return 1;
+    if (campaign.edgeType === "money") return 3;
+    const ui = campaign.companionUi ?? DEFAULT_COMPANION_UI;
+    const { primaryOn, secondaryOn } = resolveLeaderboardVisibility(campaign.leaderboard);
+    const vis = resolveVisibleSurfaces({
+      ui,
+      edgeType: campaign.edgeType,
+      leaderboardPrimaryEnabled: primaryOn,
+      leaderboardSecondaryEnabled: secondaryOn,
+      taskPresetsCount: (campaign.taskPresets ?? []).length,
+    });
+    const tabs = buildInteractiveTabs(vis, Boolean(campaign.pingInviteDm?.template?.trim()));
+    return Math.max(1, tabs.length);
+  }, [campaign]);
 
   useEffect(() => {
     if (!campaign) {
       setSurfaceLabel("");
       return;
     }
+    if (campaign.edgeType === "money") {
+      setSurfaceLabel("Инфо · Главная · Задания");
+      return;
+    }
     const ui = campaign.companionUi ?? DEFAULT_COMPANION_UI;
+    const { primaryOn, secondaryOn } = resolveLeaderboardVisibility(campaign.leaderboard);
     const vis = resolveVisibleSurfaces({
       ui,
       edgeType: campaign.edgeType,
-      leaderboardEnabled: Boolean(campaign.leaderboard?.globalEnabled),
+      leaderboardPrimaryEnabled: primaryOn,
+      leaderboardSecondaryEnabled: secondaryOn,
+      taskPresetsCount: (campaign.taskPresets ?? []).length,
     });
-    const id = vis[initialSurfaceIndex(vis)];
-    setSurfaceLabel(id ? COMPANION_SURFACE_LABEL[id] : "");
+    const tabs = buildInteractiveTabs(vis, Boolean(campaign.pingInviteDm?.template?.trim()));
+    const ch = tabs.indexOf("character");
+    const id = ch >= 0 ? tabs[ch]! : tabs[0];
+    setSurfaceLabel(id ? tabLabel(id) : "");
   }, [campaign]);
 
   return (
     <div className="flex h-full w-full max-w-full min-w-0 flex-col overflow-hidden bg-background">
-      <PageTitle title={campaign?.title ? `${campaign.title} · EDGE` : "EDGE Companion"} />
-      <header className="glass z-10 flex shrink-0 items-center gap-2 border-b border-border/40 uix-content-x pt-6 pb-3">
+      <PageTitle title={campaign?.title?.trim() ? campaign.title.trim() : "Кампания"} />
+      <header className="glass z-10 flex shrink-0 items-center gap-2 border-b border-primary/15 bg-gradient-to-r from-primary/[0.08] via-transparent to-primary/[0.06] uix-content-x pt-6 pb-3 dark:from-primary/[0.1] dark:to-primary/[0.08]">
         <TapScaleButton
           type="button"
           onClick={() => setLocation(companionBackPath)}
@@ -106,28 +148,44 @@ export default function EdgeCompanion() {
           <ChevronLeft className="h-6 w-6" />
         </TapScaleButton>
         <div className="min-w-0 flex-1">
-          <h1 className="uix-text-title truncate">EDGE</h1>
           {edgeCampaignId ? (
-            <div className="mt-0.5 space-y-0.5">
-              <p className="truncate text-xs font-medium text-foreground/85" title={edgeCampaignId}>
-                {campaign?.title ? campaign.title : campaignQuery.isLoading ? "Загрузка…" : edgeCampaignId}
+            <div className="space-y-0.5">
+              <h1 className="uix-text-title truncate" title={edgeCampaignId}>
+                {campaign?.edgeType === "money"
+                  ? "ДЕЛАЕМ ДЕНЬГИ"
+                  : campaign?.title?.trim()
+                    ? campaign.title.trim()
+                    : campaignQuery.isLoading
+                      ? "Загрузка…"
+                      : "Кампания"}
+              </h1>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {campaign?.edgeType === "money" ? "EDGE MONEY" : "Интерактив"}
               </p>
               {surfaceLabel ? (
-                <p className="truncate text-[11px] text-primary font-semibold">{surfaceLabel}</p>
+                <p className="truncate text-[11px] font-semibold text-primary">{surfaceLabel}</p>
               ) : null}
             </div>
           ) : (
-            <p className="mt-0.5 text-xs text-muted-foreground">Интерактивные кампании</p>
+            <>
+              <h1 className="uix-text-title truncate">Кампании</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">Интерактивные активности</p>
+            </>
           )}
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))]">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-x-hidden pb-[calc(var(--uix-nav-bottom)+var(--uix-space-2))] [-webkit-overflow-scrolling:touch]",
+          campaign?.edgeType === "money" ? "overflow-hidden" : "overflow-y-auto",
+        )}
+      >
         {!user?.id ? (
           <ListEmptyState
             icon={Sparkles}
             title="Войдите в аккаунт"
-            description="Чтобы открыть кампанию EDGE и участвовать в интерактиве."
+            description="Войдите, чтобы открыть кампанию и участвовать."
             actionLabel="К ленте"
             onAction={() => setLocation("/posts")}
             className="m-[var(--uix-space-4)] min-h-[200px] rounded-2xl border border-dashed border-border/60 bg-card/40"
@@ -153,18 +211,48 @@ export default function EdgeCompanion() {
               description={
                 campaignQuery.error instanceof Error
                   ? campaignQuery.error.message
-                  : "Проверьте EDGE_UPSTREAM_URL или попробуйте позже."
+                  : "Сервис кампании сейчас недоступен — попробуйте позже."
               }
               onRetry={() => void campaignQuery.refetch()}
               className="min-h-[200px] rounded-3xl border border-border/60 bg-card/90"
             />
           </div>
         ) : campaign && edgeCampaignId ? (
-          <EdgeCompanionCampaignShell
-            edgeCampaignId={edgeCampaignId}
-            campaign={campaign}
-            onActiveSurfaceLabel={setSurfaceLabel}
-          />
+          <div className="flex min-h-[min(520px,70dvh)] flex-1 flex-col overflow-hidden">
+            {campaign.edgeType === "money" ? (
+              <EdgeMoneyTemplateFull
+                edgeId={edgeCampaignId}
+                viewerDisplayName={user?.displayName?.trim() || "Вы"}
+              />
+            ) : (
+              <>
+                <div className="uix-content-x shrink-0 pt-2 pb-1">
+                  <EdgeIntroFootnote
+                    edgeId={edgeCampaignId}
+                    introTapCount={participantStateQuery.data?.introTapCount}
+                    layout="full"
+                    hasMultipleSurfaces={companionVisibleCount > 1}
+                  />
+                </div>
+                <EdgeCompanionCampaignShell
+                  edgeCampaignId={edgeCampaignId}
+                  campaign={campaign}
+                  onBack={() => setLocation(companionBackPath)}
+                  backAriaLabel={
+                    companionBackPath === "/posts"
+                      ? "Назад к ленте"
+                      : "Назад к посту или профилю"
+                  }
+                  participantState={participantStateQuery.data}
+                  onParticipantState={(state) => {
+                    queryClient.setQueryData(["edge", "participant", "state", edgeCampaignId], state);
+                  }}
+                  introTapCount={participantStateQuery.data?.introTapCount ?? 0}
+                  onActiveSurfaceLabel={setSurfaceLabel}
+                />
+              </>
+            )}
+          </div>
         ) : null}
       </div>
     </div>

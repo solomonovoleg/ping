@@ -1,4 +1,4 @@
-import { getIceServers } from "@/features/call/call-ice-config";
+import { getCallRtcConfiguration } from "@/features/call/call-ice-config";
 import { GroupMeshLink } from "../webrtc/mesh-link";
 
 export type RosterParticipant = { userId: string; displayName: string };
@@ -10,7 +10,7 @@ type SignalSender = (toUserId: string, msg: Record<string, unknown>) => void;
  * Инициатор SDP — пользователь с меньшим userId (стабильная сортировка).
  */
 export class GroupMeshRegistry {
-  private readonly ice = getIceServers();
+  private readonly rtc = getCallRtcConfiguration("group");
   private readonly links = new Map<string, GroupMeshLink>();
   private myUserId = "";
   private roomId = "";
@@ -48,7 +48,7 @@ export class GroupMeshRegistry {
       if (p.userId === this.myUserId) continue;
       if (this.links.has(p.userId)) continue;
       if (this.myUserId < p.userId) {
-        const link = new GroupMeshLink(localStream, this.ice, {
+        const link = new GroupMeshLink(localStream, this.rtc, {
           onIceCandidate: (candidate) => {
             this.sendSignal(p.userId, {
               type: "group.signal",
@@ -108,7 +108,7 @@ export class GroupMeshRegistry {
     if (fromUserId === this.myUserId) return;
     let link = this.links.get(fromUserId);
     if (!link && signalType === "offer" && sdp) {
-      link = new GroupMeshLink(localStream, this.ice, {
+      link = new GroupMeshLink(localStream, this.rtc, {
         onIceCandidate: (c) => {
           this.sendSignal(fromUserId, {
             type: "group.signal",

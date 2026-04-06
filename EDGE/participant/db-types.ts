@@ -5,12 +5,16 @@ export type ParticipantRow = {
   campaign_public_id: string;
   platform_user_id: string;
   joined_at: Date;
+  /** EDGE MONEY: после нажатия «выполнить задания»; иначе null. */
+  money_tracking_started_at: Date | null;
 };
 
 export type CharacterRow = {
   participant_id: string;
   level: number;
   xp: number;
+  primary_xp: number;
+  secondary_xp: number;
   mood: string;
   happy_score: number;
   care_streak_days: number;

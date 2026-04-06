@@ -16,8 +16,8 @@ export function InfoArticleSurfacePanel({ article, campaignTitle }: Props) {
       <div className="uix-content-x box-border min-h-full pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]">
         <ListEmptyState
           icon={BookOpen}
-          title="Материалы кампании"
-          description="Создатель может добавить текст, фото и видео в настройках кампании (config_json.companion.infoArticle)."
+          title="Пока пусто"
+          description="Здесь будет текст, фото или видео от организатора — когда он добавит материалы в настройках кампании."
           className={`${EDGE_CARD} min-h-[200px]`}
         />
       </div>
@@ -29,7 +29,7 @@ export function InfoArticleSurfacePanel({ article, campaignTitle }: Props) {
       className="uix-content-x box-border min-h-full space-y-[var(--uix-space-4)] pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]"
       aria-label={title}
     >
-      <header className="px-0.5">
+      <header className="rounded-2xl border border-primary/15 bg-gradient-to-r from-primary/12 to-primary/4 px-4 py-3 dark:from-primary/14">
         <h2 className="font-edge-pet text-xl font-semibold leading-tight text-foreground">{title}</h2>
       </header>
       <div className={`${EDGE_CARD} space-y-[var(--uix-space-4)]`}>

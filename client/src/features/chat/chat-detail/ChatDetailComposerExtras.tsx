@@ -1,46 +1,67 @@
 import { forwardRef } from "react";
-import { Camera, Image, Paperclip } from "lucide-react";
+import { Camera, FileText, Image, Paperclip } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { SpellSuggestions } from "@/features/chat/components/SpellSuggestions";
 import type { SpellError } from "@/lib/spellcheck";
 
-/** Всплывашка «Камера / Галерея / Файл» над кнопкой скрепки (только натив). */
+/** Всплывашка «Камера / Галерея / Медиа / PDF» над кнопкой скрепки. Камера и галерея — только в нативном приложении. */
 export const ChatDetailNativeAttachMenu = forwardRef<
   HTMLDivElement,
   {
+    showCameraGallery: boolean;
     onPickCamera: () => void;
     onPickGallery: () => void;
     onPickFile: () => void;
+    onPickPdf: () => void;
   }
->(function ChatDetailNativeAttachMenu({ onPickCamera, onPickGallery, onPickFile }, ref) {
+>(function ChatDetailNativeAttachMenu(
+  { showCameraGallery, onPickCamera, onPickGallery, onPickFile, onPickPdf },
+  ref
+) {
   return (
     <div
       ref={ref}
       className="absolute bottom-full left-0 mb-2 flex flex-col rounded-xl border border-border bg-popover text-popover-foreground shadow-lg py-1 z-[110]"
     >
+      {showCameraGallery ? (
+        <>
+          <button
+            type="button"
+            className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
+            onClick={onPickCamera}
+          >
+            <Camera className="w-4 h-4" />
+            Камера
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
+            onClick={onPickGallery}
+          >
+            <Image className="w-4 h-4" />
+            Галерея
+          </button>
+        </>
+      ) : null}
       <button
         type="button"
-        className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
-        onClick={onPickCamera}
-      >
-        <Camera className="w-4 h-4" />
-        Камера
-      </button>
-      <button
-        type="button"
-        className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
-        onClick={onPickGallery}
-      >
-        <Image className="w-4 h-4" />
-        Галерея
-      </button>
-      <button
-        type="button"
-        className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full border-t border-border"
+        className={cn(
+          "flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full",
+          showCameraGallery ? "border-t border-border" : ""
+        )}
         onClick={onPickFile}
       >
         <Paperclip className="w-4 h-4" />
-        Файл (фото/видео)
+        Фото или видео
+      </button>
+      <button
+        type="button"
+        className="flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary w-full"
+        onClick={onPickPdf}
+      >
+        <FileText className="w-4 h-4 text-red-600 dark:text-red-400" />
+        PDF до 15 МБ
       </button>
     </div>
   );

@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { writeAuditLog } from "../audit";
-import { requireAdminOrSuper } from "../middleware";
+import { requireAdmin, requireAdminOrSuper } from "../middleware";
 import type { ContentReportStatus } from "@shared/schema/content-reports";
 import { opsStrings } from "./i18n.ru";
 import { reportsListForAdmin, reportsSetStatus } from "./reports.repo";
@@ -12,7 +12,7 @@ function isStatus(s: string): s is ContentReportStatus {
 }
 
 export function registerOpsReportsAdminRoutes(app: Express): void {
-  app.get("/api/admin/ops/reports", async (req: Request, res: Response) => {
+  app.get("/api/admin/ops/reports", requireAdmin, async (req: Request, res: Response) => {
     try {
       const limit = Math.min(Number(req.query.limit) || 40, 100);
       const offset = Number(req.query.offset) || 0;
@@ -26,6 +26,9 @@ export function registerOpsReportsAdminRoutes(app: Express): void {
           reporterUserId: r.reporterUserId,
           targetType: r.targetType,
           targetId: r.targetId,
+          contextPostId: r.contextPostId ?? null,
+          contextChatId: r.contextChatId ?? null,
+          reasonCode: r.reasonCode ?? null,
           reason: r.reason,
           status: r.status,
           adminNote: r.adminNote,

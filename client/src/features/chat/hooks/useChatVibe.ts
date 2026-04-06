@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { API, apiFetch } from "@/lib/api-base";
+import { DURATION_CHAT_VIBE_CROSSFADE_MS, DURATION_FAST_MS, getPrefersReducedMotion } from "@/lib/motion";
 import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
 import { onChatVibeUpdate, type ChatVibeUpdateDetail } from "../realtime-events";
 import { getClientVibeTokens, type ChatVibeSurface } from "@/lib/chat-vibe-themes";
 import { getIntensityScale } from "@/lib/chat-vibe-prefs";
+import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import type { VibeThemeCode, VibeThemeTokens } from "@shared/chat-vibe-types";
 
 export type ChatVibeState = {
@@ -35,11 +37,16 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
   const [state, setState] = useState<ChatVibeState>(() => defaultState(surface));
   const [prefsEpoch, setPrefsEpoch] = useState(0);
   const serverOverrideRef = useRef<Record<string, string | number> | null>(null);
+  const hapticStateRef = useRef<{ theme: VibeThemeCode; visualIntensity: number; isActive: boolean } | null>(null);
 
   const applyTokensToCSS = useCallback(
     (tokens: VibeThemeTokens, active: boolean) => {
       const root = document.documentElement;
+      const tokenTransitionMs = getPrefersReducedMotion()
+        ? DURATION_FAST_MS
+        : DURATION_CHAT_VIBE_CROSSFADE_MS;
       if (!active) {
+        root.style.setProperty("--chat-vibe-token-transition", `${DURATION_FAST_MS}ms`);
         root.style.setProperty("--chat-vibe-bg-tint", "transparent");
         root.style.setProperty("--chat-vibe-bubble-in", "transparent");
         root.style.setProperty("--chat-vibe-bubble-out", "transparent");
@@ -47,15 +54,17 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
         root.style.setProperty("--chat-vibe-overlay-opacity", "0");
         return;
       }
+      root.style.setProperty("--chat-vibe-token-transition", `${tokenTransitionMs}ms`);
       const scale = getIntensityScale();
       // Пузыри: на «низкой» интенсивности иначе rgba-альфа входящих почти нулевая — вайб незаметен.
       const bubbleScale = Math.max(scale, 0.78);
+      const outgoingMinAlpha = surfaceRef.current === "light" ? 0.7 : 0.62;
       root.style.setProperty("--chat-vibe-bg-tint", scaleAlpha(tokens.backgroundTint, scale));
       root.style.setProperty("--chat-vibe-bubble-in", scaleAlpha(tokens.bubbleIncoming, bubbleScale));
       /* Исходящий: не даём альфе упасть слишком низко — иначе «белый» текст на почти белом фоне в светлом чате */
       root.style.setProperty(
         "--chat-vibe-bubble-out",
-        scaleAlpha(tokens.bubbleOutgoing, bubbleScale, { minAlpha: 0.62 }),
+        scaleAlpha(tokens.bubbleOutgoing, bubbleScale, { minAlpha: outgoingMinAlpha }),
       );
       root.style.setProperty("--chat-vibe-accent", scaleAlpha(tokens.accentGlow, scale));
       root.style.setProperty(
@@ -65,6 +74,26 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
     },
     [],
   );
+
+  const maybePulseVibeHaptic = useCallback((nextState: ChatVibeState) => {
+    const prev = hapticStateRef.current;
+    hapticStateRef.current = {
+      theme: nextState.theme,
+      visualIntensity: nextState.visualIntensity ?? 0,
+      isActive: nextState.isActive,
+    };
+    if (!prev || !prev.isActive || !nextState.isActive) return;
+
+    const prevIntensity = prev.visualIntensity ?? 0;
+    const nextIntensity = nextState.visualIntensity ?? 0;
+    const diff = Math.abs(nextIntensity - prevIntensity);
+    const steppedUp = nextIntensity > prevIntensity;
+    const themeChanged = prev.theme !== nextState.theme;
+    const becameNoticeable = prevIntensity === 0 && nextIntensity >= 1;
+    if ((steppedUp && (themeChanged || diff >= 2)) || becameNoticeable) {
+      triggerSelectionHaptic();
+    }
+  }, []);
 
   useEffect(() => {
     const onPrefs = () => setPrefsEpoch((n) => n + 1);
@@ -79,6 +108,7 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
   useEffect(() => {
     if (!chatId) {
       serverOverrideRef.current = null;
+      hapticStateRef.current = { theme: "casual", visualIntensity: 0, isActive: false };
       const next = defaultState(surfaceRef.current);
       setState(next);
       applyTokensToCSS(next.tokens, false);
@@ -102,6 +132,7 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
         if (cancelled) return;
         if (!res.ok || data.active !== true) {
           serverOverrideRef.current = null;
+          hapticStateRef.current = { theme: "casual", visualIntensity: 0, isActive: false };
           /* База: премиум-чёрный / светлый фон без узоров; атмосфера (паттерны, тинты) только при active с сервера */
           const next = defaultState(surfaceRef.current);
           setState(next);
@@ -123,12 +154,14 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
           confidence: data.confidence ?? 0,
           visualIntensity: data.visualIntensity ?? 0,
         };
+        maybePulseVibeHaptic(newState);
         setState(newState);
         applyTokensToCSS(tokens, true);
       })
       .catch(() => {
         if (!cancelled) {
           serverOverrideRef.current = null;
+          hapticStateRef.current = { theme: "casual", visualIntensity: 0, isActive: false };
           const next = defaultState(surfaceRef.current);
           setState(next);
           applyTokensToCSS(next.tokens, false);
@@ -160,12 +193,13 @@ export function useChatVibe(chatId: string | undefined, options: UseChatVibeOpti
         confidence: detail.confidence ?? 0,
         visualIntensity: detail.visualIntensity ?? 0,
       };
+      maybePulseVibeHaptic(newState);
       setState(newState);
       applyTokensToCSS(tokens, true);
     });
 
     return unsub;
-  }, [chatId, surface, applyTokensToCSS]);
+  }, [chatId, surface, applyTokensToCSS, maybePulseVibeHaptic]);
 
   useEffect(() => {
     if (!chatId || !state.isActive) return;

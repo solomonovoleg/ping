@@ -1,8 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AdminPageHeader, AdminPanelCard, adminPageStackClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   fetchContentIngestState,
   fetchFeedAlgorithm,
@@ -14,20 +17,20 @@ import {
   type FeedAlgoConfig,
 } from "@/lib/admin";
 import { useToast } from "@/hooks/use-toast";
-import { Settings as SettingsIcon } from "lucide-react";
+import { Rss, Settings as SettingsIcon } from "lucide-react";
 
 export default function AdminSettings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: feedConfig, isLoading } = useQuery({
+  const { data: feedConfig, isLoading, error: feedError, refetch: refetchFeedConfig } = useQuery({
     queryKey: ["admin", "feed-algorithm"],
     queryFn: fetchFeedAlgorithm,
   });
   const {
     data: parserState,
     isLoading: parserLoading,
-    isError: parserError,
+    error: parserError,
     refetch: refetchParserState,
   } = useQuery({
     queryKey: ["admin", "content-ingest"],
@@ -36,7 +39,7 @@ export default function AdminSettings() {
   const {
     data: parserUsers,
     isLoading: parserUsersLoading,
-    isError: parserUsersError,
+    error: parserUsersError,
     refetch: refetchParserUsers,
   } = useQuery({
     queryKey: ["admin", "content-ingest-users"],
@@ -94,24 +97,45 @@ export default function AdminSettings() {
   };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Настройки</h1>
+    <div className={cn(adminPageStackClass(), "space-y-6")}>
+      <AdminPageHeader
+        title="Настройки"
+        description="Алгоритм ленты и автопостинг из RSS (глобальные параметры платформы)."
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <SettingsIcon className="w-4 h-4" />
+      <AdminPanelCard className="space-y-4 p-5 sm:p-6">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+            <SettingsIcon className="h-4 w-4" />
             Алгоритм ленты
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
+          </h2>
+          <p className="mt-1 text-sm admin-text-muted">
             Параметры ранжирования постов в ленте. Режим chrono_boost_v1 учитывает реакции, комментарии и репосты.
           </p>
-        </CardHeader>
-        <CardContent>
+        </div>
+        <div>
           {isLoading ? (
-            <p className="text-muted-foreground text-sm">Загрузка…</p>
+            <div className="space-y-2 py-1">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : feedError ? (
+            <ErrorWithRetry
+              title="Не удалось загрузить алгоритм ленты"
+              description={feedError instanceof Error ? feedError.message : "Ошибка загрузки"}
+              onRetry={() => void refetchFeedConfig()}
+              className="min-h-[180px]"
+            />
           ) : !feedConfig ? (
-            <p className="text-muted-foreground text-sm">Не удалось загрузить настройки</p>
+            <ListEmptyState
+              icon={SettingsIcon}
+              title="Алгоритм пока недоступен"
+              description="Данные настроек не получены. Обновите страницу или попробуйте повторить запрос."
+              actionLabel="Обновить"
+              onAction={() => void refetchFeedConfig()}
+              className="min-h-[180px]"
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-2">
@@ -211,30 +235,34 @@ export default function AdminSettings() {
               </Button>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <SettingsIcon className="w-4 h-4" />
+      <AdminPanelCard className="space-y-4 p-5 sm:p-6">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+            <SettingsIcon className="h-4 w-4" />
             Автопостинг из RSS
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
+          </h2>
+          <p className="mt-1 text-sm admin-text-muted">
             Парсер забирает публикации из открытого RSS, прикрепляет фото (если есть) и публикует от выбранного аккаунта
             по интервалу.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <div className="space-y-4">
           {parserLoading ? (
-            <p className="text-muted-foreground text-sm">Загрузка настроек автопостинга…</p>
-          ) : parserError || !parserState ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
-              <p className="text-destructive mb-2">Не удалось загрузить настройки автопостинга</p>
-              <Button size="sm" variant="outline" onClick={() => refetchParserState()}>
-                Повторить
-              </Button>
+            <div className="space-y-2 py-1">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
+          ) : parserError || !parserState ? (
+            <ErrorWithRetry
+              title="Не удалось загрузить настройки автопостинга"
+              description={parserError instanceof Error ? parserError.message : "Ошибка загрузки"}
+              onRetry={() => void refetchParserState()}
+              className="min-h-[180px]"
+            />
           ) : (
             <>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -279,12 +307,21 @@ export default function AdminSettings() {
                   {parserUsersLoading ? (
                     <p className="text-muted-foreground text-sm">Загрузка пользователей…</p>
                   ) : parserUsersError ? (
-                    <div className="space-y-2">
-                      <p className="text-destructive text-sm">Не удалось загрузить список пользователей</p>
-                      <Button size="sm" variant="outline" onClick={() => refetchParserUsers()}>
-                        Повторить
-                      </Button>
-                    </div>
+                    <ErrorWithRetry
+                      title="Не удалось загрузить список пользователей"
+                      description={parserUsersError instanceof Error ? parserUsersError.message : "Ошибка загрузки"}
+                      onRetry={() => void refetchParserUsers()}
+                      className="min-h-[160px]"
+                    />
+                  ) : (parserUsers ?? []).length === 0 ? (
+                    <ListEmptyState
+                      icon={Rss}
+                      title="Нет доступных пользователей"
+                      description="Добавьте пользователя-автора, чтобы включить автопостинг из RSS."
+                      actionLabel="Обновить"
+                      onAction={() => void refetchParserUsers()}
+                      className="min-h-[160px]"
+                    />
                   ) : (
                     <select
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -366,8 +403,8 @@ export default function AdminSettings() {
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
     </div>
   );
 }

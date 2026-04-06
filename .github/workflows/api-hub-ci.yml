@@ -1,0 +1,31 @@
+name: api-hub-ci
+
+on:
+  pull_request:
+    paths:
+      - "api-hub/**"
+      - ".github/workflows/api-hub-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "api-hub/**"
+      - ".github/workflows/api-hub-ci.yml"
+
+jobs:
+  api-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm ci (root)
+        run: npm ci
+      - name: npm ci (api-hub)
+        run: npm ci --prefix api-hub
+      - name: Type check
+        run: npm run check:api-hub
+      - name: Tests
+        run: npm run test:api-hub
+      - name: Build
+        run: npm run build:api-hub

@@ -5,6 +5,8 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
 import { s3Configured, uploadToS3 } from "./s3";
+import { buildSignedUploadPath } from "../security/upload-access-signature";
+import { formatUploadStorageError } from "./format-upload-storage-error";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "voice");
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -59,32 +61,46 @@ const upload = multer({
 });
 
 export function registerVoiceUploadRoutes(app: Express): void {
+  app.get("/api/upload/voice/sign", requireAuth, (req: Request, res: Response) => {
+    const rawPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+    if (!rawPath || !rawPath.startsWith("/uploads/voice/")) {
+      res.status(400).json({ message: "path должен начинаться с /uploads/voice/" });
+      return;
+    }
+    const ttlSecRaw = Number.parseInt(String(req.query.ttlSec ?? ""), 10);
+    const ttlSec = Number.isFinite(ttlSecRaw) && ttlSecRaw > 0 ? Math.min(ttlSecRaw, 3600) : 900;
+    res.json({ signedPath: buildSignedUploadPath(rawPath, ttlSec), expiresInSec: ttlSec });
+  });
+
   app.post(
     "/api/upload/voice",
     requireAuth,
     upload.single("audio"),
     async (req: Request, res: Response) => {
-      if (!req.file) {
-        res.status(400).json({ message: "Файл не загружен. Отправьте поле «audio»." });
-        return;
-      }
-      if (s3Configured && req.file.buffer) {
-        let ext = path.extname(req.file.originalname);
-        if (!ext || ext === ".") {
-          ext = req.file.mimetype?.includes("mp4") || req.file.mimetype?.includes("m4a") ? ".m4a" : ".webm";
+      try {
+        if (!req.file) {
+          res.status(400).json({ message: "Файл не загружен. Отправьте поле «audio»." });
+          return;
         }
-        const url = await uploadToS3(
-          "voice",
-          req.file.buffer,
-          req.file.mimetype,
-          ext
-        );
-        res.status(201).json({ url });
-        return;
+        if (s3Configured && req.file.buffer) {
+          let ext = path.extname(req.file.originalname);
+          if (!ext || ext === ".") {
+            ext = req.file.mimetype?.includes("mp4") || req.file.mimetype?.includes("m4a") ? ".m4a" : ".webm";
+          }
+          const url = await uploadToS3("voice", req.file.buffer, req.file.mimetype, ext);
+          res.status(201).json({ url });
+          return;
+        }
+        const filename = (req.file as Express.Multer.File & { filename?: string }).filename ?? "";
+        const url = `/uploads/voice/${filename}`;
+        res.status(201).json({ url, signedUrl: buildSignedUploadPath(url) });
+      } catch (err) {
+        res.status(503).json({
+          message: formatUploadStorageError(err, "[upload/voice] S3/disk", {
+            storageMode: s3Configured ? "s3" : "disk",
+          }),
+        });
       }
-      const filename = (req.file as Express.Multer.File & { filename?: string }).filename ?? "";
-      const url = `/uploads/voice/${filename}`;
-      res.status(201).json({ url });
     }
   );
 

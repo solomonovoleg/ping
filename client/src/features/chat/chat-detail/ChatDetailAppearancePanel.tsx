@@ -1,6 +1,18 @@
-import { Image, Link2, Check, Type, Languages } from "lucide-react";
+import { useState } from "react";
+import { Image, Link2, Check, Type, Languages, Globe2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
+import { acceptAiDisclosure, hasAcceptedAiDisclosure } from "@/lib/ai-disclosure";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   CHAT_BG_PRESETS,
   MSG_BUBBLE_PRESETS,
@@ -29,6 +41,10 @@ export type ChatDetailAppearancePanelProps = {
   onChatTranslateEnabledChange: (checked: boolean) => void;
   translateLang: TranslateLangCode;
   onTranslateLangChange: (lang: TranslateLangCode) => void;
+  /** Личка 1:1: показать переключатель «мультиязычный диалог» */
+  showDmMultilingual?: boolean;
+  dmMultilingualEnabled?: boolean;
+  onDmMultilingualChange?: (enabled: boolean) => void;
 };
 
 function persistChatBg(chatId: string, id: ChatBackgroundPreset) {
@@ -65,7 +81,13 @@ export function ChatDetailAppearancePanel({
   onChatTranslateEnabledChange,
   translateLang,
   onTranslateLangChange,
+  showDmMultilingual = false,
+  dmMultilingualEnabled = false,
+  onDmMultilingualChange,
 }: ChatDetailAppearancePanelProps) {
+  const [translateDisclosureOpen, setTranslateDisclosureOpen] = useState(false);
+  const [dmMultiDisclosureOpen, setDmMultiDisclosureOpen] = useState(false);
+
   return (
     <>
       {showMediaLinksButton && onOpenMediaLinks && (
@@ -165,27 +187,66 @@ export function ChatDetailAppearancePanel({
         </div>
       </div>
       <div className="border-t border-border/60 mt-2 pt-2">
-        <div className="flex items-center justify-between gap-3 px-2 py-2">
-          <div className="flex items-center gap-3 min-w-0">
-            <Languages className="h-5 w-5 shrink-0 text-primary" />
-            <div>
-              <p className="text-sm font-medium">Переводить входящие</p>
-              <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
+        {showDmMultilingual && onDmMultilingualChange ? (
+          <div className="flex items-center justify-between gap-3 px-2 py-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <Globe2 className="h-5 w-5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Мультиязычный диалог</p>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Каждый пишет на своём языке, собеседник видит перевод. У каждого должен быть выбран свой язык ниже.
+                </p>
+              </div>
             </div>
+            <Switch
+              checked={dmMultilingualEnabled}
+              onCheckedChange={(checked) => {
+                if (checked && !hasAcceptedAiDisclosure("translate")) {
+                  setDmMultiDisclosureOpen(true);
+                  return;
+                }
+                onDmMultilingualChange(checked);
+              }}
+              aria-label="Мультиязычный диалог"
+            />
           </div>
-          <Switch
-            checked={chatTranslateEnabled}
-            onCheckedChange={onChatTranslateEnabledChange}
-            aria-label="Переводить входящие сообщения"
-          />
-        </div>
-        {chatTranslateEnabled && (
+        ) : null}
+        {!dmMultilingualEnabled ? (
+          <div className="flex items-center justify-between gap-3 px-2 py-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <Languages className="h-5 w-5 shrink-0 text-primary" />
+              <div>
+                <p className="text-sm font-medium">Переводить входящие</p>
+                <p className="text-[11px] text-muted-foreground">На ваш язык автоматически</p>
+              </div>
+            </div>
+            <Switch
+              checked={chatTranslateEnabled}
+              onCheckedChange={(checked) => {
+                if (checked && !hasAcceptedAiDisclosure("translate")) {
+                  setTranslateDisclosureOpen(true);
+                  return;
+                }
+                onChatTranslateEnabledChange(checked);
+              }}
+              aria-label="Переводить входящие сообщения"
+            />
+          </div>
+        ) : (
+          <div className="px-2 py-2">
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Входящие переводятся на выбранный язык. Собеседнику для своих входящих нужно выбрать язык у себя в этом же чате.
+            </p>
+          </div>
+        )}
+        {(chatTranslateEnabled || dmMultilingualEnabled) && (
           <div className="px-2 pb-1">
+            <p className="text-[10px] text-muted-foreground/90 mb-1 px-0.5">Мой язык входящих</p>
             <select
               value={translateLang}
               onChange={(e) => onTranslateLangChange(e.target.value as TranslateLangCode)}
               className="w-full rounded-lg border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-              aria-label="Язык перевода"
+              aria-label="Мой язык входящих переводов"
             >
               {TRANSLATE_LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>
@@ -196,6 +257,56 @@ export function ChatDetailAppearancePanel({
           </div>
         )}
       </div>
+
+      <AlertDialog open={dmMultiDisclosureOpen} onOpenChange={setDmMultiDisclosureOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Мультиязычный диалог</AlertDialogTitle>
+            <AlertDialogDescription>
+              Сообщения переводятся через внешний AI-сервис (OpenRouter). Включая режим, вы соглашаетесь на обработку текста
+              переписки для перевода.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                acceptAiDisclosure("translate");
+                setDmMultiDisclosureOpen(false);
+                onDmMultilingualChange?.(true);
+              }}
+            >
+              Включить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={translateDisclosureOpen} onOpenChange={setTranslateDisclosureOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>AI-перевод сообщений</AlertDialogTitle>
+            <AlertDialogDescription>
+              Для автоперевода текст входящих сообщений отправляется на внешний AI-сервис (OpenRouter). Если вы не хотите
+              передавать сообщения на внешнюю обработку, оставьте перевод выключенным.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                acceptAiDisclosure("translate");
+                setTranslateDisclosureOpen(false);
+                onChatTranslateEnabledChange(true);
+              }}
+            >
+              Согласен, включить перевод
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

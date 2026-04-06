@@ -1,22 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { ChevronLeft, ImagePlus, Loader2, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ImagePlus, Loader2, Plus, Trash2 } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorWithRetry } from "@/components/ui/empty";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { uploadPostMedia } from "@/lib/posts";
+import { uploadPostMedia, uploadPostMediaImageResized } from "@/lib/posts";
 import {
   createEdgeCampaignDraft,
   fetchEdgeCampaignDetail,
+  fetchEdgeCampaignLifeStats,
   parseGiftTemplatesFromRow,
   patchEdgeCampaign,
   type EdgeGiftTemplateInput,
   edgeCreatorDestructiveToast,
 } from "@/lib/edge-creator";
+import {
+  DEFAULT_LIFE_SIM_FORM,
+  lifeSimFormFromConfigJson,
+  lifeSimFormToPatchPayload,
+  type LifeSimFormState,
+} from "@/lib/edge-life-simulation-form";
 import { parsePresetVerify, type PresetVerify } from "@shared/edge-task-preset-config";
 
 const STEPS = [
@@ -27,8 +37,29 @@ const STEPS = [
   "Подписка",
   "Задания",
   "Сроки",
+  "Кто видит",
   "Готово",
 ] as const;
+
+/** Подписи для настройки «кому виден пост с EDGE» (конструктор + шапка). */
+const EDGE_POST_VISIBILITY_LABEL: Record<"self" | "followers" | "public", string> = {
+  self: "Только себе",
+  followers: "Только подписчикам",
+  public: "Всем в ленте",
+};
+const EDGE_POST_VISIBILITY_SHORT: Record<"self" | "followers" | "public", string> = {
+  self: "Только вы",
+  followers: "Подписчики",
+  public: "Все в ленте",
+};
+
+function isoToDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso?.trim()) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 type TaskVerifyUi = PresetVerify["type"];
 
@@ -40,6 +71,8 @@ type TaskRow = {
   points: number;
   penalty: number;
   deadlineDays: number;
+  /** Куда пойдёт XP (совпадает с EDGE `scoreTarget`). */
+  scoreTarget: "primary" | "secondary";
   verifyType: TaskVerifyUi;
   verifyPostId: string;
   verifyMinCount: number;
@@ -317,6 +350,7 @@ function emptyTaskForScope(scope: TaskScope): TaskRow {
     points: 10,
     penalty: 0,
     deadlineDays: 7,
+    scoreTarget: scope === "game" ? "primary" : "secondary",
     ...verifyFieldsFromParsed(v),
   };
 }
@@ -377,6 +411,10 @@ function readTasks(raw: unknown, scope: "game" | "global" | "commercial"): TaskR
     const legacy = /^task_(\d+)$/.exec(key);
     if (legacy) key = `${scope}_${legacy[1]}`;
     const v = parsePresetVerify(o.verify);
+    const stRaw = typeof o.scoreTarget === "string" ? o.scoreTarget.trim().toLowerCase() : "";
+    const fallbackTarget = scope === "game" ? "primary" : "secondary";
+    const scoreTarget: "primary" | "secondary" =
+      stRaw === "primary" || stRaw === "secondary" ? stRaw : fallbackTarget;
     return {
       localId: newLocalId(),
       key,
@@ -384,6 +422,7 @@ function readTasks(raw: unknown, scope: "game" | "global" | "commercial"): TaskR
       points: typeof o.points === "number" ? o.points : 10,
       penalty: typeof o.penalty === "number" ? o.penalty : 0,
       deadlineDays: typeof o.deadlineDays === "number" ? o.deadlineDays : 7,
+      scoreTarget,
       ...verifyFieldsFromParsed(v),
     };
   });
@@ -398,6 +437,7 @@ function serializeTasks(rows: TaskRow[], scope: "game" | "global" | "commercial"
       points: r.points,
       penalty: r.penalty,
       deadlineDays: r.deadlineDays,
+      scoreTarget: r.scoreTarget,
       verify: rowToVerifyPayload(r),
     }));
 }
@@ -413,10 +453,13 @@ export default function BoardEdgeNew() {
   const [campaignTitle, setCampaignTitle] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [assetUrl, setAssetUrl] = useState("");
-  const [gifts, setGifts] = useState<EdgeGiftTemplateInput[]>([{ title: "Главный приз", quantity: 1 }]);
+  const [gifts, setGifts] = useState<EdgeGiftTemplateInput[]>([
+    { title: "Главный приз", quantity: 1, winnerDm: { enabled: false, text: "", mediaUrl: null } },
+  ]);
   const [prizePool, setPrizePool] = useState<"all" | "top">("all");
   const [prizeMethod, setPrizeMethod] = useState<"random" | "first">("random");
   const [prizeTopN, setPrizeTopN] = useState(50);
+  const [prizeRankingKind, setPrizeRankingKind] = useState<"primary" | "secondary">("primary");
   const [followRewardXp, setFollowRewardXp] = useState(false);
   const [followDmEnabled, setFollowDmEnabled] = useState(false);
   const [followDmText, setFollowDmText] = useState("");
@@ -424,12 +467,20 @@ export default function BoardEdgeNew() {
   /** Шаблон ЛС с кодами для заданий `ping_invited_users` (плейсхолдеры {{codes}}, {{count}}). */
   const [pingInviteTemplate, setPingInviteTemplate] = useState("");
   const [pingInviteHours, setPingInviteHours] = useState(168);
+  const [pingInviteIssueMode, setPingInviteIssueMode] = useState<
+    "batch_min_count" | "single_per_request" | "one_multi_use"
+  >("batch_min_count");
+  const [pingInviteMultiUseMax, setPingInviteMultiUseMax] = useState(50);
   const [tasksGame, setTasksGame] = useState<TaskRow[]>([]);
   const [tasksGlobal, setTasksGlobal] = useState<TaskRow[]>([]);
   const [tasksCommercial, setTasksCommercial] = useState<TaskRow[]>([]);
   const [drawSummary, setDrawSummary] = useState("");
   const [resetSummary, setResetSummary] = useState("");
   const [endsAt, setEndsAt] = useState("");
+  const [displayAudience, setDisplayAudience] = useState<"self" | "followers" | "public">("public");
+  const [leaderboardPrimaryEnabled, setLeaderboardPrimaryEnabled] = useState(true);
+  const [leaderboardSecondaryEnabled, setLeaderboardSecondaryEnabled] = useState(false);
+  const [lifeSim, setLifeSim] = useState<LifeSimFormState>(DEFAULT_LIFE_SIM_FORM);
 
   const hydratedFor = useRef("");
   const characterFileInputRef = useRef<HTMLInputElement>(null);
@@ -442,14 +493,27 @@ export default function BoardEdgeNew() {
     retry: 1,
   });
 
+  const lifeStatsQ = useQuery({
+    queryKey: ["edge", "creator", "life-stats", edgeIdParam],
+    queryFn: () => fetchEdgeCampaignLifeStats(edgeIdParam!),
+    enabled: Boolean(edgeIdParam) && step === 8,
+    staleTime: 20_000,
+  });
+
   useEffect(() => {
     const d = detailQ.data;
     if (!d || hydratedFor.current === d.edgeId) return;
     hydratedFor.current = d.edgeId;
     setCampaignTitle(d.title);
     const parsedGifts = parseGiftTemplatesFromRow(d.giftsJson);
-    setGifts(parsedGifts.length ? parsedGifts : [{ title: "Главный приз", quantity: 1 }]);
+    setGifts(
+      parsedGifts.length
+        ? parsedGifts
+        : [{ title: "Главный приз", quantity: 1, winnerDm: { enabled: false, text: "", mediaUrl: null } }],
+    );
     setFollowRewardXp(d.followRewardEnabled);
+    setLeaderboardPrimaryEnabled(d.leaderboardPrimaryEnabled ?? true);
+    setLeaderboardSecondaryEnabled(d.leaderboardSecondaryEnabled ?? false);
     const root = readCfg(d.configJson);
     const comp = readCfg(root.companion);
     const ch = readCfg(comp.character);
@@ -473,6 +537,8 @@ export default function BoardEdgeNew() {
     if (typeof ptn === "number" && Number.isFinite(ptn)) {
       setPrizeTopN(Math.min(5000, Math.max(1, Math.floor(ptn))));
     }
+    const rk = pr.rankingKind ?? pr.rankingScope;
+    setPrizeRankingKind(rk === "secondary" ? "secondary" : "primary");
     const sch = readCfg(root.schedule);
     setDrawSummary(typeof sch.drawSummary === "string" ? sch.drawSummary : "");
     setResetSummary(typeof sch.leaderboardResetSummary === "string" ? sch.leaderboardResetSummary : "");
@@ -492,20 +558,71 @@ export default function BoardEdgeNew() {
         ? Math.min(720, Math.max(1, Math.floor(pih)))
         : 168,
     );
+    const mode = pid.inviteIssueMode;
+    if (mode === "single_per_request" || mode === "one_multi_use" || mode === "batch_min_count") {
+      setPingInviteIssueMode(mode);
+    } else {
+      setPingInviteIssueMode("batch_min_count");
+    }
+    const mum = pid.multiUseRegistrations;
+    setPingInviteMultiUseMax(
+      typeof mum === "number" && Number.isFinite(mum)
+        ? Math.min(10000, Math.max(2, Math.floor(mum)))
+        : 50,
+    );
     const tp = readCfg(root.taskPresets);
     setTasksGame(readTasks(tp.game, "game"));
     setTasksGlobal(readTasks(tp.global, "global"));
     setTasksCommercial(readTasks(tp.commercial, "commercial"));
+    const daRaw = readCfg(d.configJson).displayAudience;
+    if (daRaw === "self" || daRaw === "followers" || daRaw === "public") {
+      setDisplayAudience(daRaw);
+    } else {
+      setDisplayAudience("public");
+    }
+    setLifeSim(lifeSimFormFromConfigJson(d.configJson));
     const sk = `edgeWizard:${d.edgeId}:step`;
     const saved = sessionStorage.getItem(sk);
     const n = saved ? Number.parseInt(saved, 10) : NaN;
-    setStep(Number.isFinite(n) && n >= 1 && n <= 7 ? n : 1);
+    setStep(Number.isFinite(n) && n >= 1 && n <= STEPS.length - 1 ? n : 1);
   }, [detailQ.data]);
 
   useEffect(() => {
     if (!edgeIdParam) return;
     sessionStorage.setItem(`edgeWizard:${edgeIdParam}:step`, String(step));
   }, [edgeIdParam, step]);
+
+  const resumePrimaryMut = useMutation({
+    mutationFn: async () => {
+      if (!edgeIdParam) return;
+      await patchEdgeCampaign(edgeIdParam, {
+        leaderboardPrimaryPrizeDrawRankingFreezeLifted: true,
+        leaderboardPrimaryFrozenAtClear: true,
+      });
+      void qc.invalidateQueries({ queryKey: ["edge", "my-campaigns"] });
+      void qc.invalidateQueries({ queryKey: ["edge", "creator", "detail", edgeIdParam] });
+    },
+    onSuccess: () => toast({ title: "Сохранено", description: "Основной рейтинг снова начисляет очки." }),
+    onError: (e) => toast({ ...edgeCreatorDestructiveToast(e), variant: "destructive" }),
+  });
+
+  const resumeSecondaryMut = useMutation({
+    mutationFn: async () => {
+      if (!edgeIdParam) return;
+      await patchEdgeCampaign(edgeIdParam, {
+        leaderboardSecondaryPrizeDrawRankingFreezeLifted: true,
+        leaderboardSecondaryFrozenAtClear: true,
+      });
+      void qc.invalidateQueries({ queryKey: ["edge", "my-campaigns"] });
+      void qc.invalidateQueries({ queryKey: ["edge", "creator", "detail", edgeIdParam] });
+    },
+    onSuccess: () =>
+      toast({
+        title: "Сохранено",
+        description: "Дополнительный рейтинг снова начисляет очки (снята пауза по дате приза и ручная заморозка).",
+      }),
+    onError: (e) => toast({ ...edgeCreatorDestructiveToast(e), variant: "destructive" }),
+  });
 
   const createMut = useMutation({
     mutationFn: () => createEdgeCampaignDraft({ title: campaignTitle || "Новая кампания EDGE" }),
@@ -526,20 +643,23 @@ export default function BoardEdgeNew() {
       await patchEdgeCampaign(edgeIdParam, partial);
       void qc.invalidateQueries({ queryKey: ["edge", "my-campaigns"] });
       void qc.invalidateQueries({ queryKey: ["edge", "creator", "detail", edgeIdParam] });
+      void qc.invalidateQueries({ queryKey: ["edge", "creator", "life-stats", edgeIdParam] });
     },
     [edgeIdParam, qc],
   );
 
   const onUploadCharacter = async (file: File | null, inputEl: HTMLInputElement | null) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast({ title: "Нужен файл изображения (PNG, JPEG или WebP)", variant: "destructive" });
+    const looksImage =
+      file.type.startsWith("image/") || /\.(jpe?g|png|gif|webp|hei[cf])$/i.test(file.name || "");
+    if (!looksImage) {
+      toast({ title: "Нужен файл изображения (PNG, JPEG, WebP или HEIC)", variant: "destructive" });
       if (inputEl) inputEl.value = "";
       return;
     }
     setCharacterUploading(true);
     try {
-      const url = await uploadPostMedia(file);
+      const url = await uploadPostMediaImageResized(file, { preserveTransparency: true });
       setAssetUrl(url);
       if (edgeIdParam) {
         await savePatch({ companionCharacter: { assetUrl: url, displayName: displayName.trim() } });
@@ -581,14 +701,29 @@ export default function BoardEdgeNew() {
             assetUrl: assetUrl.trim(),
             displayName: displayName.trim(),
           },
+          companionLifeSimulation: lifeSimFormToPatchPayload(lifeSim),
         });
       }
       if (step === 2) {
-        await savePatch({ giftsTemplates: gifts.filter((g) => g.title.trim()) });
+        await savePatch({
+          giftsTemplates: gifts
+            .filter((g) => g.title.trim())
+            .map((g) => ({
+              ...g,
+              drawAt: g.drawAt === null ? null : g.drawAt?.trim() ? g.drawAt : undefined,
+              leaderboardScopes: g.leaderboardScopes?.length ? g.leaderboardScopes : undefined,
+              winnerDm: g.winnerDm ?? { enabled: false, text: "", mediaUrl: null },
+            })),
+        });
       }
       if (step === 3) {
         await savePatch({
-          prizeRules: { pool: prizePool, method: prizeMethod, topN: prizeTopN },
+          prizeRules: {
+            pool: prizePool,
+            method: prizeMethod,
+            topN: prizeTopN,
+            rankingKind: prizeRankingKind,
+          },
         });
       }
       if (step === 4) {
@@ -602,6 +737,10 @@ export default function BoardEdgeNew() {
           pingInviteDm: {
             template: pingInviteTemplate.trim(),
             codeExpiresInHours: pingInviteHours,
+            inviteIssueMode: pingInviteIssueMode,
+            ...(pingInviteIssueMode === "one_multi_use"
+              ? { multiUseRegistrations: pingInviteMultiUseMax }
+              : {}),
           },
         });
       }
@@ -621,6 +760,13 @@ export default function BoardEdgeNew() {
             leaderboardResetSummary: resetSummary.trim(),
             endsAt: endsAt.trim() ? new Date(`${endsAt}T23:59:59`).toISOString() : null,
           },
+        });
+      }
+      if (step === 7) {
+        await savePatch({
+          displayAudience,
+          leaderboardPrimaryEnabled,
+          leaderboardSecondaryEnabled,
         });
       }
       setStep((s) => Math.min(STEPS.length - 1, s + 1));
@@ -720,11 +866,36 @@ export default function BoardEdgeNew() {
       </header>
 
       <div className="border-b border-border/30 uix-content-x py-2">
-        <p className="uix-text-caption text-muted-foreground">
-          Шаг {step + 1}/{STEPS.length}: {STEPS[step]}
-        </p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="uix-text-caption text-muted-foreground">
+            Шаг {step + 1}/{STEPS.length}: {STEPS[step]}
+          </p>
+          {edgeIdParam ? (
+            <span
+              className="inline-flex max-w-full items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[11px] font-medium text-foreground"
+              title={`Видимость поста с EDGE в ленте и профиле: ${EDGE_POST_VISIBILITY_LABEL[displayAudience]}`}
+            >
+              Пост с EDGE: {EDGE_POST_VISIBILITY_SHORT[displayAudience]}
+            </span>
+          ) : null}
+        </div>
         {edgeIdParam ? (
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground break-all">edgeId: {edgeIdParam}</p>
+          <div className="mt-1 space-y-0.5">
+            <p className="font-mono text-[10px] text-muted-foreground break-all">edgeId: {edgeIdParam}</p>
+            {detailQ.isLoading && !detailQ.data ? (
+              <p className="uix-text-caption text-muted-foreground">Видимость поста с EDGE: загрузка…</p>
+            ) : (
+              <p className="uix-text-caption text-foreground">
+                <span className="text-muted-foreground">Сейчас в настройках: </span>
+                <span className="font-medium">{EDGE_POST_VISIBILITY_LABEL[displayAudience]}</span>
+                <span className="text-muted-foreground">
+                  {step === 7
+                    ? " — после «Далее» настройка сохранится на сервер; также можно сменить из меню поста ⋯"
+                    : ` — сменить: шаг «${STEPS[7]}» или меню поста ⋯ после публикации`}
+                </span>
+              </p>
+            )}
+          </div>
         ) : null}
       </div>
 
@@ -742,9 +913,16 @@ export default function BoardEdgeNew() {
                 maxLength={200}
               />
             </div>
-            <p className="uix-text-caption text-muted-foreground">
-              Тип: <strong>Персонаж</strong> (единственный вариант в каталоге). После создания черновика
-              загрузите PNG и настройте призы.
+            <p className="uix-text-caption text-muted-foreground leading-snug">
+              Тип: <strong>Персонаж</strong>. Нужна игра на деньги и рейтинг без тамагочи —{" "}
+              <button
+                type="button"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+                onClick={() => setLocation("/board/edge/new-money")}
+              >
+                EDGE MONEY
+              </button>
+              .
             </p>
           </div>
         ) : null}
@@ -813,10 +991,212 @@ export default function BoardEdgeNew() {
                   </div>
                 ) : (
                   <p className="uix-text-caption text-muted-foreground">
-                    PNG с альфа-каналом предпочтителен. Файл загрузится на сервер сразу после выбора.
+                    Прозрачный фон PNG сохраняется при загрузке и при уменьшении большого файла. На сервер файл уходит сразу
+                    после выбора.
                   </p>
                 )}
               </div>
+            </div>
+
+            <div className="mt-2 space-y-4 rounded-2xl border border-border/60 bg-card p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">Рейтинг жизни</p>
+                  <p className="mt-0.5 uix-text-caption text-muted-foreground leading-snug">
+                    Запросы по очереди (покормить, туалет, игра, успокоить), окно «вовремя», бонусы и штрафы. Игроки
+                    видят это в компаньоне рядом с персонажем.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Label htmlFor="edge-life-sim-enabled" className="uix-text-caption text-muted-foreground">
+                    Включено
+                  </Label>
+                  <Switch
+                    id="edge-life-sim-enabled"
+                    checked={lifeSim.enabled}
+                    onCheckedChange={(v) => setLifeSim((s) => ({ ...s, enabled: v }))}
+                    aria-label="Включить рейтинг жизни персонажа"
+                  />
+                </div>
+              </div>
+              {lifeSim.enabled ? (
+                <div className="space-y-3 border-t border-border/40 pt-4">
+                  <p className="text-xs font-medium text-foreground">Шкала и старт</p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Минимум</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        className="tabular-nums"
+                        value={lifeSim.lifeMin}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({ ...s, lifeMin: Number.isFinite(n) ? n : s.lifeMin }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Максимум</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        className="tabular-nums"
+                        value={lifeSim.lifeMax}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({ ...s, lifeMax: Number.isFinite(n) ? n : s.lifeMax }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Старт для новых</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        className="tabular-nums"
+                        value={lifeSim.lifeInitial}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({ ...s, lifeInitial: Number.isFinite(n) ? n : s.lifeInitial }));
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs font-medium text-foreground">Интервалы новых запросов (часы)</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {(
+                      [
+                        ["intervalFeed", "Покормить"] as const,
+                        ["intervalToilet", "Туалет"] as const,
+                        ["intervalPlay", "Поиграть"] as const,
+                        ["intervalCalm", "Успокоить"] as const,
+                      ] as const
+                    ).map(([key, label]) => (
+                      <div key={key} className="space-y-1.5">
+                        <Label className="text-xs">{label}</Label>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.25"
+                          min={0.25}
+                          className="tabular-nums"
+                          value={lifeSim[key]}
+                          onChange={(e) => {
+                            const n = Number.parseFloat(e.target.value);
+                            setLifeSim((s) => ({ ...s, [key]: Number.isFinite(n) ? n : s[key] }));
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs font-medium text-foreground">Окно и баллы</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Окно «вовремя» (ч)</Label>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.25"
+                        min={0.25}
+                        className="tabular-nums"
+                        value={lifeSim.responseWindowHours}
+                        onChange={(e) => {
+                          const n = Number.parseFloat(e.target.value);
+                          setLifeSim((s) => ({
+                            ...s,
+                            responseWindowHours: Number.isFinite(n) ? n : s.responseWindowHours,
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Лимит очереди на тип</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={50}
+                        className="tabular-nums"
+                        value={lifeSim.maxQueuePerKind}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({
+                            ...s,
+                            maxQueuePerKind: Number.isFinite(n) ? n : s.maxQueuePerKind,
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Бонус вовремя (+ к жизни)</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        className="tabular-nums"
+                        value={lifeSim.onTimeBonus}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({ ...s, onTimeBonus: Number.isFinite(n) ? n : s.onTimeBonus }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Бонус за действие в очереди</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        className="tabular-nums"
+                        value={lifeSim.queueFulfillBonus}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({
+                            ...s,
+                            queueFulfillBonus: Number.isFinite(n) ? n : s.queueFulfillBonus,
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Штраф за просрочку</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        className="tabular-nums"
+                        value={lifeSim.missedPenalty}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({
+                            ...s,
+                            missedPenalty: Number.isFinite(n) ? n : s.missedPenalty,
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Бонус «настроение макс.»</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        className="tabular-nums"
+                        value={lifeSim.maxMoodBonus}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          setLifeSim((s) => ({ ...s, maxMoodBonus: Number.isFinite(n) ? n : s.maxMoodBonus }));
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="uix-text-caption text-muted-foreground border-t border-border/40 pt-3">
+                  Пока выключено — у участников не копится очередь запросов и не считается отдельный рейтинг жизни.
+                </p>
+              )}
             </div>
           </div>
         ) : null}
@@ -859,6 +1239,63 @@ export default function BoardEdgeNew() {
                     );
                   }}
                 />
+                <div>
+                  <Label className="text-xs">Дата и время розыгрыша (по местному времени)</Label>
+                  <Input
+                    type="datetime-local"
+                    className="mt-1"
+                    value={isoToDatetimeLocalValue(g.drawAt ?? undefined)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setGifts((prev) =>
+                        prev.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                drawAt: v ? new Date(v).toISOString() : undefined,
+                              }
+                            : x,
+                        ),
+                      );
+                    }}
+                    aria-label={`Дата розыгрыша приза ${i + 1}`}
+                  />
+                  <p className="mt-1 uix-text-caption text-muted-foreground leading-snug">
+                    После этого момента начисление очков в отмеченные рейтинги останавливается, пока вы не нажмёте
+                    «Возобновить начисление» на шаге «Кто видит».
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-foreground">Пауза рейтингов после розыгрыша</span>
+                  <div className="flex flex-wrap gap-3">
+                    {(["primary", "secondary"] as const).map((scope) => (
+                      <label key={scope} className="flex items-center gap-2 uix-text-caption">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={g.leaderboardScopes?.includes(scope) ?? false}
+                          onChange={(e) => {
+                            setGifts((prev) =>
+                              prev.map((x, j) => {
+                                if (j !== i) return x;
+                                const cur = new Set(x.leaderboardScopes ?? []);
+                                if (e.target.checked) cur.add(scope);
+                                else cur.delete(scope);
+                                const arr = Array.from(cur) as Array<"primary" | "secondary">;
+                                return { ...x, leaderboardScopes: arr.length ? arr : undefined };
+                              }),
+                            );
+                          }}
+                          aria-label={scope === "primary" ? "Пауза основного рейтинга" : "Пауза дополнительного рейтинга"}
+                        />
+                        {scope === "primary" ? "Основной рейтинг" : "Дополнительный"}
+                      </label>
+                    ))}
+                  </div>
+                  <p className="uix-text-caption text-muted-foreground leading-snug">
+                    Если дата розыгрыша указана и галочек нет — пауза для обоих рейтингов.
+                  </p>
+                </div>
                 <TapScaleButton
                   type="button"
                   subtle
@@ -872,8 +1309,8 @@ export default function BoardEdgeNew() {
                       const f = inp.files?.[0];
                       if (!f) return;
                       try {
-                        const url = await uploadPostMedia(f);
                         const isVideo = f.type.startsWith("video/");
+                        const url = isVideo ? await uploadPostMedia(f) : await uploadPostMediaImageResized(f);
                         setGifts((prev) =>
                           prev.map((x, j) =>
                             j === i
@@ -900,6 +1337,134 @@ export default function BoardEdgeNew() {
                   <ImagePlus className="h-4 w-4" />
                   Картинка / видео
                 </TapScaleButton>
+                <div className="rounded-xl border border-border/40 bg-muted/5 p-3 space-y-2">
+                  <p className="text-xs font-medium text-foreground">ЛС победителю (после розыгрыша)</p>
+                  <p className="uix-text-caption text-muted-foreground leading-snug">
+                    Когда вы нажмёте «Подвести итоги» в списке кампаний, победителям уйдёт сообщение от вашего имени. Можно
+                    использовать плейсхолдеры <code className="rounded bg-muted px-1">{"{{giftLabel}}"}</code> и{" "}
+                    <code className="rounded bg-muted px-1">{"{{campaignTitle}}"}</code>.
+                  </p>
+                  <label className="flex items-center gap-2 uix-text-caption">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-input"
+                      checked={g.winnerDm?.enabled ?? false}
+                      onChange={(e) => {
+                        setGifts((prev) =>
+                          prev.map((x, j) =>
+                            j === i
+                              ? {
+                                  ...x,
+                                  winnerDm: {
+                                    enabled: e.target.checked,
+                                    text: x.winnerDm?.text ?? "",
+                                    mediaUrl: x.winnerDm?.mediaUrl ?? null,
+                                  },
+                                }
+                              : x,
+                          ),
+                        );
+                      }}
+                    />
+                    Отправлять ЛС победителю этого приза
+                  </label>
+                  <Textarea
+                    value={g.winnerDm?.text ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setGifts((prev) =>
+                        prev.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                winnerDm: {
+                                  enabled: x.winnerDm?.enabled ?? false,
+                                  text: v,
+                                  mediaUrl: x.winnerDm?.mediaUrl ?? null,
+                                },
+                              }
+                            : x,
+                        ),
+                      );
+                    }}
+                    placeholder="Например: Вы выиграли {{giftLabel}}! Напишите мне в ответ, чтобы забрать приз."
+                    rows={3}
+                    disabled={!(g.winnerDm?.enabled ?? false)}
+                    className="text-sm"
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TapScaleButton
+                      type="button"
+                      subtle
+                      haptic
+                      disabled={!(g.winnerDm?.enabled ?? false)}
+                      className="inline-flex items-center gap-1 uix-text-caption"
+                      onClick={() => {
+                        const inp = document.createElement("input");
+                        inp.type = "file";
+                        inp.accept = "image/*,video/*";
+                        inp.onchange = async () => {
+                          const f = inp.files?.[0];
+                          if (!f) return;
+                          try {
+                            const isVideo = f.type.startsWith("video/");
+                            const url = isVideo ? await uploadPostMedia(f) : await uploadPostMediaImageResized(f);
+                            setGifts((prev) =>
+                              prev.map((x, j) =>
+                                j === i
+                                  ? {
+                                      ...x,
+                                      winnerDm: {
+                                        enabled: x.winnerDm?.enabled ?? true,
+                                        text: x.winnerDm?.text ?? "",
+                                        mediaUrl: url,
+                                      },
+                                    }
+                                  : x,
+                              ),
+                            );
+                            toast({ title: "Вложение для ЛС победителя загружено" });
+                          } catch (e) {
+                            toast({
+                              title: e instanceof Error ? e.message : "Ошибка",
+                              variant: "destructive",
+                            });
+                          }
+                        };
+                        inp.click();
+                      }}
+                    >
+                      <ImagePlus className="h-4 w-4" />
+                      Медиа к ЛС победителю
+                    </TapScaleButton>
+                    {(g.winnerDm?.mediaUrl ?? "").trim() ? (
+                      <TapScaleButton
+                        type="button"
+                        subtle
+                        haptic
+                        className="uix-text-caption text-muted-foreground"
+                        onClick={() =>
+                          setGifts((prev) =>
+                            prev.map((x, j) =>
+                              j === i
+                                ? {
+                                    ...x,
+                                    winnerDm: {
+                                      enabled: x.winnerDm?.enabled ?? false,
+                                      text: x.winnerDm?.text ?? "",
+                                      mediaUrl: null,
+                                    },
+                                  }
+                                : x,
+                            ),
+                          )
+                        }
+                      >
+                        Убрать вложение
+                      </TapScaleButton>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             ))}
             <TapScaleButton
@@ -907,7 +1472,12 @@ export default function BoardEdgeNew() {
               haptic
               subtle
               className="inline-flex items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2 uix-text-caption"
-              onClick={() => setGifts((p) => [...p, { title: "", quantity: 1 }])}
+              onClick={() =>
+                setGifts((p) => [
+                  ...p,
+                  { title: "", quantity: 1, winnerDm: { enabled: false, text: "", mediaUrl: null } },
+                ])
+              }
             >
               <Plus className="h-4 w-4" />
               Добавить приз
@@ -946,6 +1516,24 @@ export default function BoardEdgeNew() {
               </div>
             ) : null}
             <div>
+              <Label>По какому рейтингу строить топ</Label>
+              <select
+                className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={prizeRankingKind}
+                onChange={(e) => setPrizeRankingKind(e.target.value as "primary" | "secondary")}
+                disabled={prizePool !== "top"}
+                aria-label="Рейтинг для топа при розыгрыше"
+              >
+                <option value="primary">Основной</option>
+                <option value="secondary" disabled={!leaderboardSecondaryEnabled}>
+                  Дополнительный{!leaderboardSecondaryEnabled ? " (включите на шаге «Кто видит»)" : ""}
+                </option>
+              </select>
+              <p className="mt-1 uix-text-caption text-muted-foreground leading-snug">
+                Для пула «все участники» порядок — по дате входа в игру; рейтинг нужен только для варианта «топ N».
+              </p>
+            </div>
+            <div>
               <Label>Как выбирать</Label>
               <select
                 className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -961,14 +1549,29 @@ export default function BoardEdgeNew() {
 
         {step === 4 ? (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-border/50 bg-muted/10 px-3 py-2">
-              <p className="uix-text-caption font-medium text-foreground">Сообщение за подписку (авто-ЛС)</p>
-              <p className="mt-1 uix-text-caption text-muted-foreground">
-                Уходит от вашего имени в личку человеку, который только что подписался и получил XP за эту кампанию.
-                Включите «Авто-сообщение…», введите текст и при необходимости прикрепите медиа. Без галочки и текста письма
-                не будет.
-              </p>
-            </div>
+            <p className="uix-text-caption text-muted-foreground leading-snug">
+              Награда за подписку и опциональное авто-ЛС новому подписчику — настройки ниже.
+            </p>
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <TapScaleButton
+                  type="button"
+                  subtle
+                  haptic
+                  className="flex min-h-[var(--uix-touch-min)] w-full items-center justify-between gap-2 rounded-xl border border-border/50 bg-muted/10 px-3 py-2 uix-text-caption font-medium text-foreground data-[state=open]:[&_svg]:rotate-180"
+                  aria-label="Справка про авто-ЛС за подписку"
+                >
+                  <span>Как работает сообщение за подписку</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" aria-hidden />
+                </TapScaleButton>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="overflow-hidden pt-2">
+                <div className="rounded-xl border border-border/50 bg-muted/10 px-3 py-2 uix-text-caption text-muted-foreground leading-snug">
+                  Письмо уходит от вашего имени в личку после подписки и начисления XP за кампанию. Включите «Авто-сообщение…»,
+                  введите текст и при необходимости медиа. Без галочки и текста письма не будет.
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
             <label className="flex items-center gap-2 uix-text-list-secondary">
               <input
                 type="checkbox"
@@ -1006,7 +1609,8 @@ export default function BoardEdgeNew() {
                   const f = inp.files?.[0];
                   if (!f) return;
                   try {
-                    const url = await uploadPostMedia(f);
+                    const isVideo = f.type.startsWith("video/");
+                    const url = isVideo ? await uploadPostMedia(f) : await uploadPostMediaImageResized(f);
                     setFollowDmMediaUrl(url);
                     toast({ title: "Вложение для ЛС загружено" });
                   } catch (e) {
@@ -1026,16 +1630,77 @@ export default function BoardEdgeNew() {
               <p className="uix-text-caption font-medium text-foreground">
                 ЛС с кодами для задания «пригласить в PING»
               </p>
-              <p className="uix-text-caption text-muted-foreground">
-                У каждого участника свой набор кодов: при нажатии «Коды в ЛС» в игре сервер создаёт новые одноразовые коды и
-                шлёт одно сообщение этому человеку. Число кодов = порог в задании («мин. кол-во»). Если в тексте нет{" "}
-                <code className="rounded bg-muted px-1">{"{{codes}}"}</code>, список кодов всё равно будет добавлен в конец
-                сообщения. Плейсхолдеры: <code className="rounded bg-muted px-1">{"{{count}}"}</code>,{" "}
+              <p className="uix-text-caption text-muted-foreground leading-snug">
+                Шаблон сообщения и режим выдачи — ниже. Плейсхолдеры:{" "}
                 <code className="rounded bg-muted px-1">{"{{codes}}"}</code>,{" "}
-                <code className="rounded bg-muted px-1">{"{{appLink}}"}</code> (см.{" "}
-                <code className="rounded bg-muted px-1">PING_INVITE_APP_URL</code> на сервере). Пустой шаблон — текст по
-                умолчанию с явной фразой про коды.
+                <code className="rounded bg-muted px-1">{"{{count}}"}</code> и др.
               </p>
+              <Collapsible>
+                <CollapsibleTrigger asChild>
+                  <TapScaleButton
+                    type="button"
+                    subtle
+                    haptic
+                    className="flex min-h-[var(--uix-touch-min)] w-full items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/50 px-2.5 py-1.5 uix-text-caption font-medium text-foreground data-[state=open]:[&_svg]:rotate-180"
+                    aria-label="Справка по кодам приглашений"
+                  >
+                    <span>Как устроены коды и плейсхолдеры</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" aria-hidden />
+                  </TapScaleButton>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden pt-2">
+                  <p className="uix-text-caption text-muted-foreground leading-snug">
+                    Коды в той же системе, что обычные приглашения PING; списание использований атомарное. «Кто пригласил»
+                    — сам участник, не автор кампании. Между запросами пака — пауза ~45 сек. Плейсхолдеры:{" "}
+                    <code className="rounded bg-muted px-1">{"{{count}}"}</code>,{" "}
+                    <code className="rounded bg-muted px-1">{"{{codes}}"}</code>,{" "}
+                    <code className="rounded bg-muted px-1">{"{{maxUses}}"}</code>,{" "}
+                    <code className="rounded bg-muted px-1">{"{{appLink}}"}</code> (
+                    <code className="rounded bg-muted px-1">PING_INVITE_APP_URL</code>). Пустой шаблон — готовый текст от сервера.
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
+              <div>
+                <Label htmlFor="ping-invite-issue-mode">Режим выдачи кодов</Label>
+                <select
+                  id="ping-invite-issue-mode"
+                  className="mt-1.5 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={pingInviteIssueMode}
+                  onChange={(e) =>
+                    setPingInviteIssueMode(
+                      e.target.value as "batch_min_count" | "single_per_request" | "one_multi_use",
+                    )
+                  }
+                  aria-label="Режим выдачи пригласительных кодов"
+                >
+                  <option value="batch_min_count">
+                    Пакет одноразовых за раз (сколько кодов = «мин. кол-во» в задании, не больше 50)
+                  </option>
+                  <option value="single_per_request">
+                    По одному одноразовому коду за запрос (запрашивать снова можно без лимита по числу кодов)
+                  </option>
+                  <option value="one_multi_use">Один код на несколько регистраций (лимит ниже)</option>
+                </select>
+              </div>
+              {pingInviteIssueMode === "one_multi_use" ? (
+                <div>
+                  <Label htmlFor="ping-invite-multi-max">
+                    Сколько человек могут зарегистрироваться одним кодом (2–10 000)
+                  </Label>
+                  <Input
+                    id="ping-invite-multi-max"
+                    type="number"
+                    min={2}
+                    max={10000}
+                    className="mt-1.5"
+                    value={pingInviteMultiUseMax}
+                    onChange={(e) => {
+                      const n = Number.parseInt(e.target.value, 10);
+                      setPingInviteMultiUseMax(Number.isFinite(n) ? Math.min(10000, Math.max(2, n)) : 50);
+                    }}
+                  />
+                </div>
+              ) : null}
               <Textarea
                 value={pingInviteTemplate}
                 onChange={(e) => setPingInviteTemplate(e.target.value)}
@@ -1064,32 +1729,67 @@ export default function BoardEdgeNew() {
 
         {step === 5 ? (
           <>
-            <div className="rounded-2xl border border-border/50 bg-muted/20 p-3 uix-text-caption text-muted-foreground space-y-2">
-              <p className="font-medium text-foreground">Скрипты заданий</p>
-              <p>
-                В блоке «игра» — действия и счётчики персонажа в EDGE (заходы, тапы, кормления, туалет, поиграть,
-                успокоить, погладить). В «глобальных» и «коммерческих» — активность во всём PING: рефералы, посты,
-                профиль, комментарии и реакции. Порог задаётся числом в поле ниже (дней подряд, раз за день, всего
-                приглашений и т.д.).
+            <div className="rounded-2xl border border-border/50 bg-muted/20 p-3 space-y-2">
+              <p className="text-sm font-medium text-foreground">Задания и рейтинги</p>
+              <p className="uix-text-caption text-muted-foreground leading-snug">
+                В каждой карточке выберите поле «Рейтинг для очков»: основной или дополнительный — так участник видит
+                задания отдельно на экране «Задания» и очки попадают в нужную таблицу. По умолчанию: блок «игра» →
+                основной; «глобальные» и «коммерческие» → дополнительный. Порог «сколько раз / дней» — в полях скрипта.
               </p>
-              <div className="rounded-xl border border-border/50 bg-background/70 p-2.5 space-y-1.5">
-                <p className="text-foreground font-medium">Что означают числа в карточке задания</p>
-                <p>
-                  <strong>XP за выполнение</strong> — сколько очков получит участник после прохождения задания.
-                </p>
-                <p>
-                  <strong>Штраф XP</strong> — сколько очков снимется при штрафе (обычно 0, если штрафы не нужны).
-                </p>
-                <p>
-                  <strong>Срок, дн.</strong> — за сколько дней нужно закрыть задание после его старта.
-                </p>
-              </div>
+              <Collapsible>
+                <CollapsibleTrigger asChild>
+                  <TapScaleButton
+                    type="button"
+                    subtle
+                    haptic
+                    className="flex min-h-[var(--uix-touch-min)] w-full items-center justify-between gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2 uix-text-caption font-medium text-foreground data-[state=open]:[&_svg]:rotate-180"
+                    aria-label="Развернуть справку по заданиям"
+                  >
+                    <span>Справка: блоки, поля XP, срок</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" aria-hidden />
+                  </TapScaleButton>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden pt-1">
+                  <div className="mt-2 space-y-2 rounded-xl border border-border/50 bg-background/70 p-2.5 uix-text-caption text-muted-foreground">
+                    <p>
+                      В блоке «игра» — действия и счётчики персонажа в EDGE (заходы, тапы, кормления, туалет, поиграть,
+                      успокоить, погладить). В «глобальных» и «коммерческих» — активность во всём PING: рефералы, посты,
+                      профиль, комментарии и реакции.
+                    </p>
+                    <p className="text-foreground font-medium">Числа в карточке задания</p>
+                    <ul className="list-disc space-y-1 pl-4">
+                      <li>
+                        <strong className="text-foreground">XP за выполнение</strong> — награда после выполнения условия.
+                      </li>
+                      <li>
+                        <strong className="text-foreground">Штраф XP</strong> — списание при штрафе (часто 0).
+                      </li>
+                      <li>
+                        <strong className="text-foreground">Срок, дн.</strong> — за сколько дней закрыть задание после старта.
+                      </li>
+                    </ul>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
-            <TaskSection scope="game" title="Задания игры (персонаж)" rows={tasksGame} setRows={setTasksGame} />
-            <TaskSection scope="global" title="Глобальные задания" rows={tasksGlobal} setRows={setTasksGlobal} />
+            <TaskSection
+              scope="game"
+              title="Задания игры (персонаж)"
+              scoreHint="По умолчанию очки — в основной рейтинг; при необходимости смените в карточке."
+              rows={tasksGame}
+              setRows={setTasksGame}
+            />
+            <TaskSection
+              scope="global"
+              title="Глобальные задания"
+              scoreHint="По умолчанию — дополнительный рейтинг; можно явно выбрать основной, если задание про игру."
+              rows={tasksGlobal}
+              setRows={setTasksGlobal}
+            />
             <TaskSection
               scope="commercial"
               title="Коммерческие задания"
+              scoreHint="По умолчанию — дополнительный рейтинг; переключатель в каждой карточке."
               rows={tasksCommercial}
               setRows={setTasksCommercial}
             />
@@ -1098,15 +1798,39 @@ export default function BoardEdgeNew() {
 
         {step === 6 ? (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 px-3 py-2">
-              <p className="uix-text-caption font-medium text-foreground">Важно про автоматику</p>
-              <p className="mt-1 uix-text-caption text-muted-foreground">
-                Поля ниже сейчас используются как текстовые подсказки для участников. Система не парсит слова
-                «суббота/воскресенье» и не запускает авто-розыгрыш или авто-сброс рейтинга по этим строкам.
-              </p>
-            </div>
+            <p className="uix-text-caption text-muted-foreground leading-snug">
+              Подсказки для участников и дата окончания. Текстовые поля ниже{" "}
+              <span className="text-foreground font-medium">не</span> запускают розыгрыш по расписанию — только дата
+              блокирует игру.
+            </p>
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <TapScaleButton
+                  type="button"
+                  subtle
+                  haptic
+                  className="flex min-h-[var(--uix-touch-min)] w-full items-center justify-between gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-2 uix-text-caption font-medium text-foreground data-[state=open]:[&_svg]:rotate-180 dark:border-amber-400/30 dark:bg-amber-400/10"
+                  aria-label="Подробнее про автоматику сроков"
+                >
+                  <span>Подробнее: что считается автоматикой</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" aria-hidden />
+                </TapScaleButton>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="overflow-hidden pt-2">
+                <div className="rounded-xl border border-border/50 bg-muted/15 px-3 py-2 uix-text-caption text-muted-foreground space-y-2">
+                  <p>
+                    Строки «итоги по субботам» и «сброс по воскресеньям» — только текст в UI. Парсера дат нет, авто-draw и
+                    авто-сброс рейтинга по ним не выполняются.
+                  </p>
+                  <p>
+                    Розыгрыш — отдельное действие в списке кампаний. Единственное поле с реальной блокировкой после наступления
+                    даты — «Дата завершения кампании».
+                  </p>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
             <div>
-              <Label htmlFor="draw-hint">Текст про подведение итогов (только для отображения)</Label>
+              <Label htmlFor="draw-hint">Текст про подведение итогов</Label>
               <Input
                 id="draw-hint"
                 value={drawSummary}
@@ -1114,12 +1838,9 @@ export default function BoardEdgeNew() {
                 placeholder="Например: Итоги публикуем по субботам в 20:00"
                 className="mt-1.5"
               />
-              <p className="mt-1 uix-text-caption text-muted-foreground">
-                Это текст в интерфейсе. Сам розыгрыш запускается отдельно (ручной draw через админ-поток).
-              </p>
             </div>
             <div>
-              <Label htmlFor="reset-hint">Текст про сброс рейтинга (только для отображения)</Label>
+              <Label htmlFor="reset-hint">Текст про сброс рейтинга</Label>
               <Input
                 id="reset-hint"
                 value={resetSummary}
@@ -1127,9 +1848,6 @@ export default function BoardEdgeNew() {
                 placeholder="Например: Рейтинг обновляем по воскресеньям"
                 className="mt-1.5"
               />
-              <p className="mt-1 uix-text-caption text-muted-foreground">
-                Это тоже только подсказка для людей. Автоматический reset по расписанию сейчас не включён.
-              </p>
             </div>
             <div>
               <Label htmlFor="ends">Дата завершения кампании</Label>
@@ -1140,14 +1858,152 @@ export default function BoardEdgeNew() {
                 onChange={(e) => setEndsAt(e.target.value)}
                 className="mt-1.5"
               />
-              <p className="mt-1 uix-text-caption text-muted-foreground">
-                Это единственное поле со встроенной автоматикой: после даты участия/действия блокируются.
+              <p className="mt-1 uix-text-caption text-muted-foreground leading-snug">
+                После этой даты участие и действия в кампании блокируются.
               </p>
             </div>
           </div>
         ) : null}
 
         {step === 7 ? (
+          <div className="space-y-4">
+            <div className="space-y-3 rounded-2xl border border-border/60 bg-card p-3">
+              <p className="text-sm font-medium text-foreground">Рейтинги в кампании</p>
+              <p className="uix-text-caption text-muted-foreground leading-snug">
+                Какие таблицы очков показать в компаньоне. Обе включены — две вкладки лидерборда. Какое задание в какой
+                рейтинг идёт, задаётся на шаге «Задания» в поле «Рейтинг для очков» у каждой карточки.
+              </p>
+              <label className="flex items-start justify-between gap-3 rounded-xl border border-border/60 px-3 py-2.5">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">Основной рейтинг</span>
+                  <span className="mt-0.5 block uix-text-caption text-muted-foreground leading-snug">
+                    Тапы, уход, уровень и задания, у которых на шаге «Задания» выбран «основной» рейтинг.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4"
+                  checked={leaderboardPrimaryEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setLeaderboardPrimaryEnabled(next);
+                    if (!next && !leaderboardSecondaryEnabled) setLeaderboardSecondaryEnabled(true);
+                  }}
+                  aria-label="Включить основной рейтинг"
+                />
+              </label>
+              <label className="flex items-start justify-between gap-3 rounded-xl border border-border/60 px-3 py-2.5">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">Дополнительный рейтинг</span>
+                  <span className="mt-0.5 block uix-text-caption text-muted-foreground leading-snug">
+                    На шаге «Задания» отметьте у карточки «дополнительный» рейтинг — тогда XP за это задание попадёт
+                    сюда (рефералы, лента, комментарии, реакции и т.д.).
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4"
+                  checked={leaderboardSecondaryEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setLeaderboardSecondaryEnabled(next);
+                    if (!next && !leaderboardPrimaryEnabled) setLeaderboardPrimaryEnabled(true);
+                  }}
+                  aria-label="Включить дополнительный рейтинг"
+                />
+              </label>
+              {detailQ.data?.leaderboardPrimaryFrozenEffective ? (
+                <div
+                  className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 dark:border-amber-400/35 dark:bg-amber-400/10"
+                  role="status"
+                >
+                  <p className="text-sm text-foreground">
+                    Основной рейтинг на паузе: наступила дата розыгрыша приза и/или выставлена ручная заморозка.
+                    Кнопка снимает оба варианта.
+                  </p>
+                  <TapScaleButton
+                    type="button"
+                    haptic
+                    className="mt-2 min-h-[var(--uix-touch-min)] rounded-lg border border-border bg-background px-3 py-2 uix-text-caption font-medium"
+                    disabled={resumePrimaryMut.isPending || !edgeIdParam}
+                    onClick={() => resumePrimaryMut.mutate()}
+                    aria-label="Возобновить начисление основного рейтинга"
+                  >
+                    {resumePrimaryMut.isPending ? "Сохранение…" : "Возобновить начисление (основной)"}
+                  </TapScaleButton>
+                </div>
+              ) : null}
+              {detailQ.data?.leaderboardSecondaryFrozenEffective ? (
+                <div
+                  className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 dark:border-amber-400/35 dark:bg-amber-400/10"
+                  role="status"
+                >
+                  <p className="text-sm text-foreground">
+                    Дополнительный рейтинг на паузе: дата розыгрыша и/или ручная заморозка. Кнопка снимает оба
+                    варианта.
+                  </p>
+                  <TapScaleButton
+                    type="button"
+                    haptic
+                    className="mt-2 min-h-[var(--uix-touch-min)] rounded-lg border border-border bg-background px-3 py-2 uix-text-caption font-medium"
+                    disabled={resumeSecondaryMut.isPending || !edgeIdParam}
+                    onClick={() => resumeSecondaryMut.mutate()}
+                    aria-label="Возобновить начисление дополнительного рейтинга"
+                  >
+                    {resumeSecondaryMut.isPending ? "Сохранение…" : "Возобновить начисление (дополнительный)"}
+                  </TapScaleButton>
+                </div>
+              ) : null}
+            </div>
+            <p className="text-sm font-medium text-foreground">Кому показывать пост с EDGE</p>
+            <p className="uix-text-caption text-muted-foreground">
+              Настройка влияет на карточку в профиле и на попадание в общую ленту. Пост с кампанией всё равно нужно
+              опубликовать отдельно.
+            </p>
+            <div className="space-y-2 rounded-2xl border border-border/60 bg-card p-3">
+              {(
+                [
+                  {
+                    value: "self" as const,
+                    title: "Только себе",
+                    hint: "Видите вы в своём профиле. Другие не увидят пост с игрой и не откроют компаньон по ссылке.",
+                  },
+                  {
+                    value: "followers" as const,
+                    title: "Только подписчикам",
+                    hint: "Видят подписчики в вашем профиле и в общей ленте. Остальные — нет.",
+                  },
+                  {
+                    value: "public" as const,
+                    title: "Всем в общей ленте",
+                    hint: "Как обычный публичный пост: все видят в ленте и в профиле (если пост не скрыт настройками самого поста).",
+                  },
+                ] as const
+              ).map((opt) => (
+                <label
+                  key={opt.value}
+                  className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${
+                    displayAudience === opt.value ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/30"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="edge-display-audience"
+                    className="mt-1 h-4 w-4 shrink-0"
+                    checked={displayAudience === opt.value}
+                    onChange={() => setDisplayAudience(opt.value)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">{opt.title}</span>
+                    <span className="mt-0.5 block uix-text-caption text-muted-foreground leading-snug">{opt.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {step === 8 ? (
           <div className="space-y-3 rounded-2xl border border-border/60 bg-card p-4">
             <p className="text-sm font-medium">Готово</p>
             <p className="uix-text-caption text-muted-foreground">
@@ -1160,6 +2016,94 @@ export default function BoardEdgeNew() {
                 опубликуйте этот пост.
               </li>
             </ol>
+
+            {edgeIdParam ? (
+              <div className="space-y-3 rounded-xl border border-primary/15 bg-primary/[0.04] p-3 dark:bg-primary/[0.06]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-foreground">Статистика «рейтинг жизни»</p>
+                  <TapScaleButton
+                    type="button"
+                    subtle
+                    haptic
+                    className="min-h-[var(--uix-touch-min)] uix-text-caption"
+                    disabled={lifeStatsQ.isFetching}
+                    onClick={() => void lifeStatsQ.refetch()}
+                  >
+                    Обновить
+                  </TapScaleButton>
+                </div>
+                <p className="uix-text-caption text-muted-foreground leading-snug">
+                  Участники с заходом в компаньон. Очередь — невыполненные запросы персонажа.
+                </p>
+                {lifeStatsQ.isLoading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-2/3 rounded-md" />
+                    <Skeleton className="h-4 w-1/2 rounded-md" />
+                  </div>
+                ) : null}
+                {lifeStatsQ.isError ? (
+                  <ErrorWithRetry
+                    title="Не удалось загрузить статистику"
+                    description={
+                      lifeStatsQ.error instanceof Error ? lifeStatsQ.error.message : "Повторите запрос."
+                    }
+                    onRetry={() => void lifeStatsQ.refetch()}
+                    className="min-h-[100px] rounded-lg border border-border/50 bg-background/80"
+                  />
+                ) : null}
+                {lifeStatsQ.data ? (
+                  <dl className="grid gap-2 text-[13px] sm:grid-cols-2">
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Участников кампании</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.totalParticipants}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Состояние персонажа</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.withCharacterState}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">С рейтингом жизни</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.withLifeRating}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Средняя жизнь</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.avgLifeRating != null
+                          ? lifeStatsQ.data.avgLifeRating.toFixed(1)
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Мин / макс жизни</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.minLifeRating != null && lifeStatsQ.data.maxLifeRating != null
+                          ? `${Math.round(lifeStatsQ.data.minLifeRating)} / ${Math.round(lifeStatsQ.data.maxLifeRating)}`
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Запросов в очередях</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.totalQueuedNeeds}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-2 rounded-lg bg-background/60 px-2 py-1.5 sm:col-span-2 dark:bg-background/40">
+                      <dt className="text-muted-foreground">Участников с непустой очередью</dt>
+                      <dd className="font-semibold tabular-nums text-foreground">
+                        {lifeStatsQ.data.participantsWithPendingQueue}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : null}
+              </div>
+            ) : null}
+
             <TapScaleButton
               type="button"
               haptic
@@ -1191,7 +2135,7 @@ export default function BoardEdgeNew() {
           </div>
         ) : null}
 
-        {step > 0 && step < 7 ? (
+        {step > 0 && step < STEPS.length - 1 ? (
           <div className="flex gap-2 pt-2">
             <TapScaleButton
               type="button"
@@ -1234,17 +2178,23 @@ export default function BoardEdgeNew() {
 function TaskSection({
   scope,
   title,
+  scoreHint,
   rows,
   setRows,
 }: {
   scope: TaskScope;
   title: string;
+  /** Куда уходит XP из этого блока (основной / доп. рейтинг). */
+  scoreHint: string;
   rows: TaskRow[];
   setRows: Dispatch<SetStateAction<TaskRow[]>>;
 }) {
   return (
     <div className="space-y-2 rounded-2xl border border-border/50 bg-muted/10 p-3">
-      <p className="text-sm font-semibold">{title}</p>
+      <div>
+        <p className="text-sm font-semibold">{title}</p>
+        <p className="mt-0.5 uix-text-caption text-muted-foreground leading-snug">{scoreHint}</p>
+      </div>
       {rows.map((r) => (
         <div key={r.localId} className="space-y-2 rounded-xl border border-border/40 bg-background p-2">
           <div className="space-y-2">
@@ -1282,6 +2232,23 @@ function TaskSection({
                 XP выдаётся без проверки факта. Для конкурсов с призами выбирайте типы с автопроверкой выше.
               </p>
             ) : null}
+            <div>
+              <Label className="text-xs text-muted-foreground">Рейтинг для очков</Label>
+              <select
+                className="mt-1 h-9 min-h-[var(--uix-touch-min)] w-full max-w-xl rounded-md border border-input bg-background px-2 text-sm"
+                value={r.scoreTarget}
+                aria-label="В какой рейтинг засчитывать XP за это задание"
+                onChange={(e) => {
+                  const v = e.target.value as "primary" | "secondary";
+                  setRows((prev) =>
+                    prev.map((x) => (x.localId === r.localId ? { ...x, scoreTarget: v } : x)),
+                  );
+                }}
+              >
+                <option value="primary">Основной (игра, персонаж)</option>
+                <option value="secondary">Дополнительный (лента, активность)</option>
+              </select>
+            </div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 border-t border-border/30 pt-2">
             <div>
@@ -1349,9 +2316,8 @@ function TaskSection({
                   />
                 </div>
               </div>
-              <p className="uix-text-caption text-muted-foreground">
-                Эти 3 числа отвечают только за награду/штраф/срок. Факт выполнения проверяется в блоке ниже по типу
-                скрипта.
+              <p className="uix-text-caption text-muted-foreground leading-snug">
+                Порог выполнения — в полях ниже по выбранному скрипту.
               </p>
             </div>
             <div className="sm:col-span-2 flex justify-end">

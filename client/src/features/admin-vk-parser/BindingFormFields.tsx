@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -36,6 +37,9 @@ export function BindingFormFields(props: {
   lockPlatformUser?: boolean;
   /** Блокировка полей на время сохранения (создание / обновление). */
   formDisabled?: boolean;
+  usersFetching?: boolean;
+  usersError?: boolean;
+  onRetryUsers?: () => void;
 }) {
   const off = props.formDisabled ?? false;
   return (
@@ -70,6 +74,18 @@ export function BindingFormFields(props: {
                 </option>
               ))}
             </select>
+            {props.usersError ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-destructive">Не удалось загрузить список пользователей</span>
+                {props.onRetryUsers ? (
+                  <Button type="button" size="sm" variant="outline" onClick={() => props.onRetryUsers?.()}>
+                    Повторить
+                  </Button>
+                ) : null}
+              </div>
+            ) : props.usersFetching && props.users.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Загрузка списка…</p>
+            ) : null}
           </>
         )}
       </div>

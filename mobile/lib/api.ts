@@ -505,6 +505,7 @@ export type CommentItem = {
   user: string;
   avatar: string | null;
   likes: number;
+  likedByMe?: boolean;
 };
 
 export async function fetchComments(postId: string): Promise<CommentItem[]> {
@@ -521,13 +522,20 @@ export async function fetchComments(postId: string): Promise<CommentItem[]> {
     user: String(c.user ?? "Пользователь"),
     avatar: typeof c.avatar === "string" ? c.avatar : null,
     likes: typeof c.likes === "number" ? c.likes : 0,
+    likedByMe: c.likedByMe === true,
   }));
 }
 
-export async function createComment(postId: string, text: string): Promise<CommentItem | null> {
+export async function createComment(
+  postId: string,
+  text: string,
+  opts?: { parentCommentId?: string | null }
+): Promise<CommentItem | null> {
+  const body: { text: string; parentCommentId?: string } = { text: text.trim() };
+  if (opts?.parentCommentId) body.parentCommentId = opts.parentCommentId;
   const res = await apiFetch(`/posts/${encodeURIComponent(postId)}/comments`, {
     method: "POST",
-    body: JSON.stringify({ text: text.trim() }),
+    body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data.message as string) || "Не удалось отправить комментарий");
@@ -539,7 +547,8 @@ export async function createComment(postId: string, text: string): Promise<Comme
     createdAt: String(data.createdAt ?? ""),
     user: String(data.user ?? "Пользователь"),
     avatar: typeof data.avatar === "string" ? data.avatar : null,
-    likes: 0,
+    likes: typeof data.likes === "number" ? data.likes : 0,
+    likedByMe: data.likedByMe === true,
   };
 }
 

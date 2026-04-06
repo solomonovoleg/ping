@@ -1,6 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createPost } from "../posts/service";
 import { isPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
+import { constantTimeSecretEquals } from "../security/constant-time-secret";
+import { logSecurityAuditEvent } from "../security/security-audit-log";
 
 function requireParserServiceSecret(req: Request, res: Response, next: NextFunction): void {
   const s = process.env.PARSER_SERVICE_SECRET?.trim();
@@ -10,7 +12,13 @@ function requireParserServiceSecret(req: Request, res: Response, next: NextFunct
   }
   const auth = req.headers.authorization;
   const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (token !== s) {
+  if (!constantTimeSecretEquals(token, s)) {
+    logSecurityAuditEvent("internal_parser_publish_unauthorized", {
+      path: req.path,
+      method: req.method,
+      requestId: req.requestId ?? null,
+      hasAuthorizationHeader: Boolean(auth),
+    });
     res.status(401).json({ message: "Unauthorized" });
     return;
   }

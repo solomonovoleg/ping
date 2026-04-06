@@ -14,8 +14,8 @@ public class CallAudioRoutePlugin extends Plugin {
 
   @PluginMethod
   public void setOutputRoute(PluginCall call) {
-    String mode = call.getString("mode");
-    if (mode == null) mode = "speaker";
+    String raw = call.getString("mode");
+    final String mode = raw != null ? raw : "speaker";
     android.app.Activity activity = getActivity();
     if (activity == null) {
       call.reject("no_activity");

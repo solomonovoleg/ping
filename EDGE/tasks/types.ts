@@ -9,7 +9,9 @@ export type TaskDenyReason =
   | "not_published"
   | "deadline_passed"
   | "invalid_preset"
-  | "verification_failed";
+  | "verification_failed"
+  | "leaderboard_frozen"
+  | "honor_disabled";
 
 export type TaskRewardResponse = {
   awarded: boolean;

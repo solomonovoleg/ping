@@ -46,6 +46,15 @@ android {
     }
 }
 
+// Имя debug APK для установки/обмена (вместо app-debug.apk).
+android.applicationVariants.configureEach { variant ->
+    if (variant.buildType.name == "debug") {
+        variant.outputs.configureEach { output ->
+            output.outputFileName = "PING 3.apk"
+        }
+    }
+}
+
 repositories {
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'

@@ -10,15 +10,20 @@ import { randomUUID } from "crypto";
 import { spawn } from "child_process";
 import { transcribeAudioChunk } from "../call-transcripts/asr-provider";
 import { storage } from "../storage";
+import { scheduleApiHubBridgeTranscript } from "../integrations/api-hub-bridge";
 import { notifyVoiceOrVideoNoteTranscript } from "../realtime/chat";
+import { buildChatMessageNotifyPayload } from "./build-chat-message-notify-payload";
+import { enrichChatMessagePayloadOwnS3Urls } from "./enrich-message-media-s3-urls";
 import type { Message } from "@shared/schema";
+import { getFfmpegExecutable } from "../lib/ffmpeg-bin";
+import { presignOwnS3ObjectUrl } from "../upload/s3-presign-media-urls";
 
 const ASR_LANG = process.env.VOICE_MESSAGE_ASR_LANGUAGE?.trim() || "ru-RU";
 const MAX_DOWNLOAD_BYTES = 80 * 1024 * 1024;
 
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(getFfmpegExecutable(), args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr?.on("data", (c: Buffer) => {
       stderr += c.toString();
@@ -32,9 +37,10 @@ function runFfmpeg(args: string[]): Promise<void> {
 }
 
 function contentToSafeLocalPath(content: string): string | null {
-  const t = content.trim();
-  if (!t.startsWith("/uploads/")) return null;
-  const rel = t.replace(/^\/+/, "");
+  /** Подписанные URL: `/uploads/voice/x.webm?exp=…&sig=…` — на диске лежит только `x.webm`. */
+  const pathOnly = content.trim().split("?")[0].split("#")[0];
+  if (!pathOnly.startsWith("/uploads/")) return null;
+  const rel = pathOnly.replace(/^\/+/, "");
   if (!rel || rel.includes("..")) return null;
   return path.join(process.cwd(), rel);
 }
@@ -42,8 +48,18 @@ function contentToSafeLocalPath(content: string): string | null {
 async function readContentBytes(content: string): Promise<Buffer | null> {
   const t = content.trim();
   if (t.startsWith("http://") || t.startsWith("https://")) {
-    const res = await fetch(t);
-    if (!res.ok) return null;
+    // Для приватного S3 сначала пробуем подписать наш URL GetObject.
+    const signed = await presignOwnS3ObjectUrl(t);
+    const mediaUrl = signed ?? t;
+    const res = await fetch(mediaUrl);
+    if (!res.ok) {
+      console.warn("[messages] transcript media fetch failed", {
+        status: res.status,
+        contentPreview: t.slice(0, 180),
+        usedPresignedUrl: Boolean(signed),
+      });
+      return null;
+    }
     const len = Number(res.headers.get("content-length") || 0);
     if (len > MAX_DOWNLOAD_BYTES) return null;
     const buf = Buffer.from(await res.arrayBuffer());
@@ -125,23 +141,6 @@ async function prepareAudioForAsr(
   }
 }
 
-function messageToPayload(msg: Message): Parameters<typeof notifyVoiceOrVideoNoteTranscript>[1] {
-  const created = msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt);
-  return {
-    id: msg.id,
-    chatId: msg.chatId,
-    senderId: msg.senderId,
-    type: msg.type,
-    content: msg.content,
-    createdAt: Number.isNaN(created.getTime()) ? new Date().toISOString() : created.toISOString(),
-    folderId: msg.folderId ?? undefined,
-    replyToId: msg.replyToId ?? undefined,
-    forwardedFromMessageId: msg.forwardedFromMessageId ?? undefined,
-    forwardedFromSenderName: msg.forwardedFromSenderName ?? undefined,
-    transcript: msg.transcript ?? undefined,
-  };
-}
-
 /** Скачивает медиа, гоняет через ASR, пишет `transcript` и шлёт WS (`notifyVoiceOrVideoNoteTranscript`). */
 export async function runVoiceOrVideoNoteTranscription(chatId: string, messageId: string): Promise<void> {
   if (!process.env.CALL_TRANSCRIPTS_ASR_URL?.trim()) return;
@@ -170,5 +169,8 @@ export async function runVoiceOrVideoNoteTranscription(chatId: string, messageId
   const updated = await storage.updateMessageTranscript(chatId, messageId, text);
   if (!updated) return;
 
-  notifyVoiceOrVideoNoteTranscript(chatId, messageToPayload(updated));
+  const payload = await enrichChatMessagePayloadOwnS3Urls(buildChatMessageNotifyPayload(updated));
+  notifyVoiceOrVideoNoteTranscript(chatId, payload);
+  const memberIds = await storage.getChatMemberIds(chatId);
+  scheduleApiHubBridgeTranscript(chatId, payload, memberIds);
 }

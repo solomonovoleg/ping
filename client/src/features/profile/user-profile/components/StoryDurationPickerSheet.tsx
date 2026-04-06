@@ -2,10 +2,14 @@ import { cn } from "@/lib/utils";
 import type { StoryExpiresHours } from "@/lib/stories";
 import { userProfileRu } from "../i18n.ru";
 
+const CAPTION_MAX = 500;
+
 export function StoryDurationPickerSheet({
   open,
   storyExpiresInHours,
   onHoursChange,
+  storyCaption,
+  onStoryCaptionChange,
   onCancel,
   onPublish,
   addingStory,
@@ -14,6 +18,8 @@ export function StoryDurationPickerSheet({
   open: boolean;
   storyExpiresInHours: StoryExpiresHours;
   onHoursChange: (h: StoryExpiresHours) => void;
+  storyCaption: string;
+  onStoryCaptionChange: (v: string) => void;
   onCancel: () => void;
   onPublish: () => void;
   addingStory: boolean;
@@ -27,7 +33,7 @@ export function StoryDurationPickerSheet({
       onClick={onCancel}
     >
       <div
-        className="mx-auto w-full max-w-[480px] max-h-[78vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
+        className="w-full uix-responsive-max-w max-h-[78vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-border px-4 py-3">
@@ -45,13 +51,32 @@ export function StoryDurationPickerSheet({
                   "min-h-[var(--uix-touch-min)] rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
                   storyExpiresInHours === hours
                     ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-secondary/50 text-foreground hover:bg-secondary"
+                    : "border-border bg-secondary/50 text-foreground hover:bg-secondary",
                 )}
               >
                 {d.hours(hours)}
               </button>
             ))}
           </div>
+
+          <div className="mt-4">
+            <p className="text-xs font-medium text-foreground">{d.captionLabel}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{d.captionHint}</p>
+            <textarea
+              value={storyCaption}
+              onChange={(e) => onStoryCaptionChange(e.target.value.slice(0, CAPTION_MAX))}
+              rows={3}
+              maxLength={CAPTION_MAX}
+              disabled={addingStory}
+              placeholder={d.captionPlaceholder}
+              className="mt-2 w-full resize-none rounded-xl border border-border/60 bg-secondary/20 px-3 py-2 text-[14px] leading-snug outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              aria-label={d.captionLabel}
+            />
+            <p className="mt-0.5 text-right text-[10px] tabular-nums text-muted-foreground">
+              {storyCaption.length}/{CAPTION_MAX}
+            </p>
+          </div>
+
           <div className="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"

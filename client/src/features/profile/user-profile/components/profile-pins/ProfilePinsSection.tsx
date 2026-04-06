@@ -22,6 +22,7 @@ import { PostVideoTrimmerModal } from "@/features/posts/video-trim/PostVideoTrim
 import { isVideoMediaUrl } from "../../utils/post-media";
 import { useToast } from "@/hooks/use-toast";
 import { ErrorWithRetry } from "@/components/ui/empty";
+import { UploadProgressBlockingOverlay } from "@/components/ui/upload-progress-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -45,6 +46,8 @@ export function ProfilePinsSection({
   onClearPinAdd,
   onOpenPinnedPost,
   onOpenPinnedStory,
+  profilePinnedPostId = null,
+  profilePinnedPreview = null,
 }: {
   profileRouteId: string;
   isMe: boolean;
@@ -53,6 +56,9 @@ export function ProfilePinsSection({
   onClearPinAdd: () => void;
   onOpenPinnedPost: (postId: string) => void;
   onOpenPinnedStory: (storyId: string) => void;
+  /** Пост в шапке профиля (`users.pinned_post_id`), не папка. */
+  profilePinnedPostId?: string | null;
+  profilePinnedPreview?: { url: string | null; isVideo: boolean } | null;
 }) {
   const { th } = usePulseProfileTheme();
   const { toast } = useToast();
@@ -76,6 +82,7 @@ export function ProfilePinsSection({
   const [folderMediaBusy, setFolderMediaBusy] = useState(false);
   const [coverVideoFile, setCoverVideoFile] = useState<File | null>(null);
   const [coverTrimOpen, setCoverTrimOpen] = useState(false);
+  const [pinUploadPercent, setPinUploadPercent] = useState<number | null>(null);
 
   const { data: folders = [], isLoading, isError, refetch } = useQuery({
     queryKey: QK(profileRouteId),
@@ -198,8 +205,9 @@ export function ProfilePinsSection({
     async (file: File, trim?: PostVideoTrimUpload) => {
       if (!editFolderId) return;
       setCoverBusy(true);
+      setPinUploadPercent(0);
       try {
-        const url = await uploadPostMedia(file, trim);
+        const url = await uploadPostMedia(file, trim, { onProgress: (p) => setPinUploadPercent(p) });
         await updateProfilePinFolder(editFolderId, {
           coverUrl: url,
           coverIsVideo: isVideoMediaUrl(url),
@@ -212,6 +220,7 @@ export function ProfilePinsSection({
         toast({ title: e instanceof Error ? e.message : "Не удалось загрузить", variant: "destructive" });
       } finally {
         setCoverBusy(false);
+        setPinUploadPercent(null);
       }
     },
     [editFolderId, detailId, folderDetail?.folder.id, invalidate, qc, toast],
@@ -254,8 +263,9 @@ export function ProfilePinsSection({
       const fid = manageFolderId;
       if (!file || !fid) return;
       setFolderMediaBusy(true);
+      setPinUploadPercent(0);
       try {
-        const url = await uploadPostMedia(file, trim);
+        const url = await uploadPostMedia(file, trim, { onProgress: (p) => setPinUploadPercent(p) });
         await addProfilePinItem(fid, { kind: "media", mediaUrl: url, mediaIsVideo: true });
         invalidate();
         void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
@@ -266,6 +276,7 @@ export function ProfilePinsSection({
         toast({ title: e instanceof Error ? e.message : "Не удалось добавить", variant: "destructive" });
       } finally {
         setFolderMediaBusy(false);
+        setPinUploadPercent(null);
       }
     },
     [folderMediaVideoFile, manageFolderId, invalidate, qc, toast],
@@ -281,8 +292,9 @@ export function ProfilePinsSection({
         return;
       }
       setFolderMediaBusy(true);
+      setPinUploadPercent(0);
       try {
-        const url = await uploadPostMedia(file);
+        const url = await uploadPostMedia(file, undefined, { onProgress: (p) => setPinUploadPercent(p) });
         await addProfilePinItem(fid, { kind: "media", mediaUrl: url, mediaIsVideo: false });
         invalidate();
         void qc.invalidateQueries({ queryKey: ["profile-pins", "folder", fid] });
@@ -291,6 +303,7 @@ export function ProfilePinsSection({
         toast({ title: e instanceof Error ? e.message : "Не удалось добавить", variant: "destructive" });
       } finally {
         setFolderMediaBusy(false);
+        setPinUploadPercent(null);
       }
     },
     [manageFolderId, invalidate, looksLikeVideoFile, qc, toast],
@@ -377,17 +390,38 @@ export function ProfilePinsSection({
           </button>
         ) : null}
 
-        {!isLoading && folders.length === 0 ? (
+        {!isLoading && folders.length === 0 && !profilePinnedPostId ? (
           <div className="flex min-w-0 flex-1 flex-col gap-2 rounded-2xl border border-dashed px-3 py-3" style={{ borderColor: th.border }}>
             <div className="flex items-start gap-2">
               <Pin className="mt-0.5 h-4 w-4 shrink-0 opacity-70" style={{ color: th.accent }} />
               <p className="text-left text-[11px] leading-snug" style={{ color: th.text, opacity: 0.82 }}>
                 {isMe
-                  ? "Пока папок нет. Нажмите «Создать папку» или добавьте пост в закреплённое через меню «⋯» у своей публикации."
+                  ? "Пока папок нет. Закрепите пост в шапке или в папку через «⋯» у публикации, либо нажмите «Создать»."
                   : "У пользователя пока нет закреплённых папок."}
               </p>
             </div>
           </div>
+        ) : null}
+
+        {profilePinnedPostId ? (
+          <button
+            type="button"
+            className="flex min-w-[4rem] shrink-0 flex-col items-center gap-1.5"
+            onClick={() => onOpenPinnedPost(profilePinnedPostId)}
+          >
+            <PinCoverThumb
+              url={profilePinnedPreview?.url?.trim() ? profilePinnedPreview.url : null}
+              isVideo={profilePinnedPreview?.isVideo === true}
+              label="Пост в профиле"
+              empty={!profilePinnedPreview?.url?.trim()}
+            />
+            <span
+              style={{ fontSize: 10, color: th.text, fontWeight: 400 }}
+              className="max-w-[72px] truncate text-center"
+            >
+              В профиле
+            </span>
+          </button>
         ) : null}
 
         {folders.map(renderTile)}
@@ -738,6 +772,15 @@ export function ProfilePinsSection({
           if (!o) setCoverVideoFile(null);
         }}
         onConfirm={(trim) => void onCoverTrimConfirm(trim)}
+      />
+
+      <UploadProgressBlockingOverlay
+        open={coverBusy || folderMediaBusy}
+        title={coverBusy ? "Загрузка обложки" : "Добавление файла"}
+        percent={pinUploadPercent}
+        footnote={pinUploadPercent != null ? "Отправка на сервер…" : null}
+        zIndexClass="z-[500]"
+        ariaLabel={coverBusy ? "Загрузка обложки папки" : "Загрузка файла в папку"}
       />
     </div>
   );

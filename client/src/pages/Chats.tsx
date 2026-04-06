@@ -1,6 +1,14 @@
-import { useState, useEffect, useRef, memo, useCallback, useMemo, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  memo,
+  useCallback,
+  useMemo,
+} from "react";
 import { flushSync } from "react-dom";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import {
   Search,
   Edit,
@@ -11,7 +19,6 @@ import {
   UserPlus,
   ChevronLeft,
   ChevronUp,
-  Mic,
   Pin,
   PinOff,
   Users,
@@ -27,9 +34,22 @@ import {
   LayoutList,
   Sparkles,
   MoreHorizontal,
+  Ticket,
+  Flag,
+  Ban,
+  Share2,
+  SmilePlus,
+  Settings2,
+  Plus,
+  MessageSquare,
+  ExternalLink,
+  ChevronDown,
+  Folder,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { GlobalSearch } from "@/components/GlobalSearch";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -39,6 +59,8 @@ import {
   onChatPendingUnread,
   onChatPendingUnreadClear,
   onChatRead,
+  onComposerPulsePendingResolved,
+  onComposerTransferPulse,
 } from "@/features/chat/realtime-events";
 
 import { API, apiFetch } from "@/lib/api-base";
@@ -50,11 +72,14 @@ import {
   type ContactUser,
 } from "@/lib/users";
 import { gatherPhoneStringsFromDevice, isWebContactPickerSupported } from "@/lib/contact-book-match";
-import { isNative, triggerContextMenuOpenFeedback } from "@/lib/capacitor-native";
+import { isNative, triggerContextMenuOpenFeedback, triggerLightHaptic } from "@/lib/capacitor-native";
+import { NewUserFeedOnboardingStrip } from "@/features/feed/components/NewUserFeedOnboardingStrip";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
 import { LoadingProgress } from "@/components/ui/loading-progress";
+import { BackgroundSyncBar } from "@/components/BackgroundSyncBar";
 import { PageTitle } from "@/components/PageTitle";
 import { PullToRefresh } from "@/components/PullToRefresh";
+import { Button } from "@/components/ui/button";
 import { TapScaleButton, TapScaleDiv } from "@/components/ui/tap-scale";
 import {
   DropdownMenu,
@@ -70,7 +95,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { startDm, createGroupChat } from "@/lib/search";
+import { formatPushNewBadgeCount, usePushIncomingLastSeen } from "@/hooks/usePushIncomingLastSeen";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useTouchEdgeNavigationEnabled, useTouchLeftEdgeSwipeRight } from "@/hooks/use-touch-edge-swipe";
+import { startDm, createGroupChat, type Chat as SearchChatBrief } from "@/lib/search";
+import { buildChatPath } from "@/lib/chat-route";
 import {
   searchMessages,
   patchChatMemberMe,
@@ -78,11 +107,17 @@ import {
   deleteChatForEveryone,
   getServiceChatThread,
   setServiceChatLocalReplies,
+  createChatListCustomFolder,
+  deleteChatListCustomFolder,
+  fetchChatListShelves,
+  patchChatListBuiltinTabPref,
+  patchChatListCustomFolder,
   type ServiceChatThreadMeta,
   type SearchMessageHit,
 } from "@/lib/chat";
 import { AI_CHAT_ID } from "@/features/chat/constants";
 import type { ApiChat } from "@/features/chat";
+import { prefetchChatMessagesTail } from "@/features/chat/prefetch-chat-messages-tail";
 import { formatMessageContentPreview } from "@/features/chat/utils/message-content-preview";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import {
@@ -94,7 +129,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
 import { playDeleteSound } from "@/lib/send-sound";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import {
@@ -103,8 +137,49 @@ import {
   DURATION_EMPHASIS_MS,
   EASING_OUT_BEZIER,
 } from "@/lib/motion";
+import {
+  createPushReply,
+  fetchPushFeed,
+  fetchPushOutbox,
+  fetchPushReplies,
+  removePushReaction,
+  setPushReaction,
+  type PushFeedItem,
+  type PushReplyItem,
+  hidePushFeedItem,
+  updatePushAuthorHidden,
+  updatePushAuthorSettings,
+  unsubscribePushAuthor,
+} from "@/lib/push-feed";
+import { formatPostTime } from "@/lib/posts";
+import { Switch } from "@/components/ui/switch";
+import { addReaction, removeReaction, sharePostToUser } from "@/lib/posts";
+import { setUserBlock, USER_BLOCK_PRESETS } from "@/lib/users";
+import { submitContentReport } from "@/features/store-moderation/block-01-ugc";
+import { isNavigatorShareCancelled } from "@/lib/navigator-share";
 import { formatTimeLocal, formatDateShortLocal, parseServerTimestamp } from "@/lib/timezone";
 import { getOfflineChatList, saveOfflineChatList } from "@/lib/chat-offline-store";
+import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
+import { USER_PROFILE_REACTION_EMOJIS } from "@/features/profile/user-profile/constants";
+import { formatCompactCountRu } from "@/lib/number-format";
+import { playLikeActionSound } from "@/lib/send-sound";
+import { ChatRow } from "@/pages/chats/ChatRow";
+import { parseExternalVideoUrl } from "@/lib/external-video";
+import { extractFirstExternalVideoUrl } from "@/lib/post-external-video";
+import {
+  AttachPushViewRecording,
+  CreateStandalonePushDrawer,
+  OPEN_CREATE_STANDALONE_PUSH_EVENT,
+} from "@/features/push";
+import { PushFeedEmptyIncoming, PushFeedEmptyOutgoing } from "@/features/push/PushFeedEmptyStates";
+import { PushFeedScopeSkeleton } from "@/features/push/PushFeedScopeSkeleton";
+import { pushRetryToastAction } from "@/features/push/push-retry-toast-action";
+import { usePushFeedAutoRefresh } from "@/features/push/usePushFeedAutoRefresh";
+
+/** Превью Push: видео по расширению URL (в ленте нет MIME). */
+function isLikelyPushVideoUrl(url: string): boolean {
+  return /\.(mp4|webm|m4v|mov|ogg)(\?|#|$)/i.test(url);
+}
 
 /** Формат статуса «в сети» / «был(а) недавно» / «был(а) в HH:MM» (локальное время). */
 function formatLastSeen(iso: string | null | undefined): string | null {
@@ -163,25 +238,181 @@ function chatHasUnread(chat: ApiChat): boolean {
   return effectiveUnreadCount(chat) > 0 || chat.hasUnread === true;
 }
 
-/** Удержание для сервисного меню (~0,7 с). Сильный сдвиг пальца отменяет, чтобы не мешать скроллу. */
-const CHAT_SERVICE_MENU_LONG_PRESS_MS = 720;
-const CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX = 14;
+/** Долгое удержание вкладки-полки: сервисное меню папки. */
+const FOLDER_TAB_LONG_PRESS_MS = 1300;
+const CHAT_SHELF_LONG_PRESS_MOVE_CANCEL_PX = 14;
 
-const LIST_SECTION_TABS = [
-  { id: "all" as const, label: "Все", icon: LayoutList },
-  { id: "friends" as const, label: "Друзья", icon: Heart },
-  { id: "work" as const, label: "Работа", icon: Briefcase },
-  { id: "promo" as const, label: "Реклама", icon: Megaphone },
-  { id: "invitations" as const, label: "Приглашения", icon: Inbox },
-];
+const BUILTIN_SHELF_CHIPS = [
+  { id: "friends" as const, defaultLabel: "Друзья", icon: Heart },
+  { id: "work" as const, defaultLabel: "Работа", icon: Briefcase },
+  { id: "promo" as const, defaultLabel: "Реклама", icon: Megaphone },
+  { id: "invitations" as const, defaultLabel: "Приглашения", icon: Inbox },
+] as const;
 
-function formatChatTime(createdAt: string): string {
-  const d = parseServerTimestamp(createdAt);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  if (diff < 86400000) return formatTimeLocal(d);
-  if (diff < 172800000) return "Вчера";
-  return formatDateShortLocal(d);
+const CUSTOM_CHAT_SHELF_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function useChatShelfTabLongPress(onLongPress: () => void, durationMs: number) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const originRef = useRef<{ x: number; y: number } | null>(null);
+  const blockClickRef = useRef(false);
+  const clear = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    originRef.current = null;
+  }, []);
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      originRef.current = { x: e.clientX, y: e.clientY };
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        originRef.current = null;
+        blockClickRef.current = true;
+        window.setTimeout(() => {
+          blockClickRef.current = false;
+        }, 450);
+        try {
+          window.getSelection()?.removeAllRanges();
+        } catch {
+          /* ignore */
+        }
+        triggerContextMenuOpenFeedback();
+        onLongPress();
+      }, durationMs);
+    },
+    [onLongPress, durationMs],
+  );
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      const origin = originRef.current;
+      if (!origin || !timerRef.current) return;
+      const dx = e.clientX - origin.x;
+      const dy = e.clientY - origin.y;
+      if (
+        dx * dx + dy * dy >
+        CHAT_SHELF_LONG_PRESS_MOVE_CANCEL_PX * CHAT_SHELF_LONG_PRESS_MOVE_CANCEL_PX
+      ) {
+        clear();
+      }
+    },
+    [clear],
+  );
+  const onPointerUp = useCallback(() => clear(), [clear]);
+  return {
+    blockClickRef,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerLeave: onPointerUp,
+    onPointerCancel: onPointerUp,
+  };
+}
+
+type ChatShelfTabButtonProps = {
+  label: string;
+  icon: typeof Heart;
+  active: boolean;
+  isPush: boolean;
+  pushTabBadgeCount: number;
+  chatListReducedMotion: boolean;
+  onSelect: () => void;
+  onLongPressMenu: () => void;
+};
+
+const ChatShelfTabButton = memo(function ChatShelfTabButton({
+  label,
+  icon: Icon,
+  active,
+  isPush,
+  pushTabBadgeCount,
+  chatListReducedMotion,
+  onSelect,
+  onLongPressMenu,
+}: ChatShelfTabButtonProps) {
+  const { blockClickRef, onPointerDown, onPointerMove, onPointerUp, onPointerLeave, onPointerCancel } =
+    useChatShelfTabLongPress(onLongPressMenu, FOLDER_TAB_LONG_PRESS_MS);
+  const pushTabShimmer = isPush && active && !chatListReducedMotion;
+  return (
+    <TapScaleButton
+      type="button"
+      subtle
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerLeave}
+      onPointerCancel={onPointerCancel}
+      onClick={() => {
+        if (blockClickRef.current) return;
+        onSelect();
+      }}
+      aria-label={
+        isPush && pushTabBadgeCount > 0 ? `Push, новых: ${pushTabBadgeCount}` : undefined
+      }
+      title={isPush && pushTabBadgeCount > 0 ? `Новых Push: ${pushTabBadgeCount}` : undefined}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0 min-h-[28px] shadow-none border relative max-w-[148px]",
+        isPush && active
+          ? "text-white border-rose-300/40 bg-gradient-to-r from-rose-500 via-pink-500 to-orange-400 shadow-[0_0_20px_rgba(244,114,182,0.35)] overflow-hidden"
+          : isPush
+            ? "text-rose-200 border-rose-300/25 bg-gradient-to-r from-rose-500/20 via-pink-500/20 to-orange-400/20 hover:from-rose-500/30 hover:to-orange-400/30 transition-colors duration-200"
+            : active
+              ? "bg-primary/12 border-primary/25 text-foreground transition-colors duration-200"
+              : "bg-muted/25 border-border/30 text-muted-foreground hover:bg-muted/45 transition-colors duration-200",
+      )}
+    >
+      {pushTabShimmer ? (
+        <motion.span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
+        >
+          <motion.span
+            className="absolute inset-y-0 left-[-72%] w-[68%] skew-x-[-18deg] bg-gradient-to-r from-transparent via-white/35 to-transparent"
+            initial={{ x: "-20%" }}
+            animate={{ x: "420%" }}
+            transition={{
+              duration: 2.8,
+              ease: "linear",
+              repeat: Infinity,
+              repeatDelay: 1.1,
+            }}
+          />
+        </motion.span>
+      ) : null}
+      <span className="relative z-[1] inline-flex min-w-0 items-center gap-1">
+        <Icon className="w-3 h-3 opacity-80 shrink-0" aria-hidden />
+        <span className="truncate">{label}</span>
+      </span>
+      {isPush && pushTabBadgeCount > 0 ? (
+        <span
+          className="absolute -right-0.5 -top-0.5 z-[2] flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-rose-500 px-[3px] text-[8.5px] font-bold leading-none text-white shadow-sm ring-[1.5px] ring-background"
+          aria-hidden
+        >
+          {formatPushNewBadgeCount(pushTabBadgeCount)}
+        </span>
+      ) : null}
+    </TapScaleButton>
+  );
+});
+
+/** Короткая подпись «через сколько исчезнет из Push» — для едва заметной строки под именем. */
+function formatPushExpiresSubtleLabel(expiresAt: string | null): string | null {
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return null;
+  if (ms <= 0) return "срок вышел";
+  const totalMinutes = Math.max(1, Math.ceil(ms / 60000));
+  if (totalMinutes < 60) {
+    return `через ~${totalMinutes}\u00A0мин`;
+  }
+  const hoursCeil = Math.ceil(totalMinutes / 60);
+  if (hoursCeil < 48) {
+    return `через ~${hoursCeil}\u00A0ч`;
+  }
+  const daysCeil = Math.ceil(hoursCeil / 24);
+  return `через ~${daysCeil}\u00A0дн`;
 }
 
 type DateSectionKey = "today" | "yesterday" | "week" | "earlier";
@@ -229,276 +460,27 @@ function contactLetter(c: ContactUser): string {
 }
 
 const TYPING_PREVIEW_TTL_MS = 5000;
+/** Подсветка строки лички после «пульса передачи» (синхрон с композером). */
+const COMPOSER_TRANSFER_LIST_PULSE_MS = 3400;
 const VOICE_RECORDING_PREVIEW_TTL_MS = 6000;
 
-/** Превью в списке чатов: не показывать сырые пути /uploads/… */
-function formatChatLastMessagePreview(last: { type: string; content: string } | null | undefined): string {
-  if (!last) return "Нет сообщений";
-  const { type, content } = last;
-  const c = typeof content === "string" ? content : "";
-  if (type === "voice") return "Голосовое сообщение";
-  if (type === "image") return "Фото";
-  if (type === "video") return "Видео";
-  if (type === "video_note") return "Видеокружок";
-  if (type === "file" || type === "document") return "Файл";
-  if (type === "text" || !type) {
-    const t = c.trim();
-    if (!t) return "Сообщение";
-    if (t.startsWith("/uploads/") || t.startsWith("http://") || t.startsWith("https://")) {
-      if (t.includes("/voice/") || /\.(webm|m4a|ogg|opus|wav)(\?|$)/i.test(t)) return "Голосовое сообщение";
-      if (t.includes("/chat/") || t.includes("/image") || /\.(jpe?g|png|gif|webp)(\?|$)/i.test(t)) return "Фото";
-      if (t.includes("/video/") || /\.(mp4|mov|webm)(\?|$)/i.test(t)) return "Видео";
-      return "Вложение";
-    }
-    return c;
-  }
-  return "Сообщение";
+interface ChatsProps {
+  embedded?: boolean;
 }
 
-/** Строка чата: мемоизация уменьшает перерисовку списка при обновлении «печатает»/«записывает» только в одном чате */
-const ChatRow = memo(function ChatRow({
-  chat,
-  typingLabel,
-  voiceLabel,
-  onSelect,
-  onLongPressMenu,
-  isAiChat,
-  /** Скрытые / архив: без бейджа непрочитанного и яркого акцента (как «без уведомлений» в списке). */
-  suppressUnreadVisual,
-  /** Кнопка справа (например «Вернуть» у скрытых чатов); не даём всплыть long-press на строку. */
-  trailingAction,
-  /** WS подсказка «входящее» до refetch списка — точка/бейдж, если серверный unread ещё 0. */
-  pendingUnreadHint,
-}: {
-  chat: ApiChat;
-  typingLabel: string | null;
-  voiceLabel: string | null;
-  onSelect: () => void;
-  /** Удержание ~3 с — сервисное меню (не для AI-чата). */
-  onLongPressMenu?: () => void;
-  isAiChat?: boolean;
-  suppressUnreadVisual?: boolean;
-  trailingAction?: ReactNode;
-  pendingUnreadHint?: boolean;
-}) {
-  const rawUnc = (chat as { unread_count?: unknown }).unread_count;
-  const unreadCount = Math.max(
-    0,
-    Number(
-      chat.unreadCount ??
-        (typeof rawUnc === "number" ? rawUnc : typeof rawUnc === "string" ? parseInt(rawUnc, 10) : 0),
-    ) || 0,
-  );
-  const hasUnreadVisual =
-    !isAiChat &&
-    !suppressUnreadVisual &&
-    (unreadCount > 0 || chat.hasUnread === true || pendingUnreadHint === true);
-
-  const reducedMotion = usePrefersReducedMotion();
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
-  const blockClickRef = useRef(false);
-  const [pressing, setPressing] = useState(false);
-
-  const clearLongPress = useCallback(() => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-    setPressing(false);
-    longPressOriginRef.current = null;
-  }, []);
-
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!onLongPressMenu || isAiChat) return;
-      if (e.button !== 0) return;
-      longPressOriginRef.current = { x: e.clientX, y: e.clientY };
-      setPressing(true);
-      longPressTimerRef.current = setTimeout(() => {
-        longPressTimerRef.current = null;
-        setPressing(false);
-        longPressOriginRef.current = null;
-        blockClickRef.current = true;
-        window.setTimeout(() => {
-          blockClickRef.current = false;
-        }, 500);
-        try {
-          window.getSelection()?.removeAllRanges();
-        } catch {
-          /* ignore */
-        }
-        triggerContextMenuOpenFeedback();
-        onLongPressMenu();
-      }, CHAT_SERVICE_MENU_LONG_PRESS_MS);
-    },
-    [onLongPressMenu, isAiChat],
-  );
-
-  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const origin = longPressOriginRef.current;
-    if (!origin || !longPressTimerRef.current) return;
-    const dx = e.clientX - origin.x;
-    const dy = e.clientY - origin.y;
-    if (dx * dx + dy * dy > CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX * CHAT_ROW_LONG_PRESS_MOVE_CANCEL_PX) {
-      clearLongPress();
-    }
-  }, [clearLongPress]);
-  const preview =
-    voiceLabel != null ? (
-      <span className="text-primary/90 flex items-center gap-1">
-        <Mic className="w-3 h-3 flex-shrink-0" />
-        {voiceLabel} записывает голосовое
-      </span>
-    ) : typingLabel != null ? (
-      <span className="italic text-primary/90">{typingLabel} печатает...</span>
-    ) : (
-      formatChatLastMessagePreview(chat.lastMessage ?? undefined)
-    );
-  const content = (
-    <>
-      <div
-        className={cn(
-          "rounded-full p-[2px] transition-transform duration-200",
-          chat.otherMemberHasUnseenStory && !isAiChat
-            ? "bg-gradient-to-tr from-primary via-fuchsia-500 to-purple-500 animate-story-ring"
-            : chat.otherMemberHasActiveStory && !isAiChat
-              ? "bg-gradient-to-tr from-primary/75 to-purple-400/70"
-              : "bg-transparent"
-        )}
-      >
-        <UserAvatar
-          avatarUrl={(chat.type === "group" ? chat.avatarUrl : chat.otherMemberAvatarUrl) ?? undefined}
-          displayName={chat.name ?? "Диалог"}
-          seed={chat.id}
-          size={46}
-          className={cn("h-[46px] w-[46px] flex-shrink-0 sm:h-[50px] sm:w-[50px]", isAiChat && "ring-2 ring-indigo-400/60 ring-offset-2 ring-offset-indigo-500/10")}
-          showOnlineIndicator={chat.type === "dm" && !isAiChat}
-          lastSeenAt={chat.otherMemberLastSeenAt ?? undefined}
-        />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex justify-between items-baseline gap-1.5">
-          <h3
-            className={cn(
-              "flex min-w-0 items-center gap-1 text-[15px] font-semibold leading-5 sm:text-[16px]",
-              isAiChat && "text-indigo-700 dark:text-indigo-200",
-              hasUnreadVisual && "text-foreground"
-            )}
-          >
-            {chat.pinnedAt ? (
-              <Pin className="h-3.5 w-3.5 shrink-0 text-primary/70" aria-hidden />
-            ) : null}
-            <span className="truncate">{chat.name ?? (chat.type === "dm" ? "Диалог" : "Чат")}</span>
-          </h3>
-          <span className="flex-shrink-0 text-[11px] text-muted-foreground/90 sm:text-xs">
-            {formatChatTime(chat.lastMessage?.createdAt ?? chat.createdAt)}
-          </span>
-        </div>
-        <p
-          className={cn(
-            "mt-0.5 truncate text-[13px] leading-[1.25rem] sm:text-[13.5px]",
-            isAiChat ? "text-indigo-600/90 dark:text-indigo-400/90" : hasUnreadVisual ? "text-foreground/80 font-medium" : "text-muted-foreground"
-          )}
-        >
-          {preview}
-        </p>
-      </div>
-    </>
-  );
-
-  if (isAiChat) {
-    return (
-      <motion.div
-        initial={reducedMotion ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
-        className="rounded-xl sm:rounded-2xl border border-indigo-500/12 bg-indigo-500/8 transition-colors duration-150 hover:bg-indigo-500/12"
-      >
-        <TapScaleDiv
-          onClick={onSelect}
-          className="uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors duration-75 hover:bg-indigo-500/8 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5"
-        >
-          {content}
-        </TapScaleDiv>
-      </motion.div>
-    );
-  }
-
-  const hasUnread = hasUnreadVisual;
-  const badgeLabel = unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : "";
-  const showUnreadDot = hasUnread && !badgeLabel;
-
-  return (
-    <motion.div
-      className="rounded-xl sm:rounded-2xl"
-      animate={
-        reducedMotion
-          ? undefined
-          : {
-              scale: pressing ? 0.985 : 1,
-              opacity: pressing ? 0.92 : 1,
-            }
-      }
-      transition={
-        reducedMotion ? undefined : { duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }
-      }
-    >
-      <TapScaleDiv
-        onClick={() => {
-          if (blockClickRef.current) return;
-          onSelect();
-        }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={clearLongPress}
-        onPointerLeave={clearLongPress}
-        onPointerCancel={clearLongPress}
-        className={cn(
-          "uix-list-row flex min-h-[52px] cursor-pointer items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors duration-75 sm:min-h-[var(--uix-touch-min)] sm:gap-3 sm:rounded-2xl sm:px-2.5 sm:py-2.5",
-          /* Long-press меню: без этого WebKit даёт выделение/«копировать» вместо жеста */
-          "select-none [-webkit-touch-callout:none]",
-          "border-border/20 hover:bg-secondary/40 touch-pan-y",
-          suppressUnreadVisual
-            ? "border-dashed border-border/35 bg-card/45 opacity-[0.92] hover:bg-secondary/35 dark:bg-card/40"
-            : hasUnread
-              ? "bg-secondary/60 hover:bg-secondary/70 dark:bg-secondary/45 dark:hover:bg-secondary/55"
-              : "bg-card/60 hover:bg-secondary/50"
-        )}
-      >
-        {content}
-        {trailingAction ? (
-          <span
-            className="flex shrink-0 items-center"
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {trailingAction}
-          </span>
-        ) : null}
-        {badgeLabel ? (
-          <span
-            className="flex-shrink-0 inline-flex min-h-[20px] min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground"
-            aria-label={`${unreadCount} непрочитанных`}
-          >
-            {badgeLabel}
-          </span>
-        ) : showUnreadDot ? (
-          <span
-            className="flex h-2.5 w-2.5 flex-shrink-0 rounded-full bg-primary"
-            aria-label="Есть непрочитанные сообщения"
-            title="Непрочитанные"
-          />
-        ) : null}
-      </TapScaleDiv>
-    </motion.div>
-  );
-});
-
-export default function Chats() {
+export default function Chats({ embedded = false }: ChatsProps) {
   const [location, setLocation] = useLocation();
+  const searchStr = useSearch();
+  const isMobile = useIsMobile();
+  const touchEdgeNavEnabled = useTouchEdgeNavigationEnabled();
   const queryClient = useQueryClient();
+  const navigateToChat = useCallback(
+    (chat: ApiChat | SearchChatBrief) => {
+      prefetchChatMessagesTail(queryClient, chat.id);
+      setLocation(buildChatPath(chat, chat.id));
+    },
+    [queryClient, setLocation],
+  );
   const { toast } = useToast();
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
@@ -507,6 +489,19 @@ export default function Chats() {
   const [groupName, setGroupName] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [groupCreateLoading, setGroupCreateLoading] = useState(false);
+
+  /** Диплинк из медиа-студии и закладок: /?newGroup=1 */
+  useEffect(() => {
+    const pathOnly = location.split("?")[0] || "/";
+    const raw = searchStr.startsWith("?") ? searchStr.slice(1) : searchStr;
+    const params = new URLSearchParams(raw);
+    const flag = params.get("newGroup");
+    if (flag !== "1" && flag !== "true") return;
+    setShowCreateGroupModal(true);
+    params.delete("newGroup");
+    const qs = params.toString();
+    setLocation(qs ? `${pathOnly}?${qs}` : pathOnly, { replace: true } as { replace?: boolean });
+  }, [location, searchStr, setLocation]);
   const [contactsSearchQuery, setContactsSearchQuery] = useState("");
   const [contactOpeningId, setContactOpeningId] = useState<string | null>(null);
   const [addressBookMatches, setAddressBookMatches] = useState<ContactPhoneMatchUser[]>([]);
@@ -514,17 +509,244 @@ export default function Chats() {
   const [addressBookError, setAddressBookError] = useState<string | null>(null);
   const [typingByChatId, setTypingByChatId] = useState<Record<string, string | null>>({});
   const [voiceRecordingByChatId, setVoiceRecordingByChatId] = useState<Record<string, string | null>>({});
+  const [composerTransferRowIds, setComposerTransferRowIds] = useState(() => new Set<string>());
+  const composerRowPulseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const bumpComposerListPulse = useCallback((cid: string) => {
+    if (!cid) return;
+    const prev = composerRowPulseTimersRef.current.get(cid);
+    if (prev) clearTimeout(prev);
+    setComposerTransferRowIds((s) => {
+      const n = new Set(s);
+      n.add(cid);
+      return n;
+    });
+    const t = setTimeout(() => {
+      composerRowPulseTimersRef.current.delete(cid);
+      setComposerTransferRowIds((s) => {
+        if (!s.has(cid)) return s;
+        const n = new Set(s);
+        n.delete(cid);
+        return n;
+      });
+    }, COMPOSER_TRANSFER_LIST_PULSE_MS);
+    composerRowPulseTimersRef.current.set(cid, t);
+  }, []);
+
+  const clearComposerListPulse = useCallback((cid: string) => {
+    const prev = composerRowPulseTimersRef.current.get(cid);
+    if (prev) clearTimeout(prev);
+    composerRowPulseTimersRef.current.delete(cid);
+    setComposerTransferRowIds((s) => {
+      if (!s.has(cid)) return s;
+      const n = new Set(s);
+      n.delete(cid);
+      return n;
+    });
+  }, []);
+
+  const fetchComposerPulsePendingRows = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await apiFetch(`${API}/me/composer-pulse/pending`);
+      if (!res.ok) return;
+      const j = (await res.json()) as { pulses?: { chatId: string }[] };
+      for (const p of j.pulses ?? []) {
+        bumpComposerListPulse(p.chatId);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [bumpComposerListPulse, user?.id]);
+
   const [messageSearchResults, setMessageSearchResults] = useState<SearchMessageHit[]>([]);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [pushScope, setPushScope] = useState<"incoming" | "outgoing">("incoming");
+  const [createStandalonePushOpen, setCreateStandalonePushOpen] = useState(false);
+  const [expandedPushPostIds, setExpandedPushPostIds] = useState<Set<string>>(() => new Set());
+  const [pushShareTarget, setPushShareTarget] = useState<PushFeedItem | null>(null);
+  const [pushRepliesTarget, setPushRepliesTarget] = useState<PushFeedItem | null>(null);
+  const [pushRepliesVisibilityFilter, setPushRepliesVisibilityFilter] = useState<"all" | "public">("all");
+  const [inlineReplyPushId, setInlineReplyPushId] = useState<string | null>(null);
+  const [inlineReplyText, setInlineReplyText] = useState("");
+  const [inlineReplyVisibility, setInlineReplyVisibility] = useState<"public" | "private">("public");
+  const [pushReactionPickerPostId, setPushReactionPickerPostId] = useState<string | null>(null);
+  /** Оптимистичное перекрытие до refetch; сервер отдаёт myReaction в ленте. */
+  const [pushSessionMyReaction, setPushSessionMyReaction] = useState<Record<string, string>>({});
+  const [pushScopeRefetchPending, setPushScopeRefetchPending] = useState(false);
+  const inlineReplyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const pushCardPointerDownRef = useRef<Record<string, { x: number; ts: number }>>({});
   const typingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const voiceTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const chatsListScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const { subscribeChat, subscribeTyping, subscribeVoiceRecording, notifyChatListUpdate } = useChatRealtime();
+  const {
+    subscribeChat,
+    subscribeTyping,
+    subscribeVoiceRecording,
+    notifyChatListUpdate,
+    onRealtimeSocketConnected,
+  } = useChatRealtime();
 
-  const { data: chats = [], isLoading, isError, refetch } = useQuery({
+  /** Сразу после монтата подставляем последний снимок из IndexedDB (как холодный старт в мессенджерах). */
+  useLayoutEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [all, hidden] = await Promise.all([getOfflineChatList("all"), getOfflineChatList("hidden")]);
+      if (cancelled) return;
+      if (all.length > 0) queryClient.setQueryData(["chats"], all);
+      if (hidden.length > 0) queryClient.setQueryData(["chats", "hidden"], hidden);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [queryClient]);
+
+  const { data: chats = [], isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ["chats"],
     queryFn: fetchChats,
-    refetchOnMount: "always",
+    // «always» давало полный refetch при каждом возврате на вкладку Чаты + наслаивалось на WS — тяжело для WebView.
+    staleTime: 15_000,
+  });
+  const chatsBackgroundSync = isFetching && !isLoading;
+  const {
+    data: pushFeed = [],
+    isLoading: pushLoading,
+    isFetching: pushFeedFetching,
+    isError: pushError,
+    refetch: refetchPush,
+  } = useQuery({
+    queryKey: ["push", "feed"],
+    queryFn: () => fetchPushFeed(50, 0),
+    staleTime: 15_000,
+  });
+  const {
+    data: pushOutbox = [],
+    isLoading: pushOutboxLoading,
+    isFetching: pushOutboxFetching,
+    isError: pushOutboxError,
+    refetch: refetchPushOutbox,
+  } = useQuery({
+    queryKey: ["push", "outbox"],
+    queryFn: () => fetchPushOutbox(50, 0),
+    staleTime: 15_000,
+  });
+  const PUSH_REPLIES_PAGE_SIZE = 25;
+  const {
+    data: pushRepliesInfinite,
+    isLoading: pushRepliesLoading,
+    isError: pushRepliesError,
+    isFetchingNextPage: pushRepliesFetchingNext,
+    fetchNextPage: fetchNextPushReplies,
+    hasNextPage: pushRepliesHasNext,
+    refetch: refetchPushRepliesPages,
+  } = useInfiniteQuery({
+    queryKey: ["push", "replies", pushRepliesTarget?.id ?? "", pushRepliesVisibilityFilter],
+    queryFn: ({ pageParam }) =>
+      fetchPushReplies(pushRepliesTarget!.id, {
+        limit: PUSH_REPLIES_PAGE_SIZE,
+        offset: pageParam,
+        visibilityFilter: pushRepliesVisibilityFilter === "public" ? "public" : "all",
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((acc, p) => acc + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    enabled: Boolean(pushRepliesTarget?.id),
+    staleTime: 0,
+  });
+  const pushRepliesFlat = pushRepliesInfinite?.pages.flatMap((p) => p.items) ?? [];
+  const pushRepliesTotal = pushRepliesInfinite?.pages[0]?.total ?? 0;
+  const patchPushAuthorMutation = useMutation({
+    mutationFn: ({ authorId, enabled }: { authorId: string; enabled: boolean }) =>
+      updatePushAuthorSettings(authorId, enabled),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+    },
+    onError: (e) => {
+      toast({
+        title: "Не удалось обновить уведомления автора",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    },
+  });
+  const hidePushItemMutation = useMutation({
+    mutationFn: (pushPostId: string) => hidePushFeedItem(pushPostId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+    },
+    onError: (e) => {
+      toast({
+        title: "Не удалось удалить Push",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    },
+  });
+  const hidePushAuthorMutation = useMutation({
+    mutationFn: ({ authorId, hidden }: { authorId: string; hidden: boolean }) =>
+      updatePushAuthorHidden(authorId, hidden),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+    },
+    onError: (e) => {
+      toast({
+        title: "Не удалось скрыть Push автора",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    },
+  });
+  const unsubscribePushAuthorMutation = useMutation({
+    mutationFn: (authorId: string) => unsubscribePushAuthor(authorId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+      toast({ title: "Вы отписались от Push автора" });
+    },
+    onError: (e) => {
+      toast({
+        title: "Не удалось отписаться",
+        description: e instanceof Error ? e.message : "Повторите позже",
+        variant: "destructive",
+      });
+    },
+  });
+  const pushReactionMutation = useMutation({
+    mutationFn: ({ pushPostId, emoji }: { pushPostId: string; emoji: string }) => setPushReaction(pushPostId, emoji),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["push", "outbox"] });
+    },
+  });
+  const removePushReactionMutation = useMutation({
+    mutationFn: (pushPostId: string) => removePushReaction(pushPostId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["push", "outbox"] });
+    },
+  });
+  const createPushReplyMutation = useMutation({
+    mutationFn: (payload: { pushPostId: string; text: string; visibility: "public" | "private" }) =>
+      createPushReply(payload.pushPostId, payload.text, payload.visibility),
+    onSuccess: (_data, variables) => {
+      setInlineReplyText("");
+      setInlineReplyPushId((prev) => (prev === variables.pushPostId ? null : prev));
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["push", "outbox"] });
+      void queryClient.invalidateQueries({ queryKey: ["push", "replies", variables.pushPostId] });
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      toast({ title: "Ответ на Push отправлен" });
+    },
+    onError: (e, variables) => {
+      toast({
+        title: e instanceof Error ? e.message : "Не удалось отправить ответ",
+        variant: "destructive",
+        action: pushRetryToastAction(() => {
+          createPushReplyMutation.mutate(variables);
+        }),
+      });
+    },
   });
 
   /** Пока refetch /chats не подтвердил unread, показываем индикатор по событию входящего из WS (слушатель в AppLayout). */
@@ -565,6 +787,29 @@ export default function Chats() {
   }, [user?.id]);
 
   useEffect(() => {
+    return onComposerTransferPulse((d) => {
+      if (d.userId === user?.id) return;
+      bumpComposerListPulse(d.chatId);
+    });
+  }, [bumpComposerListPulse, user?.id]);
+
+  useEffect(() => {
+    return onComposerPulsePendingResolved(({ chatId }) => {
+      clearComposerListPulse(chatId);
+    });
+  }, [clearComposerListPulse]);
+
+  useEffect(() => {
+    void fetchComposerPulsePendingRows();
+  }, [fetchComposerPulsePendingRows]);
+
+  useEffect(() => {
+    return onRealtimeSocketConnected(() => {
+      void fetchComposerPulsePendingRows();
+    });
+  }, [fetchComposerPulsePendingRows, onRealtimeSocketConnected]);
+
+  useEffect(() => {
     if (chats.length === 0) return;
     setPendingUnreadChatIds((prev) => {
       if (prev.size === 0) return prev;
@@ -580,7 +825,90 @@ export default function Chats() {
     });
   }, [chats]);
 
-  const [listSectionTab, setListSectionTab] = useState<"all" | "friends" | "work" | "promo" | "invitations">("all");
+  const [listSectionTab, setListSectionTab] = useState<string>("all");
+
+  const { data: shelfData } = useQuery({
+    queryKey: ["chat-list-shelves"],
+    queryFn: fetchChatListShelves,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const builtinTabPrefs = shelfData?.builtinTabPrefs ?? {};
+  const customShelfFolders = shelfData?.customFolders ?? [];
+
+  const shelfTabRow = useMemo(() => {
+    const rows: {
+      tabId: string;
+      label: string;
+      icon: typeof Heart;
+      kind: "synthetic" | "builtin" | "custom";
+    }[] = [
+      { tabId: "push", label: "Push", icon: Sparkles, kind: "synthetic" },
+      { tabId: "all", label: "Все", icon: LayoutList, kind: "synthetic" },
+    ];
+    for (const b of BUILTIN_SHELF_CHIPS) {
+      const pref = builtinTabPrefs[b.id];
+      const label = pref?.labelOverride?.trim() ? pref.labelOverride.trim() : b.defaultLabel;
+      rows.push({ tabId: b.id, label, icon: b.icon, kind: "builtin" });
+    }
+    for (const c of customShelfFolders) {
+      rows.push({ tabId: c.id, label: c.name, icon: Folder, kind: "custom" });
+    }
+    return rows;
+  }, [builtinTabPrefs, customShelfFolders]);
+
+  useEffect(() => {
+    if (!CUSTOM_CHAT_SHELF_ID_RE.test(listSectionTab)) return;
+    if (customShelfFolders.some((f) => f.id === listSectionTab)) return;
+    setListSectionTab("all");
+  }, [customShelfFolders, listSectionTab]);
+
+  const [folderShelfMenuTab, setFolderShelfMenuTab] = useState<string | null>(null);
+  const [addShelfFolderOpen, setAddShelfFolderOpen] = useState(false);
+  const [newShelfFolderName, setNewShelfFolderName] = useState("");
+  const [shelfCreateLoading, setShelfCreateLoading] = useState(false);
+  const [renameShelfOpen, setRenameShelfOpen] = useState(false);
+  const [renameShelfValue, setRenameShelfValue] = useState("");
+  const [renameShelfTarget, setRenameShelfTarget] = useState<
+    null | { kind: "builtin"; tabId: string } | { kind: "custom"; id: string }
+  >(null);
+  const [confirmDeleteShelfId, setConfirmDeleteShelfId] = useState<string | null>(null);
+  const [deleteShelfLoading, setDeleteShelfLoading] = useState(false);
+
+  useEffect(() => {
+    const onOpen = () => {
+      setListSectionTab("push");
+      setPushScope("outgoing");
+      setCreateStandalonePushOpen(true);
+    };
+    window.addEventListener(OPEN_CREATE_STANDALONE_PUSH_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CREATE_STANDALONE_PUSH_EVENT, onOpen);
+  }, []);
+
+  const { tabBadgeCount: pushTabBadgeCount } = usePushIncomingLastSeen({
+    userId: user?.id,
+    listSectionTab,
+    incomingFeed: pushFeed,
+  });
+
+  const activePushFeed = pushScope === "incoming" ? pushFeed : pushOutbox;
+  const activePushLoading = pushScope === "incoming" ? pushLoading : pushOutboxLoading;
+  const activePushError = pushScope === "incoming" ? pushError : pushOutboxError;
+  const activePushFetching = pushScope === "incoming" ? pushFeedFetching : pushOutboxFetching;
+  const showPushScopeSkeleton =
+    pushScopeRefetchPending && activePushFetching && !activePushLoading;
+
+  useEffect(() => {
+    if (!pushScopeRefetchPending) return;
+    if (!activePushFetching) setPushScopeRefetchPending(false);
+  }, [pushScopeRefetchPending, activePushFetching]);
+
+  usePushFeedAutoRefresh(listSectionTab === "push", () => {
+    void refetchPush();
+    void refetchPushOutbox();
+  });
+  const selectedChatRouteMatch = location.match(/^\/chat\/([^/?#]+)/);
+  const selectedChatId = selectedChatRouteMatch?.[1] ? decodeURIComponent(selectedChatRouteMatch[1]) : null;
   /** Полоса скрытых чатов вверху списка после pull-to-refresh (если есть скрытые). */
   const [hiddenPeekOpen, setHiddenPeekOpen] = useState(false);
   const [serviceMenuChat, setServiceMenuChat] = useState<ApiChat | null>(null);
@@ -592,11 +920,37 @@ export default function Chats() {
   const [deleteInProgress, setDeleteInProgress] = useState<null | "leave" | "forAll">(null);
   const chatListReducedMotion = usePrefersReducedMotion();
 
+  const prevPushRepliesOpenRef = useRef(false);
+  useEffect(() => {
+    const open = pushRepliesTarget !== null;
+    if (open && !prevPushRepliesOpenRef.current) {
+      setPushRepliesVisibilityFilter("all");
+    }
+    prevPushRepliesOpenRef.current = open;
+  }, [pushRepliesTarget]);
+
+  useEffect(() => {
+    if (!inlineReplyPushId || chatListReducedMotion) return;
+    const id = requestAnimationFrame(() => inlineReplyTextareaRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [inlineReplyPushId, chatListReducedMotion]);
+
   const { data: hiddenChats = [], isLoading: hiddenLoading, refetch: refetchHidden } = useQuery({
     queryKey: ["chats", "hidden"],
     queryFn: fetchHiddenChats,
     staleTime: 60_000,
   });
+
+  useEffect(() => {
+    const onOnline = () => {
+      void queryClient.invalidateQueries({ queryKey: ["chats"] });
+      void queryClient.invalidateQueries({ queryKey: ["chats", "hidden"] });
+      void queryClient.invalidateQueries({ queryKey: ["push", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["chat-list-shelves"] });
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [queryClient]);
 
   useEffect(() => {
     if (hiddenPeekOpen && !hiddenLoading && hiddenChats.length === 0) {
@@ -633,12 +987,26 @@ export default function Chats() {
             return next;
           });
           notifyChatListUpdate();
-          void queryClient.invalidateQueries({ queryKey: ["chats"] });
         })
       );
       unsubs.push(
-        subscribeTyping(chatId, (userId, displayName) => {
+        subscribeTyping(chatId, (userId, displayName, active) => {
           if (userId === user?.id) return;
+          if (active === false) {
+            if (typingTimeoutsRef.current[chatId]) {
+              clearTimeout(typingTimeoutsRef.current[chatId]);
+              delete typingTimeoutsRef.current[chatId];
+            }
+            flushSync(() =>
+              setTypingByChatId((prev) => {
+                if (prev[chatId] == null) return prev;
+                const next = { ...prev };
+                delete next[chatId];
+                return next;
+              }),
+            );
+            return;
+          }
           const name = displayName?.trim() || "Кто-то";
           flushSync(() => setTypingByChatId((prev) => ({ ...prev, [chatId]: name })));
           if (typingTimeoutsRef.current[chatId]) clearTimeout(typingTimeoutsRef.current[chatId]);
@@ -694,7 +1062,7 @@ export default function Chats() {
   const { data: contactsList = [] } = useQuery({
     queryKey: ["contacts", "list"],
     queryFn: listContactsWithProfiles,
-    enabled: showContactsPage || showCreateGroupModal,
+    enabled: showContactsPage || showCreateGroupModal || Boolean(pushShareTarget),
   });
 
   const syncAddressBookMatches = useCallback(async () => {
@@ -762,17 +1130,34 @@ export default function Chats() {
             (c.name ?? "").toLowerCase().includes(searchLower)
         );
 
-  /** Вкладки «Друзья / Работа / …» показываем только если пользователь уже вынес хотя бы один чат из «Общих». */
-  const hasCustomListSections = useMemo(
-    () => chats.some((c) => (c.listSection ?? "general") !== "general"),
-    [chats],
-  );
+  const shelfFolderAssignOptions = useMemo(() => {
+    return [
+      { id: "general" as const, label: "Общие" },
+      ...BUILTIN_SHELF_CHIPS.map((b) => ({
+        id: b.id,
+        label: builtinTabPrefs[b.id]?.labelOverride?.trim() || b.defaultLabel,
+      })),
+      ...customShelfFolders.map((c) => ({ id: c.id, label: c.name })),
+    ];
+  }, [builtinTabPrefs, customShelfFolders]);
 
-  useEffect(() => {
-    if (!hasCustomListSections && listSectionTab !== "all") {
-      setListSectionTab("all");
+  const folderShelfMenuMeta = useMemo(() => {
+    const tab = folderShelfMenuTab;
+    if (!tab) return null;
+    if (tab === "push") return { kind: "synthetic" as const, synthetic: "push" as const };
+    if (tab === "all") return { kind: "synthetic" as const, synthetic: "all" as const };
+    const builtin = BUILTIN_SHELF_CHIPS.find((b) => b.id === tab);
+    if (builtin) {
+      const title = builtinTabPrefs[tab]?.labelOverride?.trim() || builtin.defaultLabel;
+      const pushMuted = builtinTabPrefs[tab]?.pushMuted === true;
+      return { kind: "builtin" as const, tabId: tab, title, pushMuted };
     }
-  }, [hasCustomListSections, listSectionTab]);
+    const c = customShelfFolders.find((f) => f.id === tab);
+    if (c) {
+      return { kind: "custom" as const, id: c.id, title: c.name, pushMuted: c.pushMuted === true };
+    }
+    return { kind: "unknown" as const };
+  }, [folderShelfMenuTab, builtinTabPrefs, customShelfFolders]);
 
   const filteredBySection = useMemo(() => {
     if (listSectionTab === "all") {
@@ -797,8 +1182,7 @@ export default function Chats() {
   const refreshChatQueries = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["chats"] });
     void queryClient.invalidateQueries({ queryKey: ["chats", "hidden"] });
-    notifyChatListUpdate();
-  }, [queryClient, notifyChatListUpdate]);
+  }, [queryClient]);
 
   const unhideChat = useCallback(
     async (chatId: string) => {
@@ -931,6 +1315,215 @@ export default function Chats() {
     {} as Record<string, ContactUser[]>
   );
 
+  const goToProfileFromChats = useCallback(() => {
+    void triggerLightHaptic();
+    setLocation("/profile/me");
+  }, [setLocation]);
+
+  const handlePushCardRemove = useCallback(
+    (pushPostId: string) => {
+      if (hidePushItemMutation.isPending) return;
+      hidePushItemMutation.mutate(pushPostId);
+    },
+    [hidePushItemMutation],
+  );
+
+  const handlePushCardPointerDown = useCallback((pushPostId: string, clientX: number) => {
+    pushCardPointerDownRef.current[pushPostId] = { x: clientX, ts: Date.now() };
+  }, []);
+
+  const handlePushCardPointerUp = useCallback(
+    (pushPostId: string, clientX: number) => {
+      const start = pushCardPointerDownRef.current[pushPostId];
+      if (!start) return;
+      delete pushCardPointerDownRef.current[pushPostId];
+      const deltaX = clientX - start.x;
+      const holdMs = Date.now() - start.ts;
+      if (deltaX >= 88 || holdMs >= 650) {
+        handlePushCardRemove(pushPostId);
+      }
+    },
+    [handlePushCardRemove],
+  );
+
+  const handlePushReact = useCallback(
+    async (pushPostId: string, postId: string, emoji: string) => {
+      const run = async () => {
+        await Promise.all([pushReactionMutation.mutateAsync({ pushPostId, emoji }), addReaction(postId, emoji)]);
+        setPushSessionMyReaction((prev) => ({ ...prev, [pushPostId]: emoji }));
+        setPushReactionPickerPostId((prev) => (prev === pushPostId ? null : prev));
+        toast({ title: `Реакция ${emoji} отправлена` });
+      };
+      try {
+        await run();
+      } catch (e) {
+        toast({
+          title: e instanceof Error ? e.message : "Не удалось отправить реакцию",
+          variant: "destructive",
+          action: pushRetryToastAction(() => {
+            void run().catch((err) =>
+              toast({
+                title: err instanceof Error ? err.message : "Не удалось отправить реакцию",
+                variant: "destructive",
+              }),
+            );
+          }),
+        });
+      }
+    },
+    [pushReactionMutation, toast],
+  );
+
+  const handlePushRemoveReact = useCallback(
+    async (pushPostId: string, postId: string) => {
+      const run = async () => {
+        await Promise.all([removePushReactionMutation.mutateAsync(pushPostId), removeReaction(postId)]);
+        setPushSessionMyReaction((prev) => {
+          const next = { ...prev };
+          delete next[pushPostId];
+          return next;
+        });
+      };
+      try {
+        await run();
+      } catch (e) {
+        toast({
+          title: e instanceof Error ? e.message : "Не удалось убрать реакцию",
+          variant: "destructive",
+          action: pushRetryToastAction(() => {
+            void run().catch((err) =>
+              toast({
+                title: err instanceof Error ? err.message : "Не удалось убрать реакцию",
+                variant: "destructive",
+              }),
+            );
+          }),
+        });
+      }
+    },
+    [removePushReactionMutation, toast],
+  );
+
+  const handleInlinePushReplySubmit = useCallback(() => {
+    if (!inlineReplyPushId) return;
+    const trimmed = inlineReplyText.trim();
+    if (!trimmed) {
+      toast({ title: "Введите текст ответа", variant: "destructive" });
+      return;
+    }
+    createPushReplyMutation.mutate({
+      pushPostId: inlineReplyPushId,
+      text: trimmed,
+      visibility: inlineReplyVisibility,
+    });
+  }, [createPushReplyMutation, inlineReplyPushId, inlineReplyText, inlineReplyVisibility, toast]);
+
+  const toggleInlineReplyForPush = useCallback((pushPostId: string) => {
+    setInlineReplyPushId((prev) => {
+      if (prev === pushPostId) {
+        setInlineReplyText("");
+        return null;
+      }
+      setInlineReplyText("");
+      setInlineReplyVisibility("public");
+      return pushPostId;
+    });
+  }, []);
+
+  const handlePushShareNative = useCallback(
+    async (item: PushFeedItem) => {
+      const postSeg = (item.postLinkCode || item.postId).trim();
+      const authorSeg = item.postAuthorPublicId != null ? String(item.postAuthorPublicId) : encodeURIComponent(item.postAuthorId);
+      const url = `${window.location.origin}/u/${encodeURIComponent(authorSeg)}/p/${encodeURIComponent(postSeg)}`;
+      try {
+        if (navigator.share) {
+          await navigator.share({ title: `${item.author.displayName}: Push`, text: item.text.slice(0, 160), url });
+          return;
+        }
+        await navigator.clipboard.writeText(url);
+        toast({ title: "Ссылка на Push скопирована" });
+      } catch (e) {
+        if (isNavigatorShareCancelled(e)) return;
+        toast({ title: "Не удалось поделиться", variant: "destructive" });
+      }
+    },
+    [toast],
+  );
+
+  const handlePushReport = useCallback(
+    async (item: PushFeedItem) => {
+      try {
+        await submitContentReport({
+          targetType: "post",
+          targetId: item.postId,
+          contextPostId: item.postId,
+          reasonCode: "spam",
+          reason: "Жалоба из Push-ленты",
+        });
+        toast({ title: "Жалоба отправлена" });
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось отправить жалобу", variant: "destructive" });
+      }
+    },
+    [toast],
+  );
+
+  const handlePushBlockAuthor = useCallback(
+    async (authorId: string) => {
+      try {
+        await setUserBlock(authorId, USER_BLOCK_PRESETS.full);
+        hidePushAuthorMutation.mutate({ authorId, hidden: true });
+        toast({ title: "Пользователь заблокирован" });
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось заблокировать", variant: "destructive" });
+      }
+    },
+    [hidePushAuthorMutation, toast],
+  );
+
+  const handleForwardPushToUser = useCallback(
+    async (item: PushFeedItem, toUserId: string) => {
+      try {
+        const result = await sharePostToUser(item.postId, toUserId);
+        setPushShareTarget(null);
+        toast({ title: "Push переслан в сообщение" });
+        prefetchChatMessagesTail(queryClient, result.chatId);
+        setLocation(`/chat/${encodeURIComponent(result.chatId)}`);
+      } catch (e) {
+        toast({ title: e instanceof Error ? e.message : "Не удалось переслать Push", variant: "destructive" });
+      }
+    },
+    [queryClient, setLocation, toast],
+  );
+
+  const chatsEdgeSwipeBlocked = useMemo(
+    () =>
+      showContactsPage ||
+      showCreateGroupModal ||
+      serviceMenuChat !== null ||
+      confirmDeleteAllChat !== null ||
+      confirmLeaveChat !== null ||
+      deleteInProgress !== null ||
+      hiddenPeekOpen ||
+      searchQuery.trim().length > 0,
+    [
+      showContactsPage,
+      showCreateGroupModal,
+      serviceMenuChat,
+      confirmDeleteAllChat,
+      confirmLeaveChat,
+      deleteInProgress,
+      hiddenPeekOpen,
+      searchQuery,
+    ],
+  );
+
+  useTouchLeftEdgeSwipeRight({
+    enabled: touchEdgeNavEnabled && location === "/",
+    blocked: chatsEdgeSwipeBlocked,
+    onNavigate: goToProfileFromChats,
+  });
+
   // Экран контактов
   if (showContactsPage) {
     return (
@@ -1017,13 +1610,14 @@ export default function Chats() {
                   {addressBookError ? (
                     <p className="text-sm text-destructive mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span>{addressBookError}</span>
-                      <button
+                      <TapScaleButton
                         type="button"
+                        subtle
                         onClick={() => void syncAddressBookMatches()}
-                        className="min-h-[var(--uix-touch-min)] px-1 text-primary underline underline-offset-2"
+                        className="min-h-[var(--uix-touch-min)] px-1 text-primary underline underline-offset-2 bg-transparent border-0 shadow-none"
                       >
                         Повторить
-                      </button>
+                      </TapScaleButton>
                     </p>
                   ) : null}
                 </div>
@@ -1037,17 +1631,17 @@ export default function Chats() {
                       {addressBookMatches.map((m) => (
                         <div
                           key={`ab-${m.id}`}
-                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl transition-colors group active:scale-[0.98]"
+                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl transition-colors group"
                         >
-                          <button
-                            type="button"
-                            className="flex flex-1 min-w-0 items-center gap-3 text-left"
+                          <TapScaleDiv
+                            subtle
+                            className="flex flex-1 min-w-0 items-center gap-3 text-left rounded-xl -m-1 p-1 pr-2"
                             onClick={async () => {
                               if (contactOpeningId) return;
                               setContactOpeningId(m.id);
                               try {
                                 const chat = await startDm(m.id);
-                                setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                                navigateToChat(chat);
                                 setShowContactsPage(false);
                               } finally {
                                 setContactOpeningId(null);
@@ -1060,6 +1654,7 @@ export default function Chats() {
                               seed={String(m.id)}
                               size={48}
                               className="w-12 h-12 shrink-0"
+                              pointerEventsNone
                             />
                             <div className="min-w-0">
                               <h3 className="font-semibold text-[16px] truncate">{contactDisplayName(m)}</h3>
@@ -1067,7 +1662,7 @@ export default function Chats() {
                                 {m.isInMyContacts ? "Уже в контактах" : "В Ping"}
                               </p>
                             </div>
-                          </button>
+                          </TapScaleDiv>
                           <div className="flex items-center gap-1 shrink-0">
                             {!m.isInMyContacts ? (
                               <TapScaleButton
@@ -1097,9 +1692,10 @@ export default function Chats() {
                                 В контакты
                               </TapScaleButton>
                             ) : null}
-                            <button
+                            <TapScaleButton
                               type="button"
-                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              subtle
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 border-0 bg-transparent shadow-none"
                               aria-label={`Написать ${contactDisplayName(m)}`}
                               onClick={async (e) => {
                                 e.stopPropagation();
@@ -1107,7 +1703,7 @@ export default function Chats() {
                                 setContactOpeningId(m.id);
                                 try {
                                   const chat = await startDm(m.id);
-                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                                  navigateToChat(chat);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
@@ -1115,7 +1711,7 @@ export default function Chats() {
                               }}
                             >
                               <MessageCircle className="w-4 h-4" />
-                            </button>
+                            </TapScaleButton>
                           </div>
                         </div>
                       ))}
@@ -1123,7 +1719,28 @@ export default function Chats() {
                   </div>
                 ) : null}
 
-                <div
+                <TapScaleDiv
+                  subtle
+                  className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors"
+                  onClick={() => {
+                    setShowContactsPage(false);
+                    setContactsSearchQuery("");
+                    setLocation("/help/invite-friends");
+                  }}
+                >
+                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <Ticket className="w-5 h-5 text-primary" aria-hidden />
+                  </div>
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="font-medium text-[15px] text-primary">Пригласить друга</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-snug">
+                      Регистрация по коду: до трёх приглашений или заявка на ещё — как в настройках
+                    </p>
+                  </div>
+                </TapScaleDiv>
+
+                <TapScaleDiv
+                  subtle
                   className="flex items-center gap-3 p-3 ml-1 mb-2 hover:bg-secondary/50 rounded-2xl cursor-pointer text-primary font-medium transition-colors"
                   onClick={() => {
                     setShowContactsPage(false);
@@ -1134,14 +1751,17 @@ export default function Chats() {
                     <UserPlus className="w-5 h-5" />
                   </div>
                   Добавить контакт (поиск в «Чаты»)
-                </div>
+                </TapScaleDiv>
               </>
             )}
 
             {Object.keys(groupedContacts).length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 text-muted-foreground text-center">
-                <p>Пока нет контактов</p>
-                <p className="text-sm mt-1">Найдите пользователя через поиск в разделе «Чаты» и начните диалог</p>
+              <div className="py-7">
+                <ListEmptyState
+                  icon={UserPlus}
+                  title="Пока нет контактов"
+                  description="Найдите пользователя через поиск в разделе «Чаты» и начните диалог."
+                />
               </div>
             ) : (
               Object.keys(groupedContacts)
@@ -1155,85 +1775,99 @@ export default function Chats() {
                     )}
                     <div className="flex flex-col gap-0.5">
                       {groupedContacts[letter].map((contact) => (
-                        <div
+                        <TapScaleDiv
                           key={`contact-${contact.id}`}
-                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors group active:scale-[0.98]"
+                          subtle
+                          className="flex items-center justify-between p-3 hover:bg-secondary/50 rounded-2xl cursor-pointer transition-colors group min-w-0"
                           onClick={async () => {
                             if (contactOpeningId) return;
                             setContactOpeningId(contact.id);
                             try {
                               const chat = await startDm(contact.id);
-                              setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                              navigateToChat(chat);
                               setShowContactsPage(false);
                             } finally {
                               setContactOpeningId(null);
                             }
                           }}
                         >
-                          <div className="flex items-center gap-3">
-                            <UserAvatar avatarUrl={contact.avatarUrl ?? undefined} displayName={contactDisplayName(contact)} seed={String(contact.id)} size={48} className="w-12 h-12" />
-                            <div>
-                              <h3 className="font-semibold text-[16px]">{contactDisplayName(contact)}</h3>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <UserAvatar
+                              avatarUrl={contact.avatarUrl ?? undefined}
+                              displayName={contactDisplayName(contact)}
+                              seed={String(contact.id)}
+                              size={48}
+                              className="w-12 h-12 shrink-0"
+                              pointerEventsNone
+                            />
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-[16px] truncate">{contactDisplayName(contact)}</h3>
                               <p className="text-sm text-muted-foreground">В контактах</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
+                          <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <TapScaleButton
                               type="button"
-                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              subtle
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 border-0 bg-transparent shadow-none"
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 if (contactOpeningId) return;
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                                  navigateToChat(chat);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
                                 }
                               }}
+                              aria-label={`Написать ${contactDisplayName(contact)}`}
                             >
                               <MessageCircle className="w-4 h-4" />
-                            </button>
-                            <button
+                            </TapScaleButton>
+                            <TapScaleButton
                               type="button"
-                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              subtle
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 border-0 bg-transparent shadow-none"
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 if (contactOpeningId) return;
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                                  navigateToChat(chat);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
                                 }
                               }}
+                              aria-label={`Позвонить ${contactDisplayName(contact)}`}
                             >
                               <Phone className="w-4 h-4" />
-                            </button>
-                            <button
+                            </TapScaleButton>
+                            <TapScaleButton
                               type="button"
-                              className="p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              subtle
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] p-2 rounded-full text-muted-foreground hover:text-primary hover:bg-primary/10 border-0 bg-transparent shadow-none"
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 if (contactOpeningId) return;
                                 setContactOpeningId(contact.id);
                                 try {
                                   const chat = await startDm(contact.id);
-                                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                                  navigateToChat(chat);
                                   setShowContactsPage(false);
                                 } finally {
                                   setContactOpeningId(null);
                                 }
                               }}
+                              aria-label={`Видеозвонок ${contactDisplayName(contact)}`}
                             >
                               <Video className="w-4 h-4" />
-                            </button>
+                            </TapScaleButton>
                           </div>
-                        </div>
+                        </TapScaleDiv>
                       ))}
                     </div>
                   </div>
@@ -1247,26 +1881,41 @@ export default function Chats() {
 
   // Экран чатов
   return (
-        <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden animate-in fade-in duration-150">
-      <PageTitle title="Чаты" />
+        <div
+          className={cn(
+            "flex h-full w-full max-w-full min-w-0 overflow-x-hidden animate-in fade-in duration-150",
+            embedded && "border-l border-border/40 bg-card/10",
+          )}
+          data-pull-refresh-scope
+        >
+      {!embedded ? <PageTitle title="Чаты" /> : null}
       <div className="w-full max-w-full min-w-0 flex flex-col h-full bg-background relative">
         
         {/* Header — компактно, как в TG: ~5px от краёв */}
-        <div className="uix-content-x pt-safe-offset-2 pb-2 sm:pt-4 sm:pb-2.5 glass z-40 sticky top-0 border-b border-border/50">
-          <div className="flex justify-between items-center mb-2">
-            <span className="uix-text-title tracking-tight">Чаты</span>
+        <div
+          className={cn(
+            "uix-content-x relative z-50 isolate pb-2 sm:pb-2.5 glass sticky top-0 border-b border-border/50",
+            embedded ? "pt-2.5 sm:pt-3" : "pt-safe sm:pt-3.5",
+          )}
+        >
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-2">
+            <span className="uix-text-title tracking-tight">
+              Чаты{embedded && chats.length > 0 ? ` (${chats.length})` : ""}
+            </span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button
+                <Button
                   type="button"
-                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 active:scale-95"
+                  variant="secondary"
+                  size="icon"
+                  className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] shrink-0 rounded-2xl border-0 shadow-none hover:bg-secondary/80"
                   title="Новый чат или группа"
                   aria-label="Новый чат или групповой чат"
                 >
-                  <Edit className="w-5 h-5" />
-                </button>
+                  <Edit className="h-5 w-5" />
+                </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[180px]">
+              <DropdownMenuContent align="end" className="z-[100] min-w-[180px]">
                 <DropdownMenuItem
                   onClick={() => {
                     setShowContactsPage(true);
@@ -1298,35 +1947,57 @@ export default function Chats() {
                 ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
-          <div className="flex items-center gap-2">
-            <GlobalSearch
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Поиск по номеру, ID или имени..."
-              className="[&_input]:h-11 [&_input]:rounded-xl [&_input]:bg-card/75 [&_input]:text-[15px] [&_input]:shadow-[inset_0_0_0_1px_hsl(var(--border)/0.5)] [&_input]:focus:ring-2 [&_input]:focus:ring-primary/25"
-            />
-            <button 
-              onClick={() => setShowContactsPage(true)}
-              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors duration-75 flex-shrink-0 active:scale-95"
+
+            <div className="min-w-0">
+              <GlobalSearch
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Поиск по номеру, ID или имени..."
+                showBusinessToggle={false}
+                className="[&_input]:h-11 [&_input]:rounded-2xl [&_input]:bg-card/80 [&_input]:text-[15px] [&_input]:shadow-[inset_0_0_0_1px_hsl(var(--border)/0.45)] [&_input]:focus:ring-2 [&_input]:focus:ring-primary/25"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] shrink-0 rounded-2xl border-0 shadow-none hover:bg-secondary/80"
               title="Контакты"
               aria-label="Контакты"
+              onClick={() => {
+                triggerLightHaptic();
+                setShowContactsPage(true);
+              }}
             >
-              <UserPlus className="w-5 h-5" />
-            </button>
+              <UserPlus className="h-5 w-5" />
+            </Button>
+
           </div>
+          <BackgroundSyncBar
+            active={chatsBackgroundSync}
+            className="absolute bottom-0 left-0 right-0 rounded-none"
+            label="Обновление списка чатов"
+          />
         </div>
 
         {/* List Content — чаты в 5px от краёв, как в Telegram */}
         <PullToRefresh
           onRefresh={async () => {
-            await Promise.all([refetch(), refetchHidden()]);
+            await Promise.all([refetch(), refetchHidden(), refetchPush(), refetchPushOutbox()]);
           }}
           onPastThresholdRelease={revealHiddenPeekIfAny}
           className="min-h-0"
           enableHoldRefresh={false}
+          scrollRef={chatsListScrollRef}
         >
-          <div className="uix-content-x py-2 sm:py-2.5 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))] space-y-1">
+          <div
+            className={cn(
+              "uix-content-x py-2 sm:py-2.5 space-y-1",
+              embedded
+                ? "pb-3"
+                : "pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))]",
+            )}
+          >
             {hiddenPeekOpen && hiddenChats.length > 0 ? (
               <motion.div
                 initial={chatListReducedMotion ? false : { opacity: 0, y: -8 }}
@@ -1360,22 +2031,26 @@ export default function Chats() {
                     <ChatRow
                       key={h.id}
                       chat={h}
+                      currentUserId={user?.id}
+                      isSelected={selectedChatId === h.id}
                       typingLabel={null}
                       voiceLabel={null}
                       suppressUnreadVisual
-                      onSelect={() => setLocation(`/chat/${encodeURIComponent(h.id)}`)}
+                      composerTransferPulse={h.type === "dm" && composerTransferRowIds.has(h.id)}
+                      onSelect={() => navigateToChat(h)}
                       onLongPressMenu={() => setServiceMenuChat(h)}
                       trailingAction={
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <TapScaleButton
                               type="button"
-                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                              subtle
+                              className="min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground border-0 bg-transparent shadow-none"
                               aria-label="Меню скрытого чата"
                               onPointerDown={(e) => e.stopPropagation()}
                             >
                               <MoreHorizontal className="h-5 w-5" aria-hidden />
-                            </button>
+                            </TapScaleButton>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-[220px]">
                             <DropdownMenuItem
@@ -1394,27 +2069,40 @@ export default function Chats() {
                 </div>
               </motion.div>
             ) : null}
-            {searchLower === "" && hasCustomListSections && (
-              <div className="flex gap-1 overflow-x-auto pb-2 -mx-0.5 px-0.5 scrollbar-none">
-                {LIST_SECTION_TABS.map((t) => {
-                  const Icon = t.icon;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setListSectionTab(t.id)}
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium shrink-0 transition-colors border min-h-[28px]",
-                        listSectionTab === t.id
-                          ? "bg-primary/12 border-primary/25 text-foreground"
-                          : "bg-muted/25 border-border/30 text-muted-foreground hover:bg-muted/45"
-                      )}
-                    >
-                      <Icon className="w-3 h-3 opacity-80 shrink-0" aria-hidden />
-                      {t.label}
-                    </button>
-                  );
-                })}
+            {searchLower === "" && (
+              <div className="flex gap-1 overflow-x-auto pb-2 -mx-0.5 px-0.5 scrollbar-none items-center">
+                {shelfTabRow.map((t) => (
+                  <ChatShelfTabButton
+                    key={t.tabId}
+                    label={t.label}
+                    icon={t.icon}
+                    active={listSectionTab === t.tabId}
+                    isPush={t.tabId === "push"}
+                    pushTabBadgeCount={pushTabBadgeCount}
+                    chatListReducedMotion={chatListReducedMotion}
+                    onSelect={() => setListSectionTab(t.tabId)}
+                    onLongPressMenu={() => setFolderShelfMenuTab(t.tabId)}
+                  />
+                ))}
+                <TapScaleButton
+                  type="button"
+                  subtle
+                  haptic
+                  aria-label="Новая папка"
+                  title={customShelfFolders.length >= 30 ? "Не более 30 своих папок" : "Добавить папку"}
+                  disabled={customShelfFolders.length >= 30}
+                  onClick={() => {
+                    setNewShelfFolderName("");
+                    setAddShelfFolderOpen(true);
+                  }}
+                  className={cn(
+                    "inline-flex shrink-0 items-center justify-center rounded-full border min-h-[28px] min-w-[28px] p-0",
+                    "border-dashed border-primary/35 bg-primary/5 text-primary hover:bg-primary/12",
+                    customShelfFolders.length >= 30 && "opacity-40 pointer-events-none",
+                  )}
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden />
+                </TapScaleButton>
               </div>
             )}
             {searchQuery.trim().length >= 2 && (
@@ -1429,11 +2117,12 @@ export default function Chats() {
                     {messageSearchResults.map((hit) => (
                       <li key={`${hit.chatId}-${hit.messageId}`}>
                         <TapScaleDiv
-                          onClick={() =>
-                          setLocation(
-                            `/chat/${encodeURIComponent(hit.chatId)}?messageId=${encodeURIComponent(hit.messageId)}`,
-                          )
-                        }
+                          onClick={() => {
+                            prefetchChatMessagesTail(queryClient, hit.chatId);
+                            setLocation(
+                              `/chat/${encodeURIComponent(hit.chatId)}?messageId=${encodeURIComponent(hit.messageId)}`,
+                            );
+                          }}
                           className="flex flex-col gap-0.5 p-2.5 rounded-lg hover:bg-secondary/50 cursor-pointer"
                         >
                           <span className="text-xs text-muted-foreground">{hit.chatName}</span>
@@ -1447,7 +2136,564 @@ export default function Chats() {
                 )}
               </div>
             )}
-            {isLoading ? (
+            {listSectionTab === "push" ? (
+              activePushLoading ? (
+                <LoadingProgress loading minHeight="200px" className="rounded-xl">
+                  <div className="min-h-[200px]" />
+                </LoadingProgress>
+              ) : activePushError ? (
+                <ErrorWithRetry
+                  title="Не удалось загрузить Push-ленту"
+                  description="Проверьте интернет и попробуйте снова"
+                  onRetry={() => (pushScope === "incoming" ? refetchPush() : refetchPushOutbox())}
+                />
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-border/50 bg-card/60 p-1.5">
+                    <div className="flex min-w-0 flex-1 items-center gap-1 sm:flex-none sm:flex-initial">
+                      <TapScaleButton
+                        type="button"
+                        subtle
+                        onClick={() => {
+                          if (pushScope !== "incoming") {
+                            setPushScopeRefetchPending(true);
+                            setPushScope("incoming");
+                          }
+                          void refetchPush();
+                        }}
+                        className={cn(
+                          "min-h-[32px] shrink-0 rounded-xl px-2.5 sm:px-3 text-[12px] font-medium",
+                          pushScope === "incoming" ? "bg-primary/15 text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        Входящие
+                      </TapScaleButton>
+                      <TapScaleButton
+                        type="button"
+                        subtle
+                        onClick={() => {
+                          if (pushScope !== "outgoing") {
+                            setPushScopeRefetchPending(true);
+                            setPushScope("outgoing");
+                          }
+                          void refetchPushOutbox();
+                        }}
+                        className={cn(
+                          "min-h-[32px] shrink-0 rounded-xl px-2.5 sm:px-3 text-[12px] font-medium",
+                          pushScope === "outgoing" ? "bg-primary/15 text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        Исходящие
+                      </TapScaleButton>
+                    </div>
+                    {pushScope === "outgoing" ? (
+                      <TapScaleButton
+                        type="button"
+                        haptic
+                        onClick={() => setCreateStandalonePushOpen(true)}
+                        className="inline-flex min-h-[32px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-300/40 bg-gradient-to-r from-rose-500 via-pink-500 to-orange-400 px-2.5 py-1 text-[12px] font-semibold text-white shadow-[0_4px_16px_-4px_rgba(236,72,153,0.45)] min-[1500px]:hidden"
+                        aria-label="Создать Push"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 shrink-0 opacity-95" aria-hidden />
+                        Создать Push
+                      </TapScaleButton>
+                    ) : null}
+                    <TapScaleButton
+                      type="button"
+                      subtle
+                      onClick={() => setLocation("/settings/notifications")}
+                      className="ml-auto flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center rounded-xl border border-border/45 bg-secondary/50 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+                      aria-label="Настройки уведомлений и пушей модуля Push"
+                      title="Настройки уведомлений"
+                    >
+                      <Settings2 className="h-4 w-4" aria-hidden />
+                    </TapScaleButton>
+                  </div>
+                  {showPushScopeSkeleton ? (
+                    <PushFeedScopeSkeleton />
+                  ) : activePushFeed.length === 0 ? (
+                    pushScope === "incoming" ? (
+                      <PushFeedEmptyIncoming onOpenPosts={() => setLocation("/posts")} />
+                    ) : (
+                      <PushFeedEmptyOutgoing onCreatePush={() => setCreateStandalonePushOpen(true)} />
+                    )
+                  ) : (
+                    activePushFeed.map((item: PushFeedItem) => {
+                    const previewText = item.text.trim();
+                    const isExpanded = expandedPushPostIds.has(item.id);
+                    const hasMedia = (item.mediaUrls?.length ?? 0) > 0 || Boolean(item.imageUrl);
+                    const mediaUrl = item.mediaUrls?.[0] ?? item.imageUrl ?? null;
+                    const postSeg = (item.postLinkCode || item.postId).trim();
+                    const authorSeg =
+                      item.postAuthorPublicId != null ? String(item.postAuthorPublicId) : encodeURIComponent(item.postAuthorId);
+                    const postPath = `/u/${encodeURIComponent(authorSeg)}/p/${encodeURIComponent(postSeg)}`;
+                    const pushMyEmoji = item.myReaction ?? pushSessionMyReaction[item.id];
+                    const pushPickerOpen = pushReactionPickerPostId === item.id;
+                    const pushReactionTotal = item.reactionsCount ?? 0;
+                    const pushExpiresSubtleLabel = formatPushExpiresSubtleLabel(item.expiresAt);
+                    const externalVideoInCaption = previewText
+                      ? extractFirstExternalVideoUrl(previewText)
+                      : null;
+                    const captionMaskEmbed = externalVideoInCaption
+                      ? parseExternalVideoUrl(externalVideoInCaption)
+                      : null;
+                    return (
+                      <AttachPushViewRecording
+                        key={item.id}
+                        pushPostId={item.id}
+                        enabled={Boolean(user?.id && pushScope === "incoming" && item.author.id !== user.id)}
+                      >
+                        {(setCardRef) => (
+                      <motion.div
+                        ref={setCardRef}
+                        className={cn(
+                          "group relative overflow-visible rounded-2xl border border-border/50 bg-card/70 p-3",
+                          "shadow-[0_1px_0_rgba(255,255,255,0.05)]",
+                          "transition-[box-shadow,border-color] duration-200 ease-out",
+                          "hover:border-rose-300/35 hover:shadow-[0_14px_44px_-14px_rgba(236,72,153,0.16)]",
+                          "dark:hover:shadow-[0_14px_44px_-14px_rgba(236,72,153,0.1)]",
+                          "focus-within:border-rose-300/40 focus-within:shadow-[0_14px_44px_-14px_rgba(236,72,153,0.14)]",
+                        )}
+                        initial={chatListReducedMotion ? false : { opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: DURATION_NORMAL_S * 0.55, ease: EASING_OUT_BEZIER }}
+                        whileTap={
+                          chatListReducedMotion
+                            ? undefined
+                            : { scale: 0.985, transition: { duration: DURATION_FAST_MS / 1000, ease: EASING_OUT_BEZIER } }
+                        }
+                        onPointerDown={(e) => handlePushCardPointerDown(item.id, e.clientX)}
+                        onPointerUp={(e) => handlePushCardPointerUp(item.id, e.clientX)}
+                      >
+                        <span
+                          aria-hidden
+                          className="pointer-events-none absolute inset-x-3 top-0 h-px rounded-full bg-gradient-to-r from-transparent via-rose-400/45 to-transparent opacity-40 transition-opacity duration-300 group-hover:opacity-90"
+                        />
+                        <div className="flex items-start gap-2.5">
+                          <UserAvatar
+                            avatarUrl={item.author.avatarUrl}
+                            displayName={item.author.displayName}
+                            seed={item.author.id}
+                            size={36}
+                            className="shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="truncate text-[13px] font-semibold text-foreground">{item.author.displayName}</p>
+                              {item.author.isBusiness ? (
+                                <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                                  Бизнес
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                              <span className="text-muted-foreground/90">{formatPostTime(item.createdAt)}</span>
+                              {pushExpiresSubtleLabel ? (
+                                <>
+                                  <span className="mx-1 text-muted-foreground/30" aria-hidden>
+                                    ·
+                                  </span>
+                                  <span
+                                    className="text-[10px] font-normal tabular-nums tracking-[0.01em] text-muted-foreground/40"
+                                    title={
+                                      item.expiresAt
+                                        ? `Исчезнет из Push-ленты: ${new Date(item.expiresAt).toLocaleString("ru-RU", {
+                                            dateStyle: "short",
+                                            timeStyle: "short",
+                                          })}`
+                                        : undefined
+                                    }
+                                    aria-label={
+                                      item.expiresAt
+                                        ? `Исчезнет из Push-ленты ${new Date(item.expiresAt).toLocaleString("ru-RU", {
+                                            dateStyle: "long",
+                                            timeStyle: "short",
+                                          })}`
+                                        : undefined
+                                    }
+                                  >
+                                    {pushExpiresSubtleLabel}
+                                  </span>
+                                </>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <span className="text-[10px] text-muted-foreground">Push</span>
+                            {pushScope === "incoming" ? (
+                              <Switch
+                                checked={item.author.notificationsEnabled !== false}
+                                disabled={patchPushAuthorMutation.isPending}
+                                onCheckedChange={(checked) =>
+                                  patchPushAuthorMutation.mutate({ authorId: item.author.id, enabled: checked })
+                                }
+                                aria-label={`Уведомления Push от ${item.author.displayName}`}
+                              />
+                            ) : null}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <TapScaleButton
+                                  type="button"
+                                  subtle
+                                  className="min-h-[28px] min-w-[28px] rounded-full border border-border/40 bg-secondary/40"
+                                  aria-label={`Действия Push от ${item.author.displayName}`}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+                                </TapScaleButton>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="min-w-[220px]">
+                                <DropdownMenuItem onClick={() => handlePushCardRemove(item.id)}>
+                                  <Trash2 className="h-4 w-4" aria-hidden />
+                                  Удалить Push
+                                </DropdownMenuItem>
+                                {pushScope === "incoming" ? (
+                                  <DropdownMenuItem
+                                    onClick={() => hidePushAuthorMutation.mutate({ authorId: item.author.id, hidden: true })}
+                                  >
+                                    <EyeOff className="h-4 w-4" aria-hidden />
+                                    Скрыть все Push автора
+                                  </DropdownMenuItem>
+                                ) : null}
+                                {pushScope === "incoming" ? (
+                                  <DropdownMenuItem onClick={() => unsubscribePushAuthorMutation.mutate(item.author.id)}>
+                                    <X className="h-4 w-4" aria-hidden />
+                                    Отписаться от Push
+                                  </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuItem onClick={() => void handlePushShareNative(item)}>
+                                  <Share2 className="h-4 w-4" aria-hidden />
+                                  Поделиться в сториз
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPushShareTarget(item)}>
+                                  <MessageCircle className="h-4 w-4" aria-hidden />
+                                  Переслать в сообщение
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handlePushBlockAuthor(item.author.id)}>
+                                  <Ban className="h-4 w-4" aria-hidden />
+                                  Заблокировать пользователя
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => void handlePushReport(item)}>
+                                  <Flag className="h-4 w-4" aria-hidden />
+                                  Пожаловаться
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
+                        {hasMedia && mediaUrl ? (
+                          <div className="mt-2 overflow-hidden rounded-xl border border-border/40 bg-muted/25">
+                            {isLikelyPushVideoUrl(mediaUrl) ? (
+                              <video
+                                src={mediaUrl}
+                                className={cn(
+                                  "h-28 w-full object-cover bg-black/40",
+                                  !chatListReducedMotion &&
+                                    "transition-transform duration-500 ease-out motion-safe:group-hover:scale-[1.03]",
+                                )}
+                                muted
+                                playsInline
+                                loop
+                                preload="metadata"
+                                aria-label="Видео в Push"
+                              />
+                            ) : (
+                              <img
+                                src={mediaUrl}
+                                alt=""
+                                className={cn(
+                                  "h-28 w-full object-cover",
+                                  !chatListReducedMotion &&
+                                    "transition-transform duration-500 ease-out motion-safe:group-hover:scale-[1.03]",
+                                )}
+                                loading="lazy"
+                              />
+                            )}
+                          </div>
+                        ) : null}
+                        {previewText ? (
+                          <p
+                            className={cn(
+                              "mt-2 text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap break-words",
+                              isExpanded ? "" : "line-clamp-3",
+                            )}
+                          >
+                            <PostCaptionInlineParts
+                              text={previewText}
+                              maskExternalEmbed={captionMaskEmbed}
+                              onHashtagClick={() => setLocation("/posts")}
+                              linkClassName="text-primary underline decoration-primary/55 underline-offset-2 break-all"
+                              hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
+                            />
+                          </p>
+                        ) : !hasMedia ? (
+                          <p className={cn("mt-2 text-[12px] leading-relaxed text-muted-foreground", isExpanded ? "" : "line-clamp-3")}>
+                            Новый микропост
+                          </p>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span className="tabular-nums">Уник. просмотры: {item.uniqueViewsCount ?? 0}</span>
+                          <span>Реакций: {item.reactionsCount ?? 0}</span>
+                          <span className="tabular-nums">Ответов: {item.repliesCount ?? 0}</span>
+                          <TapScaleButton
+                            type="button"
+                            subtle
+                            onClick={() => setPushRepliesTarget(item)}
+                            className="min-h-[28px] rounded-full border border-border/40 bg-secondary/40 px-2.5 py-0.5 text-[11px] font-medium text-foreground/90"
+                            aria-label="Открыть все ответы на этот Push"
+                          >
+                            Все ответы
+                          </TapScaleButton>
+                        </div>
+                        {inlineReplyPushId === item.id ? (
+                          <div
+                            className="mt-2 space-y-2 rounded-xl border border-rose-300/25 bg-gradient-to-b from-rose-500/[0.06] to-transparent p-2.5"
+                            onPointerDown={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-[10px] font-medium text-muted-foreground">Видимость</span>
+                              <TapScaleButton
+                                type="button"
+                                subtle
+                                onClick={() => setInlineReplyVisibility("public")}
+                                className={cn(
+                                  "min-h-[28px] rounded-full border px-2.5 text-[11px]",
+                                  inlineReplyVisibility === "public"
+                                    ? "border-primary/35 bg-primary/12"
+                                    : "border-border/50",
+                                )}
+                              >
+                                Публичный
+                              </TapScaleButton>
+                              <TapScaleButton
+                                type="button"
+                                subtle
+                                onClick={() => setInlineReplyVisibility("private")}
+                                className={cn(
+                                  "min-h-[28px] rounded-full border px-2.5 text-[11px]",
+                                  inlineReplyVisibility === "private"
+                                    ? "border-primary/35 bg-primary/12"
+                                    : "border-border/50",
+                                )}
+                              >
+                                Приватный
+                              </TapScaleButton>
+                            </div>
+                            <textarea
+                              ref={inlineReplyTextareaRef}
+                              value={inlineReplyText}
+                              onChange={(e) => setInlineReplyText(e.target.value)}
+                              rows={3}
+                              placeholder="Быстрый ответ на Push…"
+                              className="w-full resize-none rounded-xl border border-border/60 bg-background/80 p-2.5 text-[13px] leading-snug outline-none focus:ring-2 focus:ring-primary/25"
+                              aria-label="Текст ответа на Push"
+                            />
+                            <div className="flex flex-wrap gap-1.5">
+                              <TapScaleButton
+                                type="button"
+                                onClick={handleInlinePushReplySubmit}
+                                disabled={createPushReplyMutation.isPending}
+                                className="min-h-[var(--uix-touch-min)] rounded-xl bg-primary px-3 text-[12px] text-primary-foreground disabled:opacity-50"
+                              >
+                                {createPushReplyMutation.isPending ? "Отправка…" : "Отправить"}
+                              </TapScaleButton>
+                              <TapScaleButton
+                                type="button"
+                                subtle
+                                onClick={() => {
+                                  setInlineReplyPushId(null);
+                                  setInlineReplyText("");
+                                }}
+                                className="min-h-[var(--uix-touch-min)] rounded-xl border border-border/50 px-3 text-[12px]"
+                              >
+                                Свернуть
+                              </TapScaleButton>
+                            </div>
+                          </div>
+                        ) : null}
+                        {item.latestReply ? (
+                          <div className="mt-2 rounded-xl border border-border/40 bg-muted/20 px-2.5 py-2 transition-colors duration-200 group-hover:bg-muted/30 group-hover:border-border/55">
+                            <p className="text-[11px] font-medium text-foreground">
+                              Последний ответ · {item.latestReply.author.displayName}
+                              {item.latestReply.visibility === "private" ? " (приватный)" : ""}
+                            </p>
+                            <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{item.latestReply.text}</p>
+                          </div>
+                        ) : null}
+                        <div className="relative mt-3">
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2">
+                            <div className="flex min-w-0 flex-[1_1_12rem] items-center gap-1.5 overflow-hidden">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "inline-flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-xl bg-secondary/25 px-2.5 py-2 text-left transition-transform active:scale-[0.99] sm:max-w-[min(100%,240px)]",
+                                  pushMyEmoji ? "bg-primary/10" : "",
+                                )}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  if (pushMyEmoji) {
+                                    void handlePushRemoveReact(item.id, item.postId);
+                                  } else {
+                                    setPushReactionPickerPostId(pushPickerOpen ? null : item.id);
+                                  }
+                                }}
+                              >
+                                {pushMyEmoji ? (
+                                  <span className="text-[16px] leading-none">{pushMyEmoji}</span>
+                                ) : pushReactionTotal === 0 ? (
+                                  <SmilePlus
+                                    className="h-[18px] w-[18px] shrink-0 text-muted-foreground"
+                                    strokeWidth={2}
+                                    aria-hidden
+                                  />
+                                ) : null}
+                                <span
+                                  className={cn(
+                                    "text-[13px] font-semibold tabular-nums",
+                                    pushReactionTotal === 0 && !pushMyEmoji
+                                      ? "text-muted-foreground"
+                                      : "text-foreground/90",
+                                  )}
+                                >
+                                  {pushReactionTotal > 0 || pushMyEmoji
+                                    ? formatCompactCountRu(pushReactionTotal)
+                                    : "Реакции"}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className={cn(
+                                  "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-secondary/30 transition-colors hover:bg-secondary/50 min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]",
+                                  pushPickerOpen ? "bg-primary/10 text-primary" : "text-muted-foreground",
+                                )}
+                                aria-label="Выбрать реакцию"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  setPushReactionPickerPostId(pushPickerOpen ? null : item.id);
+                                }}
+                              >
+                                <Plus className="h-4 w-4" strokeWidth={2.25} aria-hidden />
+                              </button>
+                            </div>
+
+                            <div
+                              className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-0.5 gap-y-2"
+                              style={{ paddingRight: "max(0px, env(safe-area-inset-right, 0px))" }}
+                            >
+                              <button
+                                type="button"
+                                title="Ответить"
+                                className={cn(
+                                  "flex min-h-[var(--uix-touch-min)] items-center gap-1 rounded-lg px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]",
+                                  inlineReplyPushId === item.id ? "bg-primary/10 text-primary" : "",
+                                )}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  toggleInlineReplyForPush(item.id);
+                                }}
+                                aria-expanded={inlineReplyPushId === item.id}
+                                aria-label={
+                                  inlineReplyPushId === item.id ? "Свернуть ответ на Push" : "Ответить на Push"
+                                }
+                              >
+                                <MessageSquare className="h-4 w-4 shrink-0 opacity-85" strokeWidth={2} aria-hidden />
+                                <span className="text-[12px] font-semibold tabular-nums text-foreground/85">
+                                  {formatCompactCountRu(item.repliesCount ?? 0)}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                title="Поделиться"
+                                className="flex min-h-[var(--uix-touch-min)] items-center justify-center rounded-lg px-2 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  setPushShareTarget(item);
+                                }}
+                                aria-label="Переслать Push в сообщение"
+                              >
+                                <Share2 className="h-4 w-4 shrink-0 opacity-85" strokeWidth={2} aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                title="Открыть пост"
+                                className="flex min-h-[var(--uix-touch-min)] items-center justify-center rounded-lg px-2 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  setLocation(postPath);
+                                }}
+                                aria-label="Открыть пост"
+                              >
+                                <ExternalLink className="h-4 w-4 shrink-0 opacity-85" strokeWidth={2} aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                title={isExpanded ? "Свернуть текст" : "Показать весь текст"}
+                                className="flex min-h-[var(--uix-touch-min)] w-11 shrink-0 items-center justify-center rounded-lg px-1 py-1 text-muted-foreground transition-colors hover:bg-secondary/45 hover:text-foreground active:scale-[0.98]"
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void triggerLightHaptic();
+                                  setExpandedPushPostIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.id)) next.delete(item.id);
+                                    else next.add(item.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={isExpanded ? "Свернуть текст" : "Открыть полностью"}
+                              >
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4 opacity-85" strokeWidth={2} aria-hidden />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4 opacity-85" strokeWidth={2} aria-hidden />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {pushPickerOpen ? (
+                            <div className="absolute left-0 top-full z-[60] mt-1.5 flex w-full max-w-[min(100%,360px)] justify-center sm:justify-start">
+                              <div className="flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-border/40 bg-background/95 px-3 py-2 shadow-lg backdrop-blur-xl animate-in fade-in slide-in-from-top-2 duration-200">
+                                {USER_PROFILE_REACTION_EMOJIS.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void triggerLightHaptic();
+                                      playLikeActionSound();
+                                      void handlePushReact(item.id, item.postId, emoji);
+                                    }}
+                                    className="flex h-10 w-10 items-center justify-center rounded-full text-2xl transition-transform hover:scale-110 active:scale-95"
+                                    aria-label={`Реакция ${emoji}`}
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </motion.div>
+                        )}
+                      </AttachPushViewRecording>
+                    );
+                    })
+                  )}
+                </div>
+              )
+            ) : isLoading ? (
               <LoadingProgress loading minHeight="200px" className="rounded-xl">
                 <div className="min-h-[200px]" />
               </LoadingProgress>
@@ -1496,6 +2742,15 @@ export default function Chats() {
                 return (
                   <AnimatePresence mode="popLayout" initial={false}>
                     {showAiOver ? (
+                      <div key="new-user-onboarding-above-ai" className="mb-1">
+                        <NewUserFeedOnboardingStrip
+                          userCreatedAt={user?.createdAt ?? null}
+                          feedScrollRef={chatsListScrollRef}
+                          className="mb-0"
+                        />
+                      </div>
+                    ) : null}
+                    {showAiOver ? (
                       <motion.p
                         key="ai-over-label"
                         layout
@@ -1522,7 +2777,8 @@ export default function Chats() {
                           chat={aiOverChat}
                           typingLabel={null}
                           voiceLabel={null}
-                          onSelect={() => setLocation(`/chat/${AI_CHAT_ID}`)}
+                          isSelected={selectedChatId === AI_CHAT_ID}
+                          onSelect={() => navigateToChat(aiOverChat)}
                           isAiChat
                         />
                       </motion.div>
@@ -1538,21 +2794,28 @@ export default function Chats() {
                         >
                           {DATE_SECTION_LABELS[sectionKey]}
                         </motion.p>,
-                        ...sectionChats.map((chat) => (
+                        ...sectionChats.map((chat, sectionIndex) => (
                           <motion.div
                             key={chat.id}
                             layout
                             initial={{ opacity: 0, y: 4 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={rowExit}
-                            transition={rowMotionTransition}
+                            transition={
+                              chatListReducedMotion
+                                ? rowMotionTransition
+                                : { ...rowMotionTransition, delay: Math.min(0.12, sectionIndex * 0.012) }
+                            }
                           >
                             <ChatRow
                               chat={chat}
+                              currentUserId={user?.id}
+                              isSelected={selectedChatId === chat.id}
                               typingLabel={typingByChatId[chat.id] ?? null}
                               voiceLabel={voiceRecordingByChatId[chat.id] ?? null}
                               pendingUnreadHint={pendingUnreadChatIds.has(chat.id)}
-                              onSelect={() => setLocation(`/chat/${encodeURIComponent(chat.id)}`)}
+                              composerTransferPulse={chat.type === "dm" && composerTransferRowIds.has(chat.id)}
+                              onSelect={() => navigateToChat(chat)}
                               onLongPressMenu={() => setServiceMenuChat(chat)}
                             />
                           </motion.div>
@@ -1677,27 +2940,13 @@ export default function Chats() {
                 <div className="space-y-2.5 rounded-2xl border border-border/45 bg-muted/12 p-3.5">
                   <div className="space-y-1.5">
                     <p className="text-[13px] font-semibold leading-tight text-foreground">В папку</p>
-                    {!hasCustomListSections ? (
-                      <p className="text-[12px] leading-relaxed text-muted-foreground">
-                        Вкладки папок вверху списка появятся, когда хотя бы один чат будет не в «Общих». Выберите
-                        папку ниже.
-                      </p>
-                    ) : null}
                   </div>
                   <div
                     className="-mx-0.5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-0.5 pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                     role="radiogroup"
                     aria-label="Папка для чата"
                   >
-                  {(
-                    [
-                      { id: "general", label: "Общие" },
-                      { id: "friends", label: "Друзья" },
-                      { id: "work", label: "Работа" },
-                      { id: "promo", label: "Реклама" },
-                      { id: "invitations", label: "Приглашения" },
-                    ] as const
-                  ).map((s) => {
+                  {shelfFolderAssignOptions.map((s) => {
                     const selected = (serviceMenuChat.listSection ?? "general") === s.id;
                     return (
                     <button
@@ -1774,6 +3023,302 @@ export default function Chats() {
         </DrawerContent>
       </Drawer>
 
+      <Drawer
+        open={folderShelfMenuTab !== null}
+        onOpenChange={(o) => {
+          if (!o) setFolderShelfMenuTab(null);
+        }}
+      >
+        <DrawerContent className="max-h-[min(85dvh,640px)] rounded-t-[1.25rem] border-border/35 pb-[max(0.35rem,env(safe-area-inset-bottom))]">
+          <DrawerHeader className="p-5 pb-2 text-left">
+            <DrawerTitle className="text-left text-[1.0625rem] font-semibold">
+              {folderShelfMenuMeta?.kind === "builtin"
+                ? folderShelfMenuMeta.title
+                : folderShelfMenuMeta?.kind === "custom"
+                  ? folderShelfMenuMeta.title
+                  : folderShelfMenuMeta?.kind === "synthetic" && folderShelfMenuMeta.synthetic === "push"
+                    ? "Push"
+                    : folderShelfMenuMeta?.kind === "synthetic" && folderShelfMenuMeta.synthetic === "all"
+                      ? "Все чаты"
+                      : "Полка"}
+            </DrawerTitle>
+          </DrawerHeader>
+          <div className="space-y-3 px-5 pb-6">
+            {folderShelfMenuMeta?.kind === "synthetic" && folderShelfMenuMeta.synthetic === "push" ? (
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Лента публикаций Push. Уведомления о{" "}
+                <span className="font-medium text-foreground">сообщениях в чатах</span> настраиваются отдельно: удерживайте
+                полку «Друзья», «Работа» или свою папку и переключите пункт про push.
+              </p>
+            ) : null}
+            {folderShelfMenuMeta?.kind === "synthetic" && folderShelfMenuMeta.synthetic === "all" ? (
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Здесь все чаты, кроме полки «Приглашения». Чтобы разложить диалоги по папкам, долго удерживайте чат → «В
+                папку». Чтобы переименовать полку или отключить для неё push, удерживайте вкладку полки (~1,3 с).
+              </p>
+            ) : null}
+            {folderShelfMenuMeta?.kind === "builtin" || folderShelfMenuMeta?.kind === "custom" ? (
+              <>
+                <TapScaleButton
+                  type="button"
+                  haptic
+                  subtle
+                  className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium"
+                  onClick={() => {
+                    const meta = folderShelfMenuMeta;
+                    if (meta?.kind === "builtin") {
+                      setRenameShelfTarget({ kind: "builtin", tabId: meta.tabId });
+                      setRenameShelfValue(meta.title);
+                    } else if (meta?.kind === "custom") {
+                      setRenameShelfTarget({ kind: "custom", id: meta.id });
+                      setRenameShelfValue(meta.title);
+                    }
+                    setRenameShelfOpen(true);
+                    setFolderShelfMenuTab(null);
+                  }}
+                >
+                  <Edit className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  Переименовать вкладку
+                </TapScaleButton>
+                <TapScaleButton
+                  type="button"
+                  haptic
+                  subtle
+                  className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-border/50 bg-muted/20 px-4 py-3 text-left text-[15px] font-medium"
+                  onClick={async () => {
+                    const meta = folderShelfMenuMeta;
+                    if (meta?.kind !== "builtin" && meta?.kind !== "custom") return;
+                    const next = !meta.pushMuted;
+                    try {
+                      if (meta.kind === "builtin") {
+                        await patchChatListBuiltinTabPref(meta.tabId, { pushMuted: next });
+                      } else {
+                        await patchChatListCustomFolder(meta.id, { pushMuted: next });
+                      }
+                      void queryClient.invalidateQueries({ queryKey: ["chat-list-shelves"] });
+                      setFolderShelfMenuTab(null);
+                      toast({
+                        title: next
+                          ? "Push-уведомления выключены для этой полки"
+                          : "Push-уведомления включены для этой полки",
+                      });
+                    } catch (e) {
+                      toast({
+                        title: "Не удалось",
+                        description: e instanceof Error ? e.message : "Ошибка",
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                >
+                  {folderShelfMenuMeta && (folderShelfMenuMeta.kind === "builtin" || folderShelfMenuMeta.kind === "custom")
+                    ? folderShelfMenuMeta.pushMuted
+                      ? (
+                          <BellOff className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                        )
+                      : (
+                          <Bell className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                        )
+                    : null}
+                  {folderShelfMenuMeta && (folderShelfMenuMeta.kind === "builtin" || folderShelfMenuMeta.kind === "custom")
+                    ? folderShelfMenuMeta.pushMuted
+                      ? "Включить push-уведомления для полки"
+                      : "Отключить push-уведомления для полки"
+                    : null}
+                </TapScaleButton>
+                {folderShelfMenuMeta?.kind === "custom" ? (
+                  <TapScaleButton
+                    type="button"
+                    haptic
+                    subtle
+                    className="flex h-auto min-h-[var(--uix-touch-min)] w-full items-center gap-3 rounded-2xl border border-destructive/40 bg-destructive/15 px-4 py-3 text-left text-[15px] font-semibold text-destructive"
+                    onClick={() => {
+                      setConfirmDeleteShelfId(folderShelfMenuMeta.id);
+                      setFolderShelfMenuTab(null);
+                    }}
+                  >
+                    <Trash2 className="h-5 w-5 shrink-0" aria-hidden />
+                    Удалить папку…
+                  </TapScaleButton>
+                ) : null}
+              </>
+            ) : null}
+            {folderShelfMenuMeta?.kind === "unknown" ? (
+              <p className="text-sm text-muted-foreground">Не удалось распознать вкладку.</p>
+            ) : null}
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      <Dialog
+        open={addShelfFolderOpen}
+        onOpenChange={(o) => {
+          setAddShelfFolderOpen(o);
+          if (!o) setNewShelfFolderName("");
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Новая папка</DialogTitle>
+          </DialogHeader>
+          <label className="text-sm font-medium">Название</label>
+          <input
+            type="text"
+            value={newShelfFolderName}
+            onChange={(e) => setNewShelfFolderName(e.target.value)}
+            placeholder="Например: Семья"
+            maxLength={40}
+            className="w-full bg-secondary/50 border border-border rounded-xl py-2.5 px-3 text-[15px] focus:ring-2 focus:ring-primary/30 outline-none"
+          />
+          <DialogFooter className="gap-2">
+            <TapScaleButton
+              type="button"
+              className="min-h-[var(--uix-touch-min)] border border-input bg-background"
+              onClick={() => setAddShelfFolderOpen(false)}
+            >
+              Отмена
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              className="min-h-[var(--uix-touch-min)] bg-primary text-primary-foreground"
+              disabled={shelfCreateLoading || !newShelfFolderName.trim()}
+              onClick={async () => {
+                const name = newShelfFolderName.trim();
+                if (!name) return;
+                setShelfCreateLoading(true);
+                try {
+                  await createChatListCustomFolder(name);
+                  void queryClient.invalidateQueries({ queryKey: ["chat-list-shelves"] });
+                  setAddShelfFolderOpen(false);
+                  setNewShelfFolderName("");
+                  toast({ title: "Папка создана" });
+                } catch (e) {
+                  toast({
+                    title: e instanceof Error ? e.message : "Не удалось создать",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setShelfCreateLoading(false);
+                }
+              }}
+            >
+              {shelfCreateLoading ? "Создание…" : "Создать"}
+            </TapScaleButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={renameShelfOpen}
+        onOpenChange={(o) => {
+          setRenameShelfOpen(o);
+          if (!o) setRenameShelfTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Переименовать</DialogTitle>
+          </DialogHeader>
+          <input
+            type="text"
+            value={renameShelfValue}
+            onChange={(e) => setRenameShelfValue(e.target.value)}
+            maxLength={40}
+            className="w-full bg-secondary/50 border border-border rounded-xl py-2.5 px-3 text-[15px] focus:ring-2 focus:ring-primary/30 outline-none"
+          />
+          {renameShelfTarget?.kind === "builtin" ? (
+            <p className="text-xs text-muted-foreground">
+              Оставьте поле пустым и нажмите «Сохранить», чтобы вернуть стандартное название полки.
+            </p>
+          ) : null}
+          <DialogFooter className="gap-2">
+            <TapScaleButton
+              type="button"
+              className="min-h-[var(--uix-touch-min)] border bg-background"
+              onClick={() => setRenameShelfOpen(false)}
+            >
+              Отмена
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              className="min-h-[var(--uix-touch-min)] bg-primary text-primary-foreground"
+              disabled={
+                !renameShelfTarget || (renameShelfTarget.kind === "custom" && !renameShelfValue.trim())
+              }
+              onClick={async () => {
+                if (!renameShelfTarget) return;
+                try {
+                  if (renameShelfTarget.kind === "builtin") {
+                    await patchChatListBuiltinTabPref(renameShelfTarget.tabId, {
+                      labelOverride: renameShelfValue.trim() || null,
+                    });
+                  } else {
+                    const nm = renameShelfValue.trim();
+                    if (!nm) {
+                      toast({ title: "Введите название", variant: "destructive" });
+                      return;
+                    }
+                    await patchChatListCustomFolder(renameShelfTarget.id, { name: nm });
+                  }
+                  void queryClient.invalidateQueries({ queryKey: ["chat-list-shelves"] });
+                  setRenameShelfOpen(false);
+                  setRenameShelfTarget(null);
+                  toast({ title: "Сохранено" });
+                } catch (e) {
+                  toast({
+                    title: e instanceof Error ? e.message : "Не удалось",
+                    variant: "destructive",
+                  });
+                }
+              }}
+            >
+              Сохранить
+            </TapScaleButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={confirmDeleteShelfId !== null} onOpenChange={(o) => !o && setConfirmDeleteShelfId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить папку?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Чаты из этой папки вернутся в раздел «Общие» (на вкладке «Все»).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <TapScaleButton
+              type="button"
+              haptic
+              className="inline-flex min-h-[var(--uix-touch-min)] items-center justify-center rounded-md bg-destructive px-4 text-destructive-foreground"
+              disabled={deleteShelfLoading}
+              onClick={async () => {
+                if (!confirmDeleteShelfId) return;
+                setDeleteShelfLoading(true);
+                try {
+                  await deleteChatListCustomFolder(confirmDeleteShelfId);
+                  if (listSectionTab === confirmDeleteShelfId) setListSectionTab("all");
+                  void queryClient.invalidateQueries({ queryKey: ["chat-list-shelves"] });
+                  void queryClient.invalidateQueries({ queryKey: ["chats"] });
+                  setConfirmDeleteShelfId(null);
+                  toast({ title: "Папка удалена" });
+                } catch (e) {
+                  toast({
+                    title: e instanceof Error ? e.message : "Не удалось",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setDeleteShelfLoading(false);
+                }
+              }}
+            >
+              {deleteShelfLoading ? "Удаление…" : "Удалить"}
+            </TapScaleButton>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog
         open={!!confirmLeaveChat}
         onOpenChange={(o) => {
@@ -1802,9 +3347,10 @@ export default function Chats() {
               <AlertDialogCancel className="mt-0 h-11 w-full rounded-xl border-border/50 bg-background/80 sm:mt-0">
                 Отмена
               </AlertDialogCancel>
-              <Button
+              <TapScaleButton
                 type="button"
-                className="h-11 w-full rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/15"
+                haptic
+                className="h-11 w-full rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/15 inline-flex items-center justify-center gap-2 disabled:opacity-50"
                 disabled={deleteInProgress !== null}
                 onClick={() => void runDeleteLeave()}
               >
@@ -1815,7 +3361,7 @@ export default function Chats() {
                 ) : (
                   "Убрать"
                 )}
-              </Button>
+              </TapScaleButton>
             </AlertDialogFooter>
           </div>
         </AlertDialogContent>
@@ -1847,10 +3393,10 @@ export default function Chats() {
               <AlertDialogCancel className="mt-0 h-11 w-full rounded-xl border-border/50 bg-background/80 sm:mt-0">
                 Отмена
               </AlertDialogCancel>
-              <Button
+              <TapScaleButton
                 type="button"
-                variant="destructive"
-                className="h-11 w-full rounded-xl shadow-md shadow-destructive/20"
+                haptic
+                className="h-11 w-full rounded-xl bg-destructive text-destructive-foreground shadow-md shadow-destructive/20 border border-destructive-border inline-flex items-center justify-center gap-2 disabled:opacity-50"
                 disabled={deleteInProgress !== null}
                 onClick={() => void runDeleteForAll()}
               >
@@ -1859,7 +3405,7 @@ export default function Chats() {
                 ) : (
                   "Удалить навсегда"
                 )}
-              </Button>
+              </TapScaleButton>
             </AlertDialogFooter>
           </div>
         </AlertDialogContent>
@@ -1924,6 +3470,7 @@ export default function Chats() {
                         seed={String(contact.id)}
                         size={40}
                         className="w-10 h-10"
+                        pointerEventsNone
                       />
                       <span className="font-medium text-[15px]">{contactDisplayName(contact)}</span>
                     </label>
@@ -1953,7 +3500,7 @@ export default function Chats() {
                   setShowCreateGroupModal(false);
                   setGroupName("");
                   setSelectedMemberIds(new Set());
-                  setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+                  navigateToChat(chat);
                 } catch (err) {
                   toast({
                     title: "Не удалось создать группу",
@@ -1968,6 +3515,144 @@ export default function Chats() {
               {groupCreateLoading ? "Создание…" : "Создать"}
             </TapScaleButton>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pushRepliesTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setPushRepliesTarget(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] flex flex-col gap-3 sm:max-w-lg">
+          <DialogHeader className="space-y-1">
+            <DialogTitle>Ответы на Push</DialogTitle>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Ответ пишите в карточке через «Ответить». Здесь — полный список с фильтром.
+            </p>
+          </DialogHeader>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-medium text-muted-foreground shrink-0">Показать:</span>
+            <TapScaleButton
+              type="button"
+              subtle
+              onClick={() => setPushRepliesVisibilityFilter("all")}
+              className={cn(
+                "min-h-[32px] rounded-full border px-3 text-[12px]",
+                pushRepliesVisibilityFilter === "all" ? "border-primary/30 bg-primary/10" : "border-border/50",
+              )}
+            >
+              Все
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              subtle
+              onClick={() => setPushRepliesVisibilityFilter("public")}
+              className={cn(
+                "min-h-[32px] rounded-full border px-3 text-[12px]",
+                pushRepliesVisibilityFilter === "public" ? "border-primary/30 bg-primary/10" : "border-border/50",
+              )}
+            >
+              Только публичные
+            </TapScaleButton>
+            {!pushRepliesLoading && !pushRepliesError ? (
+              <span className="text-[11px] text-muted-foreground ml-auto tabular-nums">
+                {pushRepliesFlat.length}/{pushRepliesTotal}
+              </span>
+            ) : null}
+          </div>
+          <div className="border border-border rounded-xl overflow-y-auto max-h-[min(48dvh,360px)] min-h-[140px] divide-y divide-border flex flex-col">
+            {pushRepliesLoading ? (
+              <div className="flex flex-1 items-center justify-center p-6">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden />
+              </div>
+            ) : pushRepliesError ? (
+              <div className="p-3">
+                <ErrorWithRetry
+                  title="Не удалось загрузить ответы"
+                  description="Проверьте сеть и попробуйте снова"
+                  onRetry={() => void refetchPushRepliesPages()}
+                />
+              </div>
+            ) : pushRepliesFlat.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground text-center">
+                {pushRepliesVisibilityFilter === "public" ? "Публичных ответов пока нет." : "Пока нет ответов."}
+              </p>
+            ) : (
+              pushRepliesFlat.map((reply: PushReplyItem) => (
+                <div key={reply.id} className="p-3">
+                  <div className="flex items-center gap-2">
+                    <UserAvatar
+                      avatarUrl={reply.author.avatarUrl ?? undefined}
+                      displayName={reply.author.displayName}
+                      seed={reply.author.id}
+                      size={28}
+                    />
+                    <p className="text-[12px] font-medium">
+                      {reply.author.displayName}
+                      {reply.visibility === "private" ? " · приватный" : ""}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-[12px] text-foreground/90 whitespace-pre-wrap">{reply.text}</p>
+                </div>
+              ))
+            )}
+          </div>
+          {pushRepliesHasNext ? (
+            <TapScaleButton
+              type="button"
+              subtle
+              disabled={pushRepliesFetchingNext}
+              onClick={() => void fetchNextPushReplies()}
+              className="min-h-[var(--uix-touch-min)] w-full rounded-xl border border-border/50 text-[13px] font-medium"
+            >
+              {pushRepliesFetchingNext ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  Загрузка…
+                </span>
+              ) : (
+                "Загрузить ещё"
+              )}
+            </TapScaleButton>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <CreateStandalonePushDrawer open={createStandalonePushOpen} onOpenChange={setCreateStandalonePushOpen} />
+
+      <Dialog open={pushShareTarget !== null} onOpenChange={(open) => !open && setPushShareTarget(null)}>
+        <DialogContent className="max-h-[85vh] flex flex-col gap-4 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Переслать Push в сообщение</DialogTitle>
+          </DialogHeader>
+          <div className="border border-border rounded-xl overflow-y-auto max-h-[52vh] min-h-[120px] divide-y divide-border">
+            {contactsList.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground text-center">
+                Нет контактов для пересылки.
+              </p>
+            ) : (
+              contactsList.map((contact) => (
+                <TapScaleButton
+                  key={contact.id}
+                  type="button"
+                  subtle
+                  className="flex w-full items-center gap-3 p-3 text-left hover:bg-secondary/50 min-h-[var(--uix-touch-min)]"
+                  onClick={() => pushShareTarget && void handleForwardPushToUser(pushShareTarget, contact.id)}
+                >
+                  <UserAvatar
+                    avatarUrl={contact.avatarUrl ?? undefined}
+                    displayName={contactDisplayName(contact)}
+                    seed={String(contact.id)}
+                    size={36}
+                    className="w-9 h-9"
+                    pointerEventsNone
+                  />
+                  <span className="font-medium text-[14px] truncate">{contactDisplayName(contact)}</span>
+                </TapScaleButton>
+              ))
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

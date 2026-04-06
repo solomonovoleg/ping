@@ -1,0 +1,3 @@
+# Юридические страницы приложения: /privacy, /terms (SPA; HTML через index.html).
+User-agent: *
+Disallow: /api/

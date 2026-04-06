@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { MAX_GROUP_MESH_PEERS } from "@shared/group-call-limits";
 import { requireAuth, getUserId } from "../auth/session";
 import { ensureCallHistorySession } from "../call-transcripts/service";
 import { notifyChatListUpdate } from "../calls/ws";
@@ -70,6 +71,7 @@ export function registerGroupCallRoutes(app: Express): void {
         mediaType: room.mediaType,
         reused,
         hostUserId: room.createdByUserId,
+        maxMeshPeers: MAX_GROUP_MESH_PEERS,
       });
     } catch (err) {
       console.error("[group-calls] POST /rooms", err);
@@ -115,6 +117,7 @@ export function registerGroupCallRoutes(app: Express): void {
         mediaType: room.mediaType,
         participantCount: room.connected.size,
         hostUserId: room.createdByUserId,
+        maxMeshPeers: MAX_GROUP_MESH_PEERS,
       });
     } catch (err) {
       console.error("[group-calls] GET /active", err);

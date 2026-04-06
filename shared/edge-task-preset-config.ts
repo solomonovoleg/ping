@@ -27,12 +27,26 @@ export type PresetVerify =
 
 export type TaskPresetEntry = {
   key: string;
+  /** Раздел конструктора, откуда пришло задание (game/global/commercial). */
+  scope: "game" | "global" | "commercial";
   label: string;
   points: number;
   penalty: number;
   deadlineDays: number;
+  /** Явный целевой рейтинг; если не задан — определяется по scope. */
+  scoreTarget?: "primary" | "secondary";
   verify: PresetVerify;
 };
+
+/** Согласовано с EDGE `apply-preset-task`: куда пойдёт XP за пресет. */
+export function effectiveTaskPresetScoreTarget(
+  entry: Pick<TaskPresetEntry, "scope" | "scoreTarget">,
+): "primary" | "secondary" {
+  return (
+    entry.scoreTarget ??
+    (entry.scope === "global" || entry.scope === "commercial" ? "secondary" : "primary")
+  );
+}
 
 const SCOPES = ["game", "global", "commercial"] as const;
 
@@ -124,6 +138,12 @@ export function needsEdgeVerify(v: PresetVerify): boolean {
   );
 }
 
+/** Награда только если сервер может проверить факт (БД платформы или EDGE). `honor` и битый verify — нет. */
+export function hasObjectiveTaskVerify(v: PresetVerify): boolean {
+  if (v.type === "honor") return false;
+  return needsPlatformVerify(v) || needsEdgeVerify(v);
+}
+
 function parsePresetItem(
   o: Record<string, unknown>,
   scope: (typeof SCOPES)[number],
@@ -147,8 +167,13 @@ function parsePresetItem(
       : 7;
 
   const verify = parsePresetVerify(o.verify);
+  const scoreTargetRaw = typeof o.scoreTarget === "string" ? o.scoreTarget.trim().toLowerCase() : "";
+  const scoreTarget =
+    scoreTargetRaw === "primary" || scoreTargetRaw === "secondary"
+      ? (scoreTargetRaw as "primary" | "secondary")
+      : undefined;
 
-  return { key, label, points, penalty, deadlineDays, verify };
+  return { key, scope, label, points, penalty, deadlineDays, scoreTarget, verify };
 }
 
 export function listTaskPresetsFromConfig(configJson: unknown): TaskPresetEntry[] {

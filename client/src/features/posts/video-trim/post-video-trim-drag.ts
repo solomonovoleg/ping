@@ -15,8 +15,9 @@ export function bindPostVideoTrimDrag(options: {
   videoRef: RefObject<HTMLVideoElement | null>;
   latestRangeRef: MutableRefObject<{ s: number; e: number }>;
   setRange: SetRangeFn;
+  previewSelection: (reason: "drag" | "commit") => void;
 }): void {
-  const { kind, pointerEvent: e, durationSec: dur, s0, e0, trackRef, videoRef, latestRangeRef, setRange } = options;
+  const { kind, pointerEvent: e, durationSec: dur, s0, e0, trackRef, videoRef, latestRangeRef, setRange, previewSelection } = options;
   const el = e.currentTarget as HTMLElement;
   el.setPointerCapture(e.pointerId);
   const px0 = e.clientX;
@@ -52,6 +53,7 @@ export function bindPostVideoTrimDrag(options: {
     } else {
       setRange(s0, timeFromClientX(ev.clientX));
     }
+    previewSelection("drag");
   };
 
   const onUp = (ev: PointerEvent) => {
@@ -68,6 +70,7 @@ export function bindPostVideoTrimDrag(options: {
       const v = videoRef.current;
       if (v) v.currentTime = latestRangeRef.current.s;
     });
+    previewSelection("commit");
   };
 
   window.addEventListener("pointermove", onMove);

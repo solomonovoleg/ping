@@ -9,8 +9,11 @@ export type NotificationItem = {
   actorAvatarUrl: string | null;
   postId: string | null;
   postAuthorId: string | null;
+  /** Короткий код поста для красивого URL (если join к posts сработал). */
+  postLinkCode: string | null;
   postAuthorPublicId: number | null;
   commentId: string | null;
+  storyId: string | null;
   excerpt: string | null;
   readAt: string | null;
   createdAt: string | null;

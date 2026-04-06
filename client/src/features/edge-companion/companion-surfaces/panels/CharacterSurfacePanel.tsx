@@ -1,5 +1,4 @@
 import { EdgeParticipantPetCard } from "@/features/edge-companion/components/EdgeParticipantPetCard";
-import type { EdgeTaskPresetPublic } from "@/lib/edge-gamification";
 import type { CompanionCharacterConfig } from "../types";
 
 type Props = {
@@ -7,30 +6,31 @@ type Props = {
   campaignTitle: string;
   character: CompanionCharacterConfig | null;
   interactLocked?: boolean;
-  taskPresets?: EdgeTaskPresetPublic[];
+  /** Подсказка: задания на соседнем свайпе «Задания». */
+  showTasksPagerHint?: boolean;
   giftTemplates?: unknown[];
 };
 
 /**
- * Центральный экран: тот же макет, что в посте (призы · персонаж · метрики), затем уход и задания.
- * Остальные экраны EDGE — свайпом по карусели (лидерборд, призы, статья, итоги).
+ * Центральный экран: тот же макет, что в посте (призы · персонаж · метрики).
+ * Задания — отдельный свайп слева («Задания» в рейке сверху).
  */
 export function CharacterSurfacePanel({
   edgeId,
   campaignTitle,
   character,
   interactLocked,
-  taskPresets,
+  showTasksPagerHint = false,
   giftTemplates = [],
 }: Props) {
   return (
-    <div className="uix-content-x box-border min-h-full pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]">
+    <div className="uix-content-x box-border min-h-full pb-6 pt-1">
       <EdgeParticipantPetCard
         edgeId={edgeId}
         campaignTitle={campaignTitle}
         character={character}
         interactLocked={interactLocked}
-        taskPresets={taskPresets}
+        showTasksPagerHint={showTasksPagerHint}
         giftTemplates={giftTemplates}
       />
     </div>

@@ -8,14 +8,18 @@ import type {
 const TOAST_LIMIT = 1
 /** После закрытия — убрать из DOM через время exit-анимации */
 const TOAST_REMOVE_DELAY = 400
-/** Авто-скрытие тоста через 2.5 с (лаконичная обратная связь) */
+/** Авто-скрытие стандартного тоста через 2.5 с */
 const TOAST_DURATION_MS = 2500
+/** Ошибки держим дольше, чтобы успели прочитать. */
+const TOAST_DESTRUCTIVE_DURATION_MS = 3600
 
 type ToasterToast = ToastProps & {
   id: string
   title?: React.ReactNode
   description?: React.ReactNode
   action?: ToastActionElement
+  /** Вызывается при закрытии тоста (свайп, крестик, потеря фокуса). Не дублирует клик по action. */
+  onToastDismiss?: () => void
 }
 
 const actionTypes = {
@@ -142,9 +146,13 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id"> & { duration?: number }
 
-function toast({ duration, ...props }: Toast) {
+function toast({ duration, onToastDismiss, ...props }: Toast) {
   const id = genId()
-  const durationMs = duration ?? TOAST_DURATION_MS
+  const durationMs =
+    duration ??
+    ((props as { variant?: "default" | "destructive" }).variant === "destructive"
+      ? TOAST_DESTRUCTIVE_DURATION_MS
+      : TOAST_DURATION_MS)
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -153,6 +161,7 @@ function toast({ duration, ...props }: Toast) {
     })
   const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
 
+  let dismissHookFired = false
   dispatch({
     type: "ADD_TOAST",
     toast: {
@@ -160,7 +169,13 @@ function toast({ duration, ...props }: Toast) {
       id,
       open: true,
       onOpenChange: (open) => {
-        if (!open) dismiss()
+        if (!open) {
+          if (!dismissHookFired) {
+            dismissHookFired = true
+            onToastDismiss?.()
+          }
+          dismiss()
+        }
       },
     },
   })

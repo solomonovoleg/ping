@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -27,15 +27,24 @@ const EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
 
 export default function ProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [reactionPickerPostId, setReactionPickerPostId] = useState<string | null>(null);
 
-  const isMe = id === "me";
-  const profileId = isMe ? (user?.id ?? "") : (id ?? "");
+  const rawId = typeof id === "string" ? id : Array.isArray(id) ? (id[0] ?? "") : "";
+  const normalizedRouteId = rawId.trim().replace(/^@+/, "");
+  const isMe = useMemo(() => {
+    const seg = rawId.trim();
+    if (!seg) return false;
+    if (seg.toLowerCase() === "me") return true;
+    if (authLoading || !user) return false;
+    return /^\d+$/u.test(normalizedRouteId) && normalizedRouteId === String(user.publicId);
+  }, [rawId, normalizedRouteId, user, authLoading]);
+
+  const profileId = isMe ? (user?.id ?? "") : rawId;
 
   const load = useCallback(async () => {
     if (!profileId) {

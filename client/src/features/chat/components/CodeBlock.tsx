@@ -32,7 +32,7 @@ function CodeBlockInner({ code, lang, className }: CodeBlockProps) {
         </div>
       )}
       <div className="relative">
-        <pre className="overflow-x-auto p-3 bg-slate-900 dark:bg-black/80 text-slate-200 text-[13px] leading-[1.45] font-mono whitespace-pre">
+        <pre className="uix-select-text overflow-x-auto p-3 bg-slate-900 dark:bg-black/80 text-slate-200 text-[13px] leading-[1.45] font-mono whitespace-pre">
           <code>{code}</code>
         </pre>
         <button

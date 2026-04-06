@@ -7,6 +7,7 @@ export async function createGroupCallRoom(chatId: string, mediaType: GroupCallMe
   mediaType: GroupCallMedia;
   reused: boolean;
   hostUserId?: string;
+  maxMeshPeers?: number;
 }> {
   const res = await apiFetch(`${API}/group-calls/rooms`, {
     method: "POST",
@@ -30,17 +31,32 @@ export async function createGroupCallRoom(chatId: string, mediaType: GroupCallMe
     mediaType: GroupCallMedia;
     reused: boolean;
     hostUserId?: string;
+    maxMeshPeers?: number;
   }>;
 }
 
 export async function fetchActiveGroupCall(chatId: string): Promise<
   | { active: false }
-  | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number; hostUserId?: string }
+  | {
+      active: true;
+      roomId: string;
+      mediaType: GroupCallMedia;
+      participantCount: number;
+      hostUserId?: string;
+      maxMeshPeers?: number;
+    }
 > {
   const res = await apiFetch(`${API}/group-calls/chats/${encodeURIComponent(chatId)}/active`);
   if (!res.ok) return { active: false };
   return res.json() as Promise<
     | { active: false }
-    | { active: true; roomId: string; mediaType: GroupCallMedia; participantCount: number; hostUserId?: string }
+    | {
+        active: true;
+        roomId: string;
+        mediaType: GroupCallMedia;
+        participantCount: number;
+        hostUserId?: string;
+        maxMeshPeers?: number;
+      }
   >;
 }

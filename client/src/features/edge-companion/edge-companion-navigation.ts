@@ -21,9 +21,9 @@ export function safeEdgeCompanionBackPath(path: string | null): string | null {
   if (!p.startsWith("/") || p.startsWith("//")) return null;
   if (p.includes("://") || p.includes("\0") || p.includes("\\")) return null;
   if (p === "/posts") return p;
-  if (p === "/profile/me") return p;
-  if (/^\/profile\/[^/]+$/.test(p)) return p;
-  if (/^\/profile\/[^/]+\/post\/[^/]+$/.test(p)) return p;
+  if (p === "/u/me" || p === "/profile/me") return p;
+  if (/^\/u\/[^/]+$/.test(p) || /^\/profile\/[^/]+$/.test(p)) return p;
+  if (/^\/u\/[^/]+\/p\/[^/]+$/.test(p) || /^\/profile\/[^/]+\/post\/[^/]+$/.test(p)) return p;
   return null;
 }
 

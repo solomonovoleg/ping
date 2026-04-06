@@ -13,7 +13,8 @@ export async function listFollowRewardCampaignPublicIds(creatorPlatformUserId: s
        WHERE follow_reward_enabled = true
          AND status = 'published'
          AND creator_platform_user_id IS NOT NULL
-         AND trim(creator_platform_user_id) = $1`,
+         AND trim(creator_platform_user_id) = $1
+         AND lower(trim(coalesce(edge_type, ''))) <> 'money'`,
       [id],
     );
     return rows.map((r) => r.public_id);

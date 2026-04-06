@@ -222,7 +222,9 @@ export async function runContentIngestNow(trigger: "manual" | "auto" = "manual")
       }
 
       const imageUrl = config.includeImage ? item.imageUrl : null;
+      const { mintUniquePostLinkCode } = await import("../posts/post-link-code");
       await db.insert(posts).values({
+        linkCode: await mintUniquePostLinkCode(),
         authorId: authorUserId,
         text: composePostText(config.sourceName || "RSS", item),
         imageUrl,

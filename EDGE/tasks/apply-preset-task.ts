@@ -3,13 +3,18 @@ import { ensureEdgeCampaign, findCampaignByPublicId } from "../companion/repo.js
 import { computeInteractLocked } from "../companion/interact-lock.js";
 import { ensureParticipant } from "../participant/participant-repo.js";
 import { reconcileCharacterDecay } from "../participant/decay-sync.js";
+import { effectiveLeaderboardXpFrozen } from "../participant/leaderboard-draw-freeze.js";
 import { applyTaskXpToParticipant, getParticipantState } from "../participant/service.js";
 import { sanitizeTaskRef } from "./apply-task.js";
 import { tryInsertTaskGrant } from "./grants-repo.js";
+import {
+  effectiveTaskPresetScoreTarget,
+  hasObjectiveTaskVerify,
+} from "../../shared/edge-task-preset-config.js";
 import { findTaskPresetByKey, needsEdgeVerify } from "./preset-tasks-parse.js";
 import type { TaskDenyReason, TaskRewardResponse } from "./types.js";
 import { readGameScriptMetrics } from "../participant/game-script-metrics.js";
-import { parseExtra } from "../participant/payload.js";
+import { parseExtra } from "../participant/participant-extra.js";
 
 export async function applyPresetTaskReward(
   edgeId: string,
@@ -55,6 +60,7 @@ export async function applyPresetTaskReward(
   }
 
   const xpDelta = Math.max(-500, Math.min(500, Math.floor(preset.points - preset.penalty)));
+  const scoreTarget = effectiveTaskPresetScoreTarget(preset);
   const refKey = sanitizeTaskRef(refRaw);
 
   const c0 = await reconcileCharacterDecay(p.id);
@@ -62,6 +68,18 @@ export async function applyPresetTaskReward(
 
   const v = preset.verify;
   const now = new Date();
+
+  if (!hasObjectiveTaskVerify(v)) {
+    const state = await getParticipantState(edgeId, platformUserId);
+    if (!state) return null;
+    return { awarded: false, xpDelta: 0, taskKey, state, denyReason: "honor_disabled" };
+  }
+
+  if (xpDelta !== 0 && effectiveLeaderboardXpFrozen(campaign, scoreTarget, now)) {
+    const state = await getParticipantState(edgeId, platformUserId);
+    if (!state) return null;
+    return { awarded: false, xpDelta: 0, taskKey, state, denyReason: "leaderboard_frozen" };
+  }
   if (needsEdgeVerify(v)) {
     if (v.type === "edge_min_level" && c0.level < v.minLevel) {
       const state = await getParticipantState(edgeId, platformUserId);
@@ -126,7 +144,7 @@ export async function applyPresetTaskReward(
     return { awarded: false, xpDelta: 0, taskKey, state, denyReason: "already_claimed" };
   }
 
-  const c1 = await applyTaskXpToParticipant(p.id, xpDelta, now);
+  const c1 = await applyTaskXpToParticipant(campaign, p.id, xpDelta, now, scoreTarget);
   if (!c1) return null;
 
   const state = await getParticipantState(edgeId, platformUserId);

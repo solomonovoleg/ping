@@ -2,6 +2,7 @@ import type { IStorage } from "./types";
 import type {
   Chat,
   ChatFolder,
+  ChatListSection,
   ChatVibeState,
   ChatVibeBatch,
   ChatVibeHistoryEntry,
@@ -9,64 +10,37 @@ import type {
   CallParticipantHistory,
   CallTranscriptSegment,
   CallCommandSuggestion,
+  UserChatListBuiltinTabPrefs,
+  UserChatListCustomFolder,
   UserReminder,
   VoiceTask,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
 import { createUsersStore } from "./users-store";
+import { buildSignupRiskSummary, type SignupRiskSummary } from "../admin/signup-risk";
 import { createChatsStore } from "./chats-store";
 import { createMessagesStore } from "./messages-store";
 import { createReferralCodesStore } from "./referral-codes-store";
 import { randomUUID } from "crypto";
-
-/** In-memory contacts: ownerId -> Set of contactUserId */
-const contactsMap = new Map<string, Set<string>>();
-
-/** In-memory folders: chatId -> ChatFolder[] */
-const foldersByChat = new Map<string, ChatFolder[]>();
-
-/** In-memory follows: followerId -> Set of followingId */
-const followsMap = new Map<string, Set<string>>();
-
-type MemBlockFlags = {
-  restrictProfile: boolean;
-  restrictChat: boolean;
-  restrictSocial: boolean;
-  blockNote: string | null;
-};
-
-function memBlockFull(f: MemBlockFlags): boolean {
-  return f.restrictProfile === true && f.restrictChat === true && f.restrictSocial === true;
-}
-
-/** In-memory blocks: blockerId -> blockedId -> flags */
-const blocksMap = new Map<string, Map<string, MemBlockFlags>>();
-
-/** «Удалено для себя»: key = `${userId}:${chatId}` -> Set<messageId> */
-const messageHiddenMap = new Map<string, Set<string>>();
-
-/** key = `${userId}\t${chatId}` */
-const chatMemberPrefsMem = new Map<string, { pinnedAt: Date | null; hiddenAt: Date | null; listSection: string }>();
-
-function chatMemberPrefsKey(userId: string, chatId: string): string {
-  return `${userId}\t${chatId}`;
-}
-
-const memUserReminders: UserReminder[] = [];
-const memVoiceTasks: VoiceTask[] = [];
-
-type MemDmScheduledCall = {
-  id: string;
-  chatId: string;
-  createdByUserId: string;
-  peerUserId: string;
-  fireAt: Date;
-  title: string;
-  plannerReminderId: string | null;
-  initiatorDismissedAt: Date | null;
-  peerDismissedAt: Date | null;
-};
-const memDmScheduledCalls: MemDmScheduledCall[] = [];
+import {
+  blocksMap,
+  chatMemberPrefsKey,
+  chatMemberPrefsMem,
+  contactsMap,
+  foldersByChat,
+  followsMap,
+  memBlockFull,
+  memDmScheduledCalls,
+  memUserReminders,
+  memVoiceTasks,
+  messageHiddenMap,
+  userChatListBuiltinTabPrefsKey,
+  userChatListBuiltinTabPrefsMem,
+  userChatListCustomFoldersByUserMem,
+  type MemBlockFlags,
+  type MemUserChatListCustomFolder,
+} from "./mem-storage-heap";
+import { isBuiltinChatListSection, isCustomChatListFolderId } from "./db-storage-user-chat-list-shelves-queries";
 
 export class MemStorage implements IStorage {
   private users = createUsersStore();
@@ -303,6 +277,88 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.users.create(user as import("@shared/schema").InsertUser));
   }
 
+  async applyStudioSyntheticFlags(userId: string, createdByAdminId: string) {
+    return Promise.resolve(this.users.applyStudioSyntheticFlags(userId, createdByAdminId));
+  }
+
+  async listStudioSyntheticUsersForAdmin(opts: { limit: number; offset: number }) {
+    return Promise.resolve(this.users.listStudioSyntheticForAdmin(opts));
+  }
+
+  async listUsersRelatedBySignupSignals(
+    userId: string,
+    opts?: { limit?: number },
+  ): Promise<{
+    byDeviceId: import("@shared/schema").User[];
+    byIp: import("@shared/schema").User[];
+    byUaHash: import("@shared/schema").User[];
+    byClientSignalsHash: import("@shared/schema").User[];
+  }> {
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 100);
+    const self = await this.getUser(userId);
+    if (!self) {
+      return { byDeviceId: [], byIp: [], byUaHash: [], byClientSignalsHash: [] };
+    }
+    const active = this.users.listActiveUsersFlat().filter((u) => u.id !== userId);
+    const pick = (pred: (u: import("@shared/schema").User) => boolean) => active.filter(pred).slice(0, limit);
+
+    const byDeviceId =
+      self.signupDeviceId != null && self.signupDeviceId !== ""
+        ? pick((u) => u.signupDeviceId === self.signupDeviceId)
+        : [];
+    const byIp =
+      self.signupIp != null && self.signupIp !== "" ? pick((u) => u.signupIp === self.signupIp) : [];
+    const byUaHash =
+      self.signupUaHash != null && self.signupUaHash !== ""
+        ? pick((u) => u.signupUaHash === self.signupUaHash)
+        : [];
+    const byClientSignalsHash =
+      self.signupClientSignalsHash != null && self.signupClientSignalsHash !== ""
+        ? pick((u) => u.signupClientSignalsHash === self.signupClientSignalsHash)
+        : [];
+
+    return { byDeviceId, byIp, byUaHash, byClientSignalsHash };
+  }
+
+  async getAdminUserSignupRiskSummaries(userIds: string[]): Promise<Record<string, SignupRiskSummary>> {
+    const all = this.users.listActiveUsersFlat();
+    const byId = new Map(all.map((u) => [u.id, u]));
+    const out: Record<string, SignupRiskSummary> = {};
+    for (const id of userIds) {
+      const u = byId.get(id);
+      if (!u) {
+        out[id] = buildSignupRiskSummary(0, 0);
+        continue;
+      }
+      let deviceOthers = 0;
+      let ipUaOthers = 0;
+      for (const o of all) {
+        if (o.id === id) continue;
+        if (u.signupDeviceId && o.signupDeviceId && o.signupDeviceId === u.signupDeviceId) deviceOthers++;
+        if (
+          u.signupIp &&
+          u.signupUaHash &&
+          o.signupIp &&
+          o.signupUaHash &&
+          o.signupIp === u.signupIp &&
+          o.signupUaHash === u.signupUaHash
+        ) {
+          ipUaOthers++;
+        }
+      }
+      out[id] = buildSignupRiskSummary(deviceOthers, ipUaOthers);
+    }
+    return Promise.resolve(out);
+  }
+
+  async setUserPasswordHash(userId: string, passwordHash: string): Promise<boolean> {
+    return Promise.resolve(this.users.setPasswordHash(userId, passwordHash));
+  }
+
+  async adminSetUserPublicId(userId: string, newPublicId: number) {
+    return Promise.resolve(this.users.adminSetPublicId(userId, newPublicId));
+  }
+
   async updateUserProfile(userId: string, data: Parameters<IStorage["updateUserProfile"]>[1]) {
     this.users.updateProfile(userId, data);
     return Promise.resolve(this.users.get(userId));
@@ -314,6 +370,10 @@ export class MemStorage implements IStorage {
 
   async updateUserFcmToken(userId: string, token: string | null): Promise<void> {
     this.users.setFcmToken(userId, token);
+  }
+
+  async updateUserIosVoipToken(userId: string, token: string | null): Promise<void> {
+    this.users.setIosVoipToken(userId, token);
   }
 
   async getAdminStats() {
@@ -329,6 +389,8 @@ export class MemStorage implements IStorage {
     offset: number;
     includeDeleted?: boolean;
     search?: string;
+    sort?: "createdAt" | "referrals" | "invitedBy";
+    sortDir?: "asc" | "desc";
   }) {
     return Promise.resolve(this.users.listForAdmin(opts));
   }
@@ -364,20 +426,49 @@ export class MemStorage implements IStorage {
     return Promise.resolve(u);
   }
 
+  async purgeUserPermanently(userId: string): Promise<boolean> {
+    this.referralCodes.deleteAllByInviter(userId);
+    contactsMap.delete(userId);
+    for (const set of contactsMap.values()) set.delete(userId);
+    followsMap.delete(userId);
+    for (const set of followsMap.values()) set.delete(userId);
+    for (const [blockerId, inner] of [...blocksMap.entries()]) {
+      inner.delete(userId);
+      if (inner.size === 0) blocksMap.delete(blockerId);
+    }
+    blocksMap.delete(userId);
+    const ok = this.users.deletePermanently(userId);
+    return Promise.resolve(ok);
+  }
+
   async createReferralCode(
     inviterUserId: string,
     code: string,
     expiresAt: Date,
-    opts?: { maxUses?: number; bypassInviterLimit?: boolean },
+    opts?: {
+      maxUses?: number;
+      bypassInviterLimit?: boolean;
+      adminNote?: string;
+      edgeMoneyInviteBatchId?: string | null;
+    },
   ) {
     let maxUses = opts?.maxUses ?? 1;
     if (maxUses === 0 || maxUses < -1) maxUses = 1;
     if (maxUses > 10_000) maxUses = 10_000;
+    const note = opts?.adminNote?.trim() ? opts.adminNote.trim() : null;
     const row = this.referralCodes.create(inviterUserId, code, expiresAt, {
       maxUses,
       bypassInviterLimit: opts?.bypassInviterLimit,
+      adminNote: note,
+      edgeMoneyInviteBatchId: opts?.edgeMoneyInviteBatchId ?? null,
     });
-    return Promise.resolve({ id: row.id, code: row.code, expiresAt: row.expiresAt, maxUses: row.maxUses });
+    return Promise.resolve({
+      id: row.id,
+      code: row.code,
+      expiresAt: row.expiresAt,
+      maxUses: row.maxUses,
+      adminNote: row.adminNote ?? null,
+    });
   }
 
   async getReferralCodeByCode(code: string) {
@@ -408,6 +499,7 @@ export class MemStorage implements IStorage {
         expiresAt: r.expiresAt,
         maxUses: r.maxUses,
         useCount: r.useCount,
+        adminNote: r.adminNote ?? null,
       }))
     );
   }
@@ -416,6 +508,10 @@ export class MemStorage implements IStorage {
     const out: Record<string, number> = {};
     for (const id of userIds) out[id] = this.users.countReferralsByInviter(id);
     return Promise.resolve(out);
+  }
+
+  async getUsersPublicBriefByIds(userIds: string[]) {
+    return Promise.resolve(this.users.getPublicBriefByIds(userIds));
   }
 
   async listInvitedUsers(inviterUserId: string) {
@@ -476,6 +572,138 @@ export class MemStorage implements IStorage {
     });
   }
 
+  async getChatMemberListSection(userId: string, chatId: string): Promise<string> {
+    return Promise.resolve(chatMemberPrefsMem.get(chatMemberPrefsKey(userId, chatId))?.listSection ?? "general");
+  }
+
+  async isChatListSectionPushMutedForUser(userId: string, section: string): Promise<boolean> {
+    if (isBuiltinChatListSection(section)) {
+      return Promise.resolve(
+        userChatListBuiltinTabPrefsMem.get(userChatListBuiltinTabPrefsKey(userId, section))?.pushMuted === true,
+      );
+    }
+    if (!isCustomChatListFolderId(section)) return Promise.resolve(false);
+    const list = userChatListCustomFoldersByUserMem.get(userId) ?? [];
+    return Promise.resolve(list.some((f) => f.id === section && f.pushMuted));
+  }
+
+  async listUserChatListCustomFolders(userId: string): Promise<UserChatListCustomFolder[]> {
+    const list = (userChatListCustomFoldersByUserMem.get(userId) ?? [])
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime());
+    return Promise.resolve(
+      list.map((f) => ({
+        id: f.id,
+        userId,
+        name: f.name,
+        sortOrder: f.sortOrder,
+        pushMuted: f.pushMuted,
+        createdAt: f.createdAt,
+      })),
+    );
+  }
+
+  async getUserChatListCustomFolder(userId: string, folderId: string): Promise<UserChatListCustomFolder | undefined> {
+    const f = (userChatListCustomFoldersByUserMem.get(userId) ?? []).find((x) => x.id === folderId);
+    if (!f) return Promise.resolve(undefined);
+    return Promise.resolve({
+      id: f.id,
+      userId,
+      name: f.name,
+      sortOrder: f.sortOrder,
+      pushMuted: f.pushMuted,
+      createdAt: f.createdAt,
+    });
+  }
+
+  async listUserChatListBuiltinTabPrefs(userId: string): Promise<UserChatListBuiltinTabPrefs[]> {
+    const prefix = `${userId}\t`;
+    const out: UserChatListBuiltinTabPrefs[] = [];
+    for (const [k, v] of userChatListBuiltinTabPrefsMem.entries()) {
+      if (!k.startsWith(prefix)) continue;
+      const tabId = k.slice(prefix.length);
+      out.push({
+        userId,
+        tabId,
+        labelOverride: v.labelOverride,
+        pushMuted: v.pushMuted,
+        updatedAt: new Date(),
+      });
+    }
+    return Promise.resolve(out);
+  }
+
+  async nextUserChatListCustomFolderSortOrder(userId: string): Promise<number> {
+    const list = userChatListCustomFoldersByUserMem.get(userId) ?? [];
+    const m = list.reduce((acc, f) => Math.max(acc, f.sortOrder), -1);
+    return Promise.resolve(m + 1);
+  }
+
+  async createUserChatListCustomFolder(userId: string, id: string, name: string, sortOrder: number): Promise<void> {
+    const list = userChatListCustomFoldersByUserMem.get(userId) ?? [];
+    const row: MemUserChatListCustomFolder = {
+      id,
+      name,
+      sortOrder,
+      pushMuted: false,
+      createdAt: new Date(),
+    };
+    list.push(row);
+    userChatListCustomFoldersByUserMem.set(userId, list);
+    return Promise.resolve();
+  }
+
+  async updateUserChatListCustomFolder(
+    userId: string,
+    folderId: string,
+    patch: { name?: string; pushMuted?: boolean },
+  ): Promise<boolean> {
+    const list = userChatListCustomFoldersByUserMem.get(userId) ?? [];
+    const idx = list.findIndex((f) => f.id === folderId);
+    if (idx < 0) return Promise.resolve(false);
+    const prev = list[idx]!;
+    list[idx] = {
+      ...prev,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.pushMuted !== undefined ? { pushMuted: patch.pushMuted } : {}),
+    };
+    userChatListCustomFoldersByUserMem.set(userId, list);
+    return Promise.resolve(true);
+  }
+
+  async deleteUserChatListCustomFolder(userId: string, folderId: string): Promise<boolean> {
+    const list = userChatListCustomFoldersByUserMem.get(userId) ?? [];
+    const next = list.filter((f) => f.id !== folderId);
+    if (next.length === list.length) return Promise.resolve(false);
+    userChatListCustomFoldersByUserMem.set(userId, next);
+    return Promise.resolve(true);
+  }
+
+  async resetUserChatMemberPrefsListSection(userId: string, fromSection: string, toSection: string): Promise<void> {
+    const prefix = `${userId}\t`;
+    for (const [k, v] of chatMemberPrefsMem.entries()) {
+      if (!k.startsWith(prefix)) continue;
+      if (v.listSection === fromSection) {
+        chatMemberPrefsMem.set(k, { ...v, listSection: toSection });
+      }
+    }
+    return Promise.resolve();
+  }
+
+  async upsertUserChatListBuiltinTabPrefs(
+    userId: string,
+    tabId: ChatListSection,
+    patch: { labelOverride?: string | null; pushMuted?: boolean },
+  ): Promise<void> {
+    const key = userChatListBuiltinTabPrefsKey(userId, tabId);
+    const prev = userChatListBuiltinTabPrefsMem.get(key) ?? { labelOverride: null, pushMuted: false };
+    userChatListBuiltinTabPrefsMem.set(key, {
+      labelOverride: patch.labelOverride !== undefined ? patch.labelOverride : prev.labelOverride,
+      pushMuted: patch.pushMuted !== undefined ? patch.pushMuted : prev.pushMuted,
+    });
+    return Promise.resolve();
+  }
+
   async deleteChatCascade(chatId: string): Promise<boolean> {
     if (!this.chats.getById(chatId)) return Promise.resolve(false);
     this.messages.purgeChat(chatId);
@@ -505,6 +733,14 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.chats.create(data));
   }
 
+  async getChatByInviteCode(_code: string): Promise<import("@shared/schema").Chat | undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  async getChatByShortCode(code: string): Promise<import("@shared/schema").Chat | undefined> {
+    return Promise.resolve(this.chats.getByShortCode(code));
+  }
+
   async addChatMember(data: Parameters<IStorage["addChatMember"]>[0]) {
     return Promise.resolve(this.chats.addMember(data));
   }
@@ -513,7 +749,16 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.chats.removeMember(chatId, userId));
   }
 
-  async updateChat(chatId: string, data: { name?: string; avatarUrl?: string }) {
+  async updateChat(
+    chatId: string,
+    data: {
+      name?: string;
+      avatarUrl?: string;
+      shortCode?: string | null;
+      inviteCode?: string | null;
+      dmMultilingualEnabled?: boolean;
+    },
+  ) {
     return Promise.resolve(this.chats.update(chatId, data));
   }
 
@@ -523,7 +768,9 @@ export class MemStorage implements IStorage {
 
   async getMediaMessages(chatId: string, folderId: string | null, limit: number, beforeMessageId?: string) {
     const list = this.messages.getByChatId(chatId, limit * 2, beforeMessageId, folderId);
-    const media = list.filter((m) => ["image", "video", "voice", "video_note"].includes((m as { type?: string }).type ?? ""));
+    const media = list.filter((m) =>
+      ["image", "video", "voice", "video_note", "file"].includes((m as { type?: string }).type ?? "")
+    );
     return Promise.resolve(media.slice(-limit));
   }
 
@@ -617,6 +864,14 @@ export class MemStorage implements IStorage {
     return Promise.resolve(this.messages.get(chatId, messageId));
   }
 
+  async getMessagesByIdsInChat(chatId: string, messageIds: string[]) {
+    return Promise.resolve(this.messages.getManyInChat(chatId, messageIds));
+  }
+
+  async getMessageById(messageId: string) {
+    return Promise.resolve(this.messages.getById(messageId));
+  }
+
   async deleteMessage(chatId: string, messageId: string) {
     return Promise.resolve(this.messages.delete(chatId, messageId));
   }
@@ -693,7 +948,7 @@ export class MemStorage implements IStorage {
     const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
     const list = this.messages.getByChatId(chatId);
     const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
-    const unreadEligible = (m: { type?: string | null }) => m.type !== "system" && m.type !== "missed_call";
+    const unreadEligible = (m: { type?: string | null }) => m.type !== "system";
     if (!since) return list.filter((m) => fromOthers(m) && unreadEligible(m)).length;
     return list.filter((m) => fromOthers(m) && unreadEligible(m) && new Date(m.createdAt) > since).length;
   }
@@ -703,7 +958,7 @@ export class MemStorage implements IStorage {
     const since = member?.lastReadAt ? new Date(member.lastReadAt) : null;
     const list = this.messages.getByChatId(chatId, undefined, undefined, folderId);
     const fromOthers = (m: { senderId?: string | null }) => m.senderId == null || m.senderId !== userId;
-    const unreadEligible = (m: { type?: string | null }) => m.type !== "system" && m.type !== "missed_call";
+    const unreadEligible = (m: { type?: string | null }) => m.type !== "system";
     if (!since) return list.filter((m) => fromOthers(m) && unreadEligible(m)).length;
     return list.filter((m) => fromOthers(m) && unreadEligible(m) && new Date(m.createdAt) > since).length;
   }

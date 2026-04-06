@@ -1,4 +1,5 @@
 import { X, MoreHorizontal, Volume2, VolumeX } from "lucide-react";
+import { UserAvatar } from "@/components/UserAvatar";
 import type { Story } from "./types";
 import { PULSE_IG_GRAD } from "./constants";
 import { StoryDecayRing } from "./StoryDecayRing";
@@ -51,10 +52,13 @@ export function StoryViewerHeader({
           <div className="relative h-9 w-9 shrink-0">
             <div className="absolute inset-[-2px] rounded-[10px]" style={{ background: PULSE_IG_GRAD }} />
             <div className="absolute inset-[-0.5px] rounded-[9px] bg-black/35" />
-            <img
-              src={currentStory.userAvatar}
-              alt=""
-              className="relative z-10 h-full w-full rounded-[8px] border border-black/25 object-cover"
+            <UserAvatar
+              avatarUrl={currentStory.userAvatar?.trim() ? currentStory.userAvatar : undefined}
+              displayName={currentStory.userName}
+              seed={currentStory.authorId ?? currentStory.userName}
+              size={36}
+              cornerRadius={8}
+              className="relative z-10 h-full w-full border border-black/25"
             />
           </div>
           <div className="min-w-0 flex-1">

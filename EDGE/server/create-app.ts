@@ -4,6 +4,7 @@ import { createCompanionRouter } from "../companion/routes.js";
 import { createParticipantRouter } from "../participant/routes.js";
 import { createCampaignRouter } from "../campaign/routes.js";
 import { createCreatorRouter } from "../creator/routes.js";
+import { createMoneyRouter } from "../money/http/routes.js";
 
 export function createEdgeApp(): express.Express {
   const app = express();
@@ -15,6 +16,7 @@ export function createEdgeApp(): express.Express {
   app.use("/v1/participant", createParticipantRouter());
   app.use("/v1/campaign", createCampaignRouter());
   app.use("/v1/creator", createCreatorRouter());
+  app.use("/v1/money", createMoneyRouter());
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });

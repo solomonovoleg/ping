@@ -1,4 +1,6 @@
 import { Button } from "@/components/ui/button";
+import { adminDialogSurfaceClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +45,9 @@ export function VkParserDialogs(props: {
   createMut: UseMutationResult<unknown, Error, void, unknown>;
   updateMut: UseMutationResult<unknown, Error, void, unknown>;
   testTokenMut: UseMutationResult<{ vkUserId: number }, Error, void, unknown>;
+  usersFetching?: boolean;
+  usersError?: boolean;
+  onRetryUsers?: () => void;
 }) {
   const createBusy = props.createMut.isPending;
   const updateBusy = props.updateMut.isPending;
@@ -51,7 +56,7 @@ export function VkParserDialogs(props: {
   return (
     <>
       <Dialog open={props.createOpen} onOpenChange={props.setCreateOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className={cn("max-w-lg", adminDialogSurfaceClass)}>
           <DialogHeader>
             <DialogTitle>Новая привязка ВК</DialogTitle>
             <DialogDescription>
@@ -83,6 +88,9 @@ export function VkParserDialogs(props: {
             enabled={props.enabled}
             setEnabled={props.setEnabled}
             formDisabled={createBusy}
+            usersFetching={props.usersFetching}
+            usersError={props.usersError}
+            onRetryUsers={props.onRetryUsers}
           />
           <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-2">
             <Button
@@ -111,7 +119,7 @@ export function VkParserDialogs(props: {
       </Dialog>
 
       <Dialog open={!!props.editBindingId} onOpenChange={(o) => !o && props.onCloseEdit()}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className={cn("max-w-lg", adminDialogSurfaceClass)}>
           <DialogHeader>
             <DialogTitle>Редактировать привязку</DialogTitle>
             <DialogDescription>
@@ -145,6 +153,9 @@ export function VkParserDialogs(props: {
             tokenHint="Оставьте пустым, чтобы не менять"
             lockPlatformUser
             formDisabled={updateBusy}
+            usersFetching={props.usersFetching}
+            usersError={props.usersError}
+            onRetryUsers={props.onRetryUsers}
           />
           <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-2">
             <Button

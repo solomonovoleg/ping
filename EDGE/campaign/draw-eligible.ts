@@ -19,12 +19,13 @@ export async function countWinnersForGift(campaignPublicId: string, giftKey: str
 
 /**
  * Упорядоченный пул участников для розыгрыша (до фильтра «уже выиграли»).
- * `top`: топ по XP; `first` среди всех — по дате входа в кампанию.
+ * `top`: топ по выбранному рейтингу (primary / secondary XP); `all` + method `first` — по дате входа.
  */
 export async function listOrderedParticipantPool(
   campaignPublicId: string,
   pool: "all" | "top",
   topN: number,
+  rankingKind: "primary" | "secondary" = "primary",
 ): Promise<string[] | null> {
   const poolPg: Pool | null = getEdgePool();
   if (!poolPg) return null;
@@ -39,12 +40,16 @@ export async function listOrderedParticipantPool(
       );
       return rows.map((r) => r.platform_user_id);
     }
+    const scoreExpr =
+      rankingKind === "secondary"
+        ? "COALESCE(c.secondary_xp, 0)"
+        : "COALESCE(c.primary_xp, c.xp, 0)";
     const { rows } = await poolPg.query<{ platform_user_id: string }>(
       `SELECT p.platform_user_id
        FROM edge_participants p
-       LEFT JOIN edge_character_states cs ON cs.participant_id = p.id
+       LEFT JOIN edge_character_states c ON c.participant_id = p.id
        WHERE p.campaign_public_id = $1
-       ORDER BY COALESCE(cs.xp, 0) DESC, p.joined_at ASC
+       ORDER BY ${scoreExpr} DESC, COALESCE(c.level, 0) DESC, p.joined_at ASC
        LIMIT $2`,
       [campaignPublicId, cap],
     );

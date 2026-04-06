@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_GROUP_MESH_PEERS } from "@shared/group-call-limits";
 import { toast } from "@/hooks/use-toast";
 import type { GroupCallMedia } from "@/lib/group-calls-api";
 import { getMediaConstraints } from "@/features/call/call-ice-config";
@@ -79,6 +80,8 @@ export function useGroupCallSession(params: {
   sendGroupReaction: (emoji: string, label: string) => void;
   /** Организатор комнаты (первая плитка в сетке). */
   hostUserId: string | null;
+  /** Лимит участников mesh (с сервера в `group.roster`). */
+  maxMeshPeers: number;
 } {
   const { roomId, mediaType, myUserId, myDisplayName, open, onEnded, initialHostUserId = null } = params;
   const [phase, setPhase] = useState<GroupCallUiPhase>("connecting");
@@ -95,6 +98,7 @@ export function useGroupCallSession(params: {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localStreamRenderKey, setLocalStreamRenderKey] = useState(0);
   const [handRaisedUserIds, setHandRaisedUserIds] = useState<string[]>([]);
+  const [maxMeshPeers, setMaxMeshPeers] = useState(MAX_GROUP_MESH_PEERS);
 
   /** Пока нет `group.roster` или он без себя — показываем локальную плитку (в т.ч. при connecting и при ошибке сети, если камера ещё жива). */
   const participants = useMemo((): RosterParticipant[] => {
@@ -308,6 +312,10 @@ export function useGroupCallSession(params: {
             if (type === "group.roster") {
               const list = (msg.participants as RosterParticipant[]) ?? [];
               setRosterParticipants(list);
+              const mmp = msg.maxMeshPeers;
+              if (typeof mmp === "number" && Number.isFinite(mmp) && mmp > 0) {
+                setMaxMeshPeers(Math.min(256, Math.floor(mmp)));
+              }
               const hid = typeof msg.hostUserId === "string" && msg.hostUserId.trim() ? msg.hostUserId.trim() : null;
               setHostUserId(hid);
               const hands = msg.handRaisedUserIds;
@@ -565,5 +573,6 @@ export function useGroupCallSession(params: {
     setHandRaised,
     sendGroupReaction,
     hostUserId,
+    maxMeshPeers,
   };
 }

@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  AdminPageHeader,
+  AdminSectionTemplate,
+  adminDialogSurfaceClass,
+  adminPageStackClass,
+} from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -27,7 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { fetchAdmins, setAdminRole, fetchAdminUsers, type AdminEntry } from "@/lib/admin";
 import { useToast } from "@/hooks/use-toast";
-import { UserPlus, Search } from "lucide-react";
+import { ShieldUser, UserPlus, Search } from "lucide-react";
 
 const ROLES = ["moderator", "admin", "super_admin"] as const;
 
@@ -39,7 +45,7 @@ export default function AdminAdmins() {
   const [addRole, setAddRole] = useState<string>("moderator");
   const [addLoading, setAddLoading] = useState(false);
 
-  const { data: admins, isLoading, error } = useQuery({
+  const { data: admins, isLoading, error, refetch } = useQuery({
     queryKey: ["admin", "admins"],
     queryFn: fetchAdmins,
   });
@@ -87,28 +93,33 @@ export default function AdminAdmins() {
   const searchResults = searchUsers?.users.filter((u) => !u.deletedAt) ?? [];
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Админы и роли</h1>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle>Платформенные администраторы</CardTitle>
+    <div className={cn(adminPageStackClass(), "space-y-4")}>
+      <AdminPageHeader
+        title="Админы и роли"
+        description="Платформенные роли moderator, admin, super_admin."
+      />
+      <AdminSectionTemplate
+        title="Платформенные администраторы"
+        actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>
-            <UserPlus className="w-4 h-4 mr-1" />
+            <UserPlus className="mr-1 h-4 w-4" />
             Добавить админа
           </Button>
-        </CardHeader>
-        <CardContent>
-          {isLoading && <p className="text-muted-foreground py-4">Загрузка...</p>}
-          {error && (
-            <p className="text-destructive py-4">
-              {error instanceof Error ? error.message : "Ошибка загрузки"}
-            </p>
-          )}
-          {admins && admins.length === 0 && (
-            <p className="text-muted-foreground py-4">Нет назначенных админов.</p>
-          )}
-          {admins && admins.length > 0 && (
-            <Table>
+        }
+        isLoading={isLoading}
+        loadingRows={3}
+        error={error}
+        onRetry={() => void refetch()}
+        errorTitle="Не удалось загрузить администраторов"
+        empty={!!admins && admins.length === 0}
+        emptyIcon={ShieldUser}
+        emptyTitle="Нет назначенных администраторов"
+        emptyDescription="Добавьте первого администратора, чтобы управлять ролями и модерацией."
+        emptyActionLabel="Добавить админа"
+        onEmptyAction={() => setAddOpen(true)}
+      >
+        {admins && admins.length > 0 ? (
+          <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>ID</TableHead>
@@ -147,13 +158,12 @@ export default function AdminAdmins() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+          </Table>
+        ) : null}
+      </AdminSectionTemplate>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent>
+        <DialogContent className={adminDialogSurfaceClass}>
           <DialogHeader>
             <DialogTitle>Добавить админа</DialogTitle>
             <DialogDescription>

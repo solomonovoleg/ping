@@ -1,6 +1,6 @@
 /**
  * Модуль «Ответ на сообщение» (п.6 VS_TELEGRAM_20).
- * Один файл ≤200 строк: миграция, обогащение списка сообщений полем replyTo.
+ * Обогащение списка сообщений полем replyTo (батч к БД, без N+1).
  */
 
 import type { Message } from "@shared/schema";
@@ -16,7 +16,8 @@ export type MessageWithReply = Message & {
   replyTo?: ReplySnapshot;
 };
 
-type GetMessageFn = (chatId: string, messageId: string) => Promise<Message | undefined>;
+/** Загрузить сообщения чата по id ответов — один round-trip. */
+export type LoadRepliesBatchFn = (chatId: string, replyToIds: string[]) => Promise<Map<string, Message>>;
 
 let replyColumnEnsured = false;
 
@@ -31,26 +32,49 @@ export async function ensureReplySchema(pool: { query: (sql: string) => Promise<
   }
 }
 
-/** Обогащает сообщения полем replyTo (снимок сообщения, на которое отвечают). */
+function snapshotFromReplied(replied: Message): ReplySnapshot {
+  return {
+    id: replied.id,
+    senderId: replied.senderId ?? null,
+    type: replied.type,
+    content:
+      replied.type === "text"
+        ? String(replied.content).slice(0, 200)
+        : replied.type === "file"
+          ? (() => {
+              try {
+                const p = JSON.parse(String(replied.content)) as { name?: string };
+                const n = typeof p.name === "string" ? p.name.trim() : "";
+                return n.slice(0, 120) || "PDF-документ";
+              } catch {
+                return "PDF-документ";
+              }
+            })()
+          : replied.type,
+  };
+}
+
+/** Обогащает сообщения полем replyTo; replyTo подгружаются одним батчем. */
 export async function enrichMessagesWithReply(
   messages: (Message & { replyToId?: string | null })[],
-  getMessage: GetMessageFn
+  loadReplies: LoadRepliesBatchFn,
 ): Promise<MessageWithReply[]> {
-  const out: MessageWithReply[] = [];
-  for (const msg of messages) {
+  const chatId = messages.find((m) => m.chatId)?.chatId;
+  if (!chatId) {
+    return messages.map((m) => ({ ...m } as MessageWithReply));
+  }
+  const idSet = new Set<string>();
+  for (const m of messages) {
+    if (m.replyToId) idSet.add(m.replyToId);
+  }
+  const replyIds = [...idSet];
+  const byId = replyIds.length > 0 ? await loadReplies(chatId, replyIds) : new Map<string, Message>();
+  return messages.map((msg) => {
     const base = { ...msg } as MessageWithReply;
     if (msg.replyToId && msg.chatId) {
-      const replied = await getMessage(msg.chatId, msg.replyToId);
-      if (replied) {
-        base.replyTo = {
-          id: replied.id,
-          senderId: replied.senderId ?? null,
-          type: replied.type,
-          content: replied.type === "text" ? String(replied.content).slice(0, 200) : replied.type,
-        };
-      }
+      const replied = byId.get(msg.replyToId);
+      if (replied) base.replyTo = snapshotFromReplied(replied);
     }
-    out.push(base);
-  }
-  return out;
+    return base;
+  });
 }

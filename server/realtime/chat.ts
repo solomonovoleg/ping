@@ -4,11 +4,27 @@ import { translate, getPref } from "../translate/provider";
 /** chatId -> множество подключённых WebSocket (подписчиков чата) */
 const byChat = new Map<string, Set<WebSocket>>();
 
+/**
+ * Отдельно: сокеты с открытым экраном диалога (страница чата).
+ * Список чатов подписывает только {@link byChat} для превью — без этого множества.
+ * `mark-chat-read` на сервере разрешён только если сокет здесь.
+ */
+const threadOpenByChat = new Map<string, Set<WebSocket>>();
+
 function getSet(chatId: string): Set<WebSocket> {
   let set = byChat.get(chatId);
   if (!set) {
     set = new Set();
     byChat.set(chatId, set);
+  }
+  return set;
+}
+
+function getThreadSet(chatId: string): Set<WebSocket> {
+  let set = threadOpenByChat.get(chatId);
+  if (!set) {
+    set = new Set();
+    threadOpenByChat.set(chatId, set);
   }
   return set;
 }
@@ -25,13 +41,37 @@ export function removeSubscription(chatId: string, ws: WebSocket): void {
   }
 }
 
+/** Экран диалога открыт — можно принимать mark-chat-read с этого сокета. */
+export function addThreadOpenSubscription(chatId: string, ws: WebSocket): void {
+  getThreadSet(chatId).add(ws);
+}
+
+export function removeThreadOpenSubscription(chatId: string, ws: WebSocket): void {
+  const set = threadOpenByChat.get(chatId);
+  if (set) {
+    set.delete(ws);
+    if (set.size === 0) threadOpenByChat.delete(chatId);
+  }
+}
+
 export function removeConnection(ws: WebSocket): void {
   byChat.forEach((set) => set.delete(ws));
+  for (const chatId of [...threadOpenByChat.keys()]) {
+    const set = threadOpenByChat.get(chatId);
+    if (!set) continue;
+    set.delete(ws);
+    if (set.size === 0) threadOpenByChat.delete(chatId);
+  }
 }
 
 /** Получить всех подписчиков чата (для рассылки typing и т.д.) */
 export function getChatSubscribers(chatId: string): Set<WebSocket> {
   return byChat.get(chatId) ?? new Set();
+}
+
+/** Сокеты с открытым тредом (страница чата), не список. */
+export function getChatThreadOpenSubscribers(chatId: string): Set<WebSocket> {
+  return threadOpenByChat.get(chatId) ?? new Set();
 }
 
 export type ChatMessagePayload = {
@@ -49,6 +89,10 @@ export type ChatMessagePayload = {
   transcript?: string | null;
   translatedText?: string | null;
   detectedLang?: string | null;
+  /** BCP-47: на какой язык переведён translatedText для этого получателя */
+  translateTargetLang?: string | null;
+  /** Для video_note: серверный poster (кадр) для лёгкого превью до загрузки видео. */
+  videoPosterUrl?: string | null;
 };
 
 /** Разослать новое сообщение всем подписчикам чата. Для подписчиков с включённым переводом — переводит перед отправкой. */
@@ -84,7 +128,12 @@ export function notifyNewMessage(chatId: string, message: ChatMessagePayload): v
           ws.send(JSON.stringify({
             type: "chat-message",
             chatId,
-            message: { ...message, translatedText: result.translatedText, detectedLang: result.detectedLang },
+            message: {
+              ...message,
+              translatedText: result.translatedText,
+              detectedLang: result.detectedLang,
+              translateTargetLang: pref.targetLang,
+            },
           }));
         } else {
           ws.send(originalPayload);
@@ -136,6 +185,7 @@ export function notifyVoiceOrVideoNoteTranscript(chatId: string, message: ChatMe
                 ...message,
                 translatedText: result.translatedText,
                 detectedLang: result.detectedLang,
+                translateTargetLang: pref.targetLang,
               },
             }),
           );
@@ -171,20 +221,18 @@ export function notifyMessageEdited(chatId: string, messageId: string, content: 
 
 type WsWithUserId = WebSocket & { userId?: string };
 
-/** Уведомить подписчиков чата о прочтении (кроме того, кто прочитал). */
-export function notifyChatRead(chatId: string, readerId: string, lastReadAt: string): void {
+/** Уведомить подписчиков чата о смене вайб-темы. */
+export function notifyVibeUpdate(chatId: string, payload: Record<string, unknown>): void {
   const set = byChat.get(chatId);
   if (!set) return;
-  const payload = JSON.stringify({ type: "chat-read", chatId, readerId, lastReadAt });
+  const json = JSON.stringify(payload);
   set.forEach((ws) => {
-    const w = ws as WsWithUserId;
-    if (w.userId === readerId) return;
-    if (ws.readyState === 1) ws.send(payload);
+    if (ws.readyState === 1) ws.send(json);
   });
 }
 
-/** Уведомить подписчиков чата о смене вайб-темы. */
-export function notifyVibeUpdate(chatId: string, payload: Record<string, unknown>): void {
+/** Короткий эффект «напряжённая переписка» (атмосфера): волна + звук у подписчиков с активным вайбом на клиенте. */
+export function notifyVibeTensionPulse(chatId: string, payload: Record<string, unknown>): void {
   const set = byChat.get(chatId);
   if (!set) return;
   const json = JSON.stringify(payload);

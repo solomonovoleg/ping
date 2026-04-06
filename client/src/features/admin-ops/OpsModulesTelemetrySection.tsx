@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Layers, AlertCircle } from "lucide-react";
@@ -26,48 +26,41 @@ export function OpsModulesTelemetrySection() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-56" />
-          <Skeleton className="h-4 w-full max-w-2xl mt-2" />
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Skeleton className="h-40 w-full" />
-        </CardContent>
-      </Card>
+      <AdminPanelCard className="space-y-2 p-5 sm:p-6">
+        <Skeleton className="h-5 w-56 bg-[hsl(var(--admin-elevated-strong))]" />
+        <Skeleton className="mt-2 h-4 w-full max-w-2xl bg-[hsl(var(--admin-elevated-strong))]" />
+        <Skeleton className="h-40 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+      </AdminPanelCard>
     );
   }
 
   if (error || !data) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{adminOpsUi.modulesCard}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-sm text-destructive">{adminOpsUi.modulesLoadError}</p>
-          <Button size="sm" variant="outline" onClick={() => refetch()}>
-            Повторить
-          </Button>
-        </CardContent>
-      </Card>
+      <AdminPanelCard className="space-y-2 p-5 sm:p-6">
+        <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">{adminOpsUi.modulesCard}</h2>
+        <p className="text-sm text-[hsl(0_72%_62%)]">{adminOpsUi.modulesLoadError}</p>
+        <Button size="sm" variant="outline" onClick={() => refetch()}>
+          Повторить
+        </Button>
+      </AdminPanelCard>
     );
   }
 
   const hasErrors = data.recentErrors.length > 0;
+  const tablePasteFallback = data.clientTelemetry?.tablePasteFallback;
+  const iseeTtfp = data.clientTelemetry?.iseeTimeToFirstPlay;
 
   return (
-    <Card className={cn(hasErrors && "border-destructive/30")}>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Layers className="w-4 h-4" />
+    <AdminPanelCard className={cn("space-y-6 p-5 sm:p-6", hasErrors && "border-[hsl(0_62%_42%/0.35)]")}>
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+          <Layers className="h-4 w-4" />
           {adminOpsUi.modulesCard}
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">{adminOpsUi.modulesHint}</p>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        </h2>
+        <p className="mt-1 text-sm admin-text-muted">{adminOpsUi.modulesHint}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs admin-text-muted">
           <span>
-            Uptime процесса: {formatUptime(data.uptimeSec)} ·{" "}
-            {adminOpsUi.trafficRefresh}:{" "}
+            Uptime процесса: {formatUptime(data.uptimeSec)} · {adminOpsUi.trafficRefresh}:{" "}
             {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString("ru-RU") : "—"}
             {isFetching ? " …" : ""}
           </span>
@@ -75,8 +68,8 @@ export function OpsModulesTelemetrySection() {
             Обновить
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
+      </div>
+      <div className="space-y-6">
         {data.modules.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">{adminOpsUi.modulesEmpty}</p>
         ) : (
@@ -164,7 +157,94 @@ export function OpsModulesTelemetrySection() {
             </ul>
           )}
         </div>
-      </CardContent>
-    </Card>
+
+        {iseeTtfp ? (
+          <div>
+            <h3 className="text-sm font-semibold mb-2">Клиент: iSee time-to-first-play</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Счётчики с момента старта процесса. С клиента — не чаще 10 с и не более 40 событий за сессию вкладки.
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">событий</p>
+                <p className="tabular-nums text-sm font-semibold">{iseeTtfp.count.toLocaleString("ru-RU")}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">уник. пользователей</p>
+                <p className="tabular-nums text-sm font-semibold">{iseeTtfp.uniqueUsers.toLocaleString("ru-RU")}</p>
+              </div>
+            </div>
+            {iseeTtfp.recent.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {iseeTtfp.recent.slice(0, 8).map((e, idx) => (
+                  <li key={`${e.at}-${e.userId}-${idx}`} className="rounded-md border bg-muted/15 p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-mono text-muted-foreground">{new Date(e.at).toLocaleString("ru-RU")}</span>
+                      <span className="tabular-nums font-medium">{e.ms} ms</span>
+                      <span className="text-muted-foreground">post: {e.postId}</span>
+                      {e.connectionType ? (
+                        <span className="text-muted-foreground">net: {e.connectionType}</span>
+                      ) : null}
+                      <span className="text-muted-foreground">user: {e.userId}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tablePasteFallback ? (
+          <div>
+            <h3 className="text-sm font-semibold mb-2">Клиент: fallback развертывания таблиц</h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Счётчики с момента старта процесса. Нужны для контроля зависаний UI при выборе CSV/Excel.
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">fallback shown</p>
+                <p className="tabular-nums text-sm font-semibold">
+                  {tablePasteFallback.counts.fallback_shown.toLocaleString("ru-RU")}
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">retry clicked</p>
+                <p className="tabular-nums text-sm font-semibold">
+                  {tablePasteFallback.counts.retry_clicked.toLocaleString("ru-RU")}
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">reopen success</p>
+                <p className="tabular-nums text-sm font-semibold">
+                  {tablePasteFallback.counts.reopen_success.toLocaleString("ru-RU")}
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-2">
+                <p className="text-[11px] text-muted-foreground">уник. пользователей</p>
+                <p className="tabular-nums text-sm font-semibold">
+                  {tablePasteFallback.uniqueUsers.toLocaleString("ru-RU")}
+                </p>
+              </div>
+            </div>
+            {tablePasteFallback.recent.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {tablePasteFallback.recent.slice(0, 8).map((e, idx) => (
+                  <li key={`${e.at}-${e.userId}-${idx}`} className="rounded-md border bg-muted/15 p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-mono text-muted-foreground">{new Date(e.at).toLocaleString("ru-RU")}</span>
+                      <span className="font-medium">{e.event}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {e.cols}x{e.rows}
+                      </span>
+                      <span className="text-muted-foreground">user: {e.userId}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </AdminPanelCard>
   );
 }

@@ -57,6 +57,14 @@ export type PublicProfile = {
       avatarUrl: string | null;
     }>;
   };
+  /** Один пост, закреплённый в шапке профиля (для всех зрителей). */
+  pinnedPostId?: string | null;
+  /** Статус бизнес-профиля. */
+  businessStatus?: "none" | "pending" | "approved" | "rejected" | "revision_required";
+  /** Публичный телефон бизнеса (доступен при approved). */
+  businessContactPhone?: string | null;
+  /** Публичный адрес бизнеса (доступен при approved). */
+  businessAddress?: string | null;
 };
 
 function normalizeProfileRouteId(id: string): string {
@@ -261,6 +269,7 @@ export async function fetchFollowers(userId: string, limit = 50, offset = 0): Pr
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   const res = await apiFetch(`${API}/users/${encodeURIComponent(userId)}/followers?${params}`, {
     credentials: "include",
+    cache: "no-store",
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -272,6 +281,7 @@ export async function fetchFollowing(userId: string, limit = 50, offset = 0): Pr
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   const res = await apiFetch(`${API}/users/${encodeURIComponent(userId)}/following?${params}`, {
     credentials: "include",
+    cache: "no-store",
   });
   if (!res.ok) return [];
   const data = await res.json();

@@ -11,7 +11,7 @@ export function EdgeFeedSwipeHintRow({ text, className }: Props) {
   return (
     <p
       className={cn(
-        "px-2 pb-2 pt-1 text-center text-[10px] font-light leading-relaxed tracking-wide text-muted-foreground/60",
+        "mx-2 mb-2 mt-0.5 rounded-lg bg-primary/10 px-2 py-1.5 text-center text-[10px] font-medium leading-relaxed tracking-wide text-primary/90 dark:bg-primary/15 dark:text-primary",
         className,
       )}
     >

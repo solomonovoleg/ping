@@ -8,6 +8,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { messageReactions } from "@shared/schema";
 import { requireAuth, getUserId } from "../auth/session";
+import { scheduleApiHubBridgeReactions } from "../integrations/api-hub-bridge";
 import { notifyMessageReaction } from "../realtime/chat";
 
 export const ALLOWED_EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔", "😮", "😢"];
@@ -32,6 +33,45 @@ export async function ensureMessageReactionsSchema(pool: { query: (sql: string) 
   } catch (e) {
     console.error("[message-reactions] ensureSchema failed:", e);
   }
+}
+
+/**
+ * Один запрос к БД: агрегаты реакций по сообщениям + эмодзи текущего пользователя на каждое сообщение.
+ */
+export async function getReactionsForMessageIdsWithMine(
+  userId: string,
+  messageIds: string[],
+): Promise<{ reactionMap: Map<string, ReactionItem[]>; myReactionMap: Map<string, string> }> {
+  if (messageIds.length === 0) {
+    return { reactionMap: new Map(), myReactionMap: new Map() };
+  }
+  const db = getDb();
+  const rows = await db
+    .select({
+      messageId: messageReactions.messageId,
+      emoji: messageReactions.emoji,
+      uid: messageReactions.userId,
+    })
+    .from(messageReactions)
+    .where(inArray(messageReactions.messageId, messageIds));
+  const reactionMap = new Map<string, ReactionItem[]>();
+  const myReactionMap = new Map<string, string>();
+  const emojiCounts = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const mid = r.messageId;
+    let byEmoji = emojiCounts.get(mid);
+    if (!byEmoji) {
+      byEmoji = new Map();
+      emojiCounts.set(mid, byEmoji);
+    }
+    byEmoji.set(r.emoji, (byEmoji.get(r.emoji) ?? 0) + 1);
+    if (r.uid === userId) myReactionMap.set(mid, r.emoji);
+  }
+  for (const [mid, byEmoji] of emojiCounts) {
+    const list: ReactionItem[] = [...byEmoji.entries()].map(([emoji, count]) => ({ emoji, count }));
+    reactionMap.set(mid, list);
+  }
+  return { reactionMap, myReactionMap };
 }
 
 /** Возвращает по каждому messageId список { emoji, count }. */
@@ -160,7 +200,9 @@ export function registerMessageReactionsRoutes(
         .delete(messageReactions)
         .where(and(eq(messageReactions.messageId, messageId), eq(messageReactions.userId, userId)));
       const map = await getReactionsForMessageIds([messageId]);
-      notifyMessageReaction(chatId, messageId, map.get(messageId) ?? [], userId, null);
+      const list = map.get(messageId) ?? [];
+      notifyMessageReaction(chatId, messageId, list, userId, null);
+      scheduleApiHubBridgeReactions(chatId, messageId, list, userId, null, memberIds);
       res.status(204).end();
     } catch (e) {
       console.error("Message reaction delete error:", e);

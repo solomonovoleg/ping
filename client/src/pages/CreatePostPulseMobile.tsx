@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronLeft,
-  MapPin,
   Tag,
   ChevronRight,
   Sparkles,
@@ -14,20 +13,24 @@ import {
   Globe,
   Lock,
   Users,
-  Smile,
   Hash,
   AtSign,
-  Clock,
 } from "lucide-react";
+import { UploadProgressMediaTileOverlay, UploadProgressPanel } from "@/components/ui/upload-progress-panel";
 import { resolveUrl } from "@/lib/api-base";
 import { PostMedia } from "@/components/PostMedia";
+import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { useToast } from "@/hooks/use-toast";
 import type { PostMediaLayout } from "@shared/post-media-layout";
 import { extractMentions, MAX_POST_MENTIONS } from "@shared/schema/posts";
+import type { PushTtlValue } from "@shared/schema/push-feed";
+import { describePushAudience } from "@/features/push/push-audience-copy";
 import { usePulseProfileThemeFromDocument } from "@/features/profile/pulse-profile/usePulseProfileThemeFromDocument";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { UserAvatar } from "@/components/UserAvatar";
+import { MotionBottomSheetPanel, MotionBottomSheetScrollArea } from "@/components/ui/motion-bottom-sheet";
+import { Switch } from "@/components/ui/switch";
 import {
   DURATION_NORMAL_S,
   EASING_OUT_BEZIER,
@@ -35,6 +38,25 @@ import {
 } from "@/lib/motion";
 
 const IG_GRAD = "linear-gradient(135deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)";
+const PUSH_TTL_OPTIONS: Array<{ value: PushTtlValue; label: string }> = [
+  { value: "12h", label: "12ч" },
+  { value: "24h", label: "24ч" },
+  { value: "48h", label: "48ч" },
+  { value: "56h", label: "56ч" },
+  { value: "forever", label: "Бессрочно" },
+];
+const PUSH_TTL_ROW1 = PUSH_TTL_OPTIONS.slice(0, 3);
+const PUSH_TTL_ROW2 = PUSH_TTL_OPTIONS.slice(3);
+
+/** Мобильный редактор поста: поле подписи растёт с текстом (как в Instagram), затем скролл внутри поля. */
+const CAPTION_TEXTAREA_MIN_PX = 90;
+const CAPTION_TEXTAREA_MAX_VH = 0.42;
+const CAPTION_TEXTAREA_MAX_CAP_PX = 320;
+
+function captionTextareaMaxHeightPx(): number {
+  if (typeof window === "undefined") return CAPTION_TEXTAREA_MAX_CAP_PX;
+  return Math.min(Math.round(window.innerHeight * CAPTION_TEXTAREA_MAX_VH), CAPTION_TEXTAREA_MAX_CAP_PX);
+}
 
 const PULSE_T = {
   dark: {
@@ -77,7 +99,14 @@ type MediaKind = "image" | "video" | "audio";
 
 export type PulseMobileMediaSlot =
   | { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null }
-  | { type: "uploading"; preview: string; id: number; kind: MediaKind; aspectRatio?: number | null };
+  | {
+      type: "uploading";
+      preview: string;
+      id: number;
+      kind: MediaKind;
+      aspectRatio?: number | null;
+      progress?: number;
+    };
 
 function initialsFromDisplayName(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -156,6 +185,25 @@ export type CreatePostPulseMobileProps = {
   imageInputRef: RefObject<HTMLInputElement | null>;
   videoInputRef: RefObject<HTMLInputElement | null>;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  /** Режим редактирования существующего поста */
+  headerTitle?: string;
+  publishButtonLabel?: string;
+  publishingButtonLabel?: string;
+  isEditMode?: boolean;
+  /** Пост с кампанией EDGE: превью блока как в ленте (сверху, до вложений). */
+  edgeCampaignId?: string;
+  edgePreviewViewerId?: string | number;
+  showLinkEmbedRow?: boolean;
+  linkEmbedEnabled?: boolean;
+  setLinkEmbedEnabled?: (v: boolean) => void;
+  sendToPush?: boolean;
+  setSendToPush?: (v: boolean) => void;
+  pushTtl?: PushTtlValue;
+  setPushTtl?: (v: PushTtlValue) => void;
+  pushQuotaRemaining?: number;
+  pushQuotaMax?: number;
+  pushSubscribersInFeed?: number;
+  pushNotifyRecipients?: number;
 };
 
 export function CreatePostPulseMobile({
@@ -186,6 +234,23 @@ export function CreatePostPulseMobile({
   imageInputRef,
   videoInputRef,
   onFileChange,
+  headerTitle = "Новый пост",
+  publishButtonLabel = "Поделиться",
+  publishingButtonLabel = "Публикуем…",
+  isEditMode = false,
+  edgeCampaignId,
+  edgePreviewViewerId = "guest",
+  showLinkEmbedRow = false,
+  linkEmbedEnabled = true,
+  setLinkEmbedEnabled,
+  sendToPush = false,
+  setSendToPush,
+  pushTtl = "24h",
+  setPushTtl,
+  pushQuotaRemaining = 3,
+  pushQuotaMax = 3,
+  pushSubscribersInFeed = 0,
+  pushNotifyRecipients = 0,
 }: CreatePostPulseMobileProps) {
   const docTheme = usePulseProfileThemeFromDocument();
   const isDark = docTheme === "dark";
@@ -208,6 +273,68 @@ export function CreatePostPulseMobile({
   const [aiFlash, setAiFlash] = useState(false);
   const aiFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevProofreading = useRef(isProofreading);
+  const editorScrollRef = useRef<HTMLDivElement>(null);
+
+  const syncCaptionTextareaSize = useCallback(() => {
+    const ta = textAreaRef.current;
+    if (!ta) return;
+    const maxH = captionTextareaMaxHeightPx();
+    ta.style.height = "0px";
+    const scrollH = ta.scrollHeight;
+    const next = Math.max(CAPTION_TEXTAREA_MIN_PX, Math.min(scrollH, maxH));
+    ta.style.height = `${next}px`;
+    ta.style.overflowY = scrollH > maxH ? "auto" : "hidden";
+  }, [textAreaRef]);
+
+  useLayoutEffect(() => {
+    syncCaptionTextareaSize();
+    const ta = textAreaRef.current;
+    const scrollEl = editorScrollRef.current;
+    if (!ta || !scrollEl) return;
+    const taRect = ta.getBoundingClientRect();
+    const scRect = scrollEl.getBoundingClientRect();
+    const margin = 28;
+    if (taRect.bottom > scRect.bottom - margin) {
+      scrollEl.scrollTop += taRect.bottom - scRect.bottom + margin;
+    }
+  }, [text, syncCaptionTextareaSize]);
+
+  useEffect(() => {
+    const ta = textAreaRef.current;
+    if (!ta) return;
+    let delayed: ReturnType<typeof setTimeout> | null = null;
+    const run = () => {
+      syncCaptionTextareaSize();
+      ta.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    const onFocus = () => {
+      requestAnimationFrame(run);
+      if (delayed) clearTimeout(delayed);
+      delayed = setTimeout(run, 280);
+    };
+    ta.addEventListener("focus", onFocus);
+    return () => {
+      ta.removeEventListener("focus", onFocus);
+      if (delayed) clearTimeout(delayed);
+    };
+  }, [syncCaptionTextareaSize]);
+
+  useEffect(() => {
+    const onResize = () => syncCaptionTextareaSize();
+    window.addEventListener("resize", onResize);
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener("resize", onResize);
+      vv.addEventListener("scroll", onResize);
+    }
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (vv) {
+        vv.removeEventListener("resize", onResize);
+        vv.removeEventListener("scroll", onResize);
+      }
+    };
+  }, [syncCaptionTextareaSize]);
 
   useEffect(() => {
     if (prevProofreading.current && !isProofreading) {
@@ -224,6 +351,7 @@ export function CreatePostPulseMobile({
   const doneCount = mediaItems.filter((s) => s.type === "done").length;
 
   const headerSubtitle = (() => {
+    if (mediaEmpty && edgeCampaignId?.trim() && !isEditMode) return "Интерактив EDGE";
     if (mediaEmpty) return "Медиа не добавлено";
     if (hasUploading) return "Загрузка медиа…";
     const kinds = mediaItems.filter((s) => s.type === "done").map((s) => s.kind);
@@ -290,10 +418,6 @@ export function CreatePostPulseMobile({
 
   const contactLine = (c: ContactUser) =>
     [c.displayName, c.surname].filter(Boolean).join(" ").trim() || `id${c.publicId}`;
-
-  const onSoon = (label: string) => {
-    toast({ title: `${label} — скоро` });
-  };
 
   const triggerPhoto = () => {
     if (availableSlots <= 0) {
@@ -367,7 +491,7 @@ export function CreatePostPulseMobile({
           <ChevronLeft style={{ width: 20, height: 20, color: th.text }} />
         </TapScaleButton>
         <div className="flex flex-col items-center">
-          <span style={{ fontSize: 15, fontWeight: 800, color: th.text, lineHeight: 1 }}>Новый пост</span>
+          <span style={{ fontSize: 15, fontWeight: 800, color: th.text, lineHeight: 1 }}>{headerTitle}</span>
           <span style={{ fontSize: 10, color: th.textFaint, marginTop: 2, lineHeight: 1 }}>{headerSubtitle}</span>
         </div>
         <TapScaleButton
@@ -382,12 +506,34 @@ export function CreatePostPulseMobile({
           }}
         >
           <span style={{ fontSize: 13, fontWeight: 800, color: canPublish ? "white" : th.textFaint }}>
-            {isPublishing ? "Публикуем…" : "Поделиться"}
+            {isPublishing ? publishingButtonLabel : publishButtonLabel}
           </span>
         </TapScaleButton>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-3 [scrollbar-width:none]">
+      <div
+        ref={editorScrollRef}
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))] [scrollbar-width:none] [-webkit-overflow-scrolling:touch] overscroll-y-contain"
+      >
+        {edgeCampaignId?.trim() && !isEditMode ? (
+          <div className="px-3 pb-3" style={{ borderBottom: `1px solid ${th.divider}` }}>
+            <div className="mb-2 flex items-center gap-1.5 px-0.5">
+              <Sparkles className="shrink-0" style={{ width: 14, height: 14, color: th.accent }} aria-hidden />
+              <span className="text-[11px] font-bold leading-snug" style={{ color: th.textSub }}>
+                В ленту так же: интерактив первым, фото и видео — ниже (по желанию)
+              </span>
+            </div>
+            <EdgeCompanionFeedCard
+              variant="feed"
+              edgeId={edgeCampaignId.trim()}
+              userId={edgePreviewViewerId}
+              onOpen={() => {
+                toast({ title: "После публикации откроется из ленты или профиля" });
+              }}
+            />
+          </div>
+        ) : null}
+
         {/* MEDIA */}
         <div style={{ borderBottom: `1px solid ${th.divider}`, paddingBottom: 12 }}>
           {mediaEmpty && (
@@ -458,38 +604,13 @@ export function CreatePostPulseMobile({
                   </TapScaleButton>
                 )}
               </div>
+              {isEditMode && mediaItems.length > 1 ? (
+                <p className="mb-2 px-0.5 text-[11px] leading-snug" style={{ color: th.textSub }}>
+                  Чтобы заменить кадр: нажмите × на миниатюре, затем «Ещё медиа» и выберите новый файл.
+                </p>
+              ) : null}
 
               <div className="space-y-2">
-                <div
-                  className="relative overflow-hidden rounded-3xl"
-                  style={{ background: "#06060e", border: `1px solid ${th.cardBorder}` }}
-                >
-                  <PostMedia
-                    mediaUrls={mediaUrls}
-                    layout={previewLayout}
-                    className="!mt-0 [&_.rounded-2xl]:!rounded-2xl"
-                    maxHeight="min(360px, 55vh)"
-                  />
-                  <PremiumOverlay />
-                  <div
-                    className="check-pop-pulse absolute left-2.5 top-2.5 z-[1] flex items-center gap-1 rounded-full px-2 py-0.5"
-                    style={{ background: "rgba(34,197,94,0.82)", backdropFilter: "blur(8px)" }}
-                  >
-                    <Check style={{ width: 10, height: 10, color: "white", strokeWidth: 3 }} />
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>Готово</span>
-                  </div>
-                  {mediaItems.length === 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => onRemoveMedia(0)}
-                      className="absolute right-2 top-2 z-[1] flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-lg"
-                      style={{ background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.12)" }}
-                      aria-label="Удалить медиа"
-                    >
-                      <X style={{ width: 14, height: 14, color: "white" }} />
-                    </button>
-                  ) : null}
-                </div>
                 {mediaItems.length > 1 ? (
                   <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {mediaItems.map((slot, i) => {
@@ -538,6 +659,36 @@ export function CreatePostPulseMobile({
                     })}
                   </div>
                 ) : null}
+                <div
+                  className="relative overflow-hidden rounded-3xl"
+                  style={{ background: "#06060e", border: `1px solid ${th.cardBorder}` }}
+                >
+                  <PostMedia
+                    mediaUrls={mediaUrls}
+                    layout={previewLayout}
+                    className="!mt-0 [&_.rounded-2xl]:!rounded-2xl"
+                    maxHeight="min(360px, 55vh)"
+                  />
+                  <PremiumOverlay />
+                  <div
+                    className="check-pop-pulse absolute left-2.5 top-2.5 z-[1] flex items-center gap-1 rounded-full px-2 py-0.5"
+                    style={{ background: "rgba(34,197,94,0.82)", backdropFilter: "blur(8px)" }}
+                  >
+                    <Check style={{ width: 10, height: 10, color: "white", strokeWidth: 3 }} />
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>Готово</span>
+                  </div>
+                  {mediaItems.length === 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveMedia(0)}
+                      className="absolute right-2 top-2 z-[1] flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-lg"
+                      style={{ background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.12)" }}
+                      aria-label="Удалить медиа"
+                    >
+                      <X style={{ width: 14, height: 14, color: "white" }} />
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
           )}
@@ -579,10 +730,11 @@ export function CreatePostPulseMobile({
                       <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
                     )}
                     {uploading && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                        <div
-                          className="h-10 w-10 rounded-full border-2 border-white/90 border-t-transparent"
-                          style={{ animation: "spinRingPulse 0.8s linear infinite" }}
+                      <div className="absolute inset-0 bg-black/55 px-2">
+                        <UploadProgressMediaTileOverlay
+                          percent={slot.type === "uploading" ? slot.progress ?? null : null}
+                          reducedMotion={prefersReducedMotion}
+                          className="h-full w-full"
                         />
                       </div>
                     )}
@@ -652,23 +804,39 @@ export function CreatePostPulseMobile({
               }}
               placeholder="О чём ваш пост?…"
               aria-label="Текст поста"
-              className="w-full resize-none border-none bg-transparent outline-none"
-              style={{ minHeight: 90, fontSize: 14, lineHeight: 1.65, color: th.text, fontFamily: "inherit" }}
+              rows={1}
+              spellCheck
+              enterKeyHint="enter"
+              className="box-border w-full resize-none overflow-hidden border-none bg-transparent outline-none"
+              style={{
+                minHeight: CAPTION_TEXTAREA_MIN_PX,
+                maxHeight: captionTextareaMaxHeightPx(),
+                fontSize: 14,
+                lineHeight: 1.65,
+                color: th.text,
+                fontFamily: "inherit",
+                WebkitOverflowScrolling: "touch",
+              }}
               autoFocus
             />
+            {showLinkEmbedRow && setLinkEmbedEnabled ? (
+              <div
+                className="mt-2 flex items-center justify-between gap-2 rounded-2xl px-2.5 py-1.5"
+                style={{ background: th.surface, border: `1px solid ${th.border}` }}
+              >
+                <span className="text-[10px] font-medium leading-snug" style={{ color: th.textSub }}>
+                  Превью по ссылке
+                </span>
+                <Switch
+                  checked={linkEmbedEnabled}
+                  onCheckedChange={setLinkEmbedEnabled}
+                  aria-label="Превью видео по ссылке"
+                  className="scale-90"
+                />
+              </div>
+            ) : null}
             <div className="mt-1 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <TapScaleButton
-                  type="button"
-                  haptic
-                  subtle
-                  className="flex h-8 w-8 items-center justify-center rounded-xl"
-                  style={{ background: th.surface, color: th.textSub }}
-                  aria-label="Эмодзи"
-                  onClick={() => onSoon("Эмодзи")}
-                >
-                  <Smile size={14} />
-                </TapScaleButton>
                 <TapScaleButton
                   type="button"
                   haptic
@@ -732,23 +900,6 @@ export function CreatePostPulseMobile({
 
         {/* SETTINGS LIST */}
         <div className="mx-3 mt-2 overflow-hidden rounded-3xl" style={{ border: `1px solid ${th.cardBorder}` }}>
-          <TapScaleButton
-            type="button"
-            haptic
-            subtle
-            onClick={() => onSoon("Место")}
-            className="flex w-full items-center justify-between border-b px-4 py-3 transition-colors active:bg-white/5"
-            style={{ borderColor: th.divider, background: th.cardBg }}
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-7 w-7 items-center justify-center rounded-xl" style={{ background: th.surface, color: th.textFaint }}>
-                <MapPin size={14} />
-              </div>
-              <span style={{ fontSize: 13.5, color: th.textSub }}>Добавить место</span>
-            </div>
-            <ChevronRight style={{ width: 15, height: 15, color: th.textFaint }} />
-          </TapScaleButton>
-
           <TapScaleButton
             type="button"
             haptic
@@ -830,25 +981,70 @@ export function CreatePostPulseMobile({
               </TapScaleButton>
             )}
           </div>
-
-          <TapScaleButton
-            type="button"
-            haptic
-            subtle
-            onClick={() => onSoon("Планирование")}
-            className="flex w-full items-center justify-between px-4 py-3 transition-colors active:bg-white/5"
-            style={{ background: th.cardBg }}
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-7 w-7 items-center justify-center rounded-xl" style={{ background: th.surface, color: th.textFaint }}>
-                <Clock size={14} />
+          {!isEditMode && setSendToPush ? (
+            <div className="px-4 py-3" style={{ background: th.cardBg }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p style={{ fontSize: 13.5, fontWeight: 700, color: th.text }}>Отправить в Push</p>
+                  <p style={{ fontSize: 11, color: th.textFaint }}>
+                    Осталось {pushQuotaRemaining}/{pushQuotaMax} за 24 часа
+                  </p>
+                </div>
+                <Switch
+                  checked={sendToPush}
+                  onCheckedChange={setSendToPush}
+                  aria-label="Отправить пост в Push-ленту"
+                />
               </div>
-              <span style={{ fontSize: 13.5, color: th.textSub }}>Запланировать</span>
+              {sendToPush && setPushTtl ? (
+                <>
+                  <p className="mt-1.5 text-[10px] leading-snug" style={{ color: th.textFaint }}>
+                    {describePushAudience(pushSubscribersInFeed, pushNotifyRecipients).short}
+                  </p>
+                  <div className="mt-2 grid grid-cols-3 gap-1.5">
+                    {PUSH_TTL_ROW1.map((option) => (
+                      <TapScaleButton
+                        key={option.value}
+                        type="button"
+                        haptic
+                        subtle
+                        onClick={() => setPushTtl(option.value)}
+                        className="flex min-h-[34px] w-full items-center justify-center whitespace-nowrap rounded-full px-1 text-[11px] font-bold"
+                        style={{
+                          background: pushTtl === option.value ? th.accentDim : th.surface,
+                          border: `1px solid ${pushTtl === option.value ? th.accentBrd : th.border}`,
+                        }}
+                      >
+                        <span style={{ color: pushTtl === option.value ? th.accent : th.textSub }}>{option.label}</span>
+                      </TapScaleButton>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {PUSH_TTL_ROW2.map((option) => (
+                      <TapScaleButton
+                        key={option.value}
+                        type="button"
+                        haptic
+                        subtle
+                        onClick={() => setPushTtl(option.value)}
+                        className="flex min-h-[34px] w-full items-center justify-center whitespace-nowrap rounded-full px-1 text-[11px] font-bold"
+                        style={{
+                          background: pushTtl === option.value ? th.accentDim : th.surface,
+                          border: `1px solid ${pushTtl === option.value ? th.accentBrd : th.border}`,
+                        }}
+                      >
+                        <span style={{ color: pushTtl === option.value ? th.accent : th.textSub }}>{option.label}</span>
+                      </TapScaleButton>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+              {sendToPush && pushQuotaRemaining <= 0 ? (
+                <p className="mt-2 text-[11px] text-red-500">Лимит Push исчерпан: максимум {pushQuotaMax} за 24 часа.</p>
+              ) : null}
             </div>
-            <ChevronRight style={{ width: 15, height: 15, color: th.textFaint }} />
-          </TapScaleButton>
+          ) : null}
         </div>
-        <div style={{ height: 12 }} />
       </div>
 
       <AnimatePresence>
@@ -866,8 +1062,8 @@ export function CreatePostPulseMobile({
               onClick={() => setShowMentionSheet(false)}
               aria-label="Закрыть"
             />
-            <motion.div
-              className="absolute inset-x-0 bottom-0 z-10 max-h-[min(72vh,520px)] flex flex-col rounded-t-[1.25rem] border-t shadow-2xl"
+            <MotionBottomSheetPanel
+              className="absolute inset-x-0 bottom-0 z-10 flex max-h-[min(72vh,520px)] min-h-0 flex-col rounded-t-[1.25rem] border-t shadow-2xl"
               style={{
                 background: th.bg,
                 borderColor: th.divider,
@@ -876,16 +1072,22 @@ export function CreatePostPulseMobile({
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ duration: prefersReducedMotion ? 0.05 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+              disableSwipeDismiss={prefersReducedMotion}
+              onDismiss={() => setShowMentionSheet(false)}
+              dragHandle={
+                <>
+                  <div className="mx-auto mb-2 mt-2 h-1 w-10 shrink-0 rounded-full opacity-30" style={{ background: th.text }} aria-hidden />
+                  <p className="shrink-0 px-4 pb-2 text-[13px] font-semibold" style={{ color: th.text }}>
+                    Отметить человека
+                  </p>
+                  <p className="shrink-0 px-4 pb-2 text-[11px] leading-snug" style={{ color: th.textFaint }}>
+                    В текст вставится отметка по публичному id (например @5) — сервер отправит уведомление (до {MAX_POST_MENTIONS}{" "}
+                    разных @).
+                  </p>
+                </>
+              }
             >
-              <div className="mx-auto mb-2 mt-2 h-1 w-10 shrink-0 rounded-full opacity-30" style={{ background: th.text }} aria-hidden />
-              <p className="shrink-0 px-4 pb-2 text-[13px] font-semibold" style={{ color: th.text }}>
-                Отметить человека
-              </p>
-              <p className="shrink-0 px-4 pb-2 text-[11px] leading-snug" style={{ color: th.textFaint }}>
-                В текст вставится отметка по публичному id (например @5) — сервер отправит уведомление (до {MAX_POST_MENTIONS}{" "}
-                разных @).
-              </p>
-              <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+              <MotionBottomSheetScrollArea className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                 {mentionContactsLoading ? (
                   <p className="px-3 py-4 text-center text-[13px]" style={{ color: th.textSub }}>
                     Загрузка контактов…
@@ -904,7 +1106,13 @@ export function CreatePostPulseMobile({
                       onClick={() => insertMentionByPublicId(c.publicId)}
                       className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors active:bg-white/5"
                     >
-                      <UserAvatar avatarUrl={c.avatarUrl} displayName={contactLine(c)} seed={c.id} size={40} />
+                      <UserAvatar
+                        avatarUrl={c.avatarUrl}
+                        displayName={contactLine(c)}
+                        seed={c.id}
+                        size={40}
+                        pointerEventsNone
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[15px] font-medium" style={{ color: th.text }}>
                           {contactLine(c)}
@@ -916,7 +1124,7 @@ export function CreatePostPulseMobile({
                     </TapScaleButton>
                   ))
                 )}
-              </div>
+              </MotionBottomSheetScrollArea>
               <div className="shrink-0 border-t px-3 py-2" style={{ borderColor: th.divider }}>
                 <TapScaleButton
                   type="button"
@@ -932,10 +1140,37 @@ export function CreatePostPulseMobile({
                   Только символ @
                 </TapScaleButton>
               </div>
-            </motion.div>
+            </MotionBottomSheetPanel>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {isPublishing ? (
+        <div
+          className="fixed inset-0 z-[240] flex items-center justify-center px-6"
+          style={{ background: "rgba(0,0,0,0.48)" }}
+          role="alertdialog"
+          aria-busy="true"
+          aria-live="polite"
+          aria-label={publishingButtonLabel}
+        >
+          <div
+            className="w-full max-w-xs rounded-2xl px-5 py-6 shadow-xl"
+            style={{ background: th.cardBg, border: `1px solid ${th.cardBorder}` }}
+          >
+            <UploadProgressPanel
+              title={publishingButtonLabel}
+              percent={null}
+              indeterminateHint="Публикация…"
+              reducedMotion={prefersReducedMotion}
+              size="md"
+              showIcon
+              footnote="Не закрывайте страницу — ждём ответ сервера"
+              className="text-left"
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -3,7 +3,8 @@ import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { STORY_VIDEO_MAX_SECONDS } from "@shared/post-video";
+import { getFfmpegExecutable } from "../lib/ffmpeg-bin";
 
 const STORY_VIDEO_MAX_MB = 500;
 const STORY_VIDEO_MAX_BYTES = STORY_VIDEO_MAX_MB * 1024 * 1024;
@@ -49,7 +50,7 @@ function runCommand(cmd: string, args: string[]): Promise<{ stderr: string }> {
 
 async function ensureFfmpegReady(): Promise<void> {
   if (!ffmpegReadyPromise) {
-    ffmpegReadyPromise = runCommand("ffmpeg", ["-version"]).then(() => undefined);
+    ffmpegReadyPromise = runCommand(getFfmpegExecutable(), ["-version"]).then(() => undefined);
   }
   await ffmpegReadyPromise;
 }
@@ -71,7 +72,7 @@ export function validateStoryVideoUpload(file: UploadFileLike): string | null {
 export type VideoTranscodeTrim = {
   startSec: number;
   durationSec: number;
-  /** Верхняя граница длины клипа (пост 14 с, аватар 4 с). По умолчанию POST_VIDEO_MAX_SECONDS. */
+  /** Верхняя граница длины клипа (сториз 14 с, аватар 4 с). По умолчанию STORY_VIDEO_MAX_SECONDS для сториз. */
   maxSegmentSec?: number;
 };
 
@@ -152,6 +153,9 @@ function buildFfmpegTranscodeArgs(
 /** Чётные размеры + yuv420p (iPhone HDR/нечётные кадры без libx264-ошибок). */
 const STORY_VIDEO_FILTER_SAFE =
   "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,scale='min(1080,iw)':-2:force_original_aspect_ratio=decrease";
+/** JPEG-постер для ленты / iSee: меньше пикселей — быстрее первый paint (Instagram-уровень превью). */
+const POSTER_FRAME_FILTER_DEFAULT =
+  "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,scale='min(720,iw)':-2:force_original_aspect_ratio=decrease";
 
 async function transcodeToStreamableMp4(
   inputPath: string,
@@ -160,7 +164,7 @@ async function transcodeToStreamableMp4(
   profile: VideoTranscodeProfile = "default",
 ): Promise<void> {
   await ensureFfmpegReady();
-  const cap = trim?.maxSegmentSec ?? POST_VIDEO_MAX_SECONDS;
+  const cap = trim?.maxSegmentSec ?? STORY_VIDEO_MAX_SECONDS;
   const startSec = trim != null ? Math.max(0, trim.startSec) : 0;
   const durationSec =
     trim != null ? Math.min(cap, Math.max(0.1, trim.durationSec)) : cap;
@@ -327,7 +331,7 @@ async function transcodeToStreamableMp4(
   let lastErr: unknown;
   for (const { label, args } of attempts) {
     try {
-      await runCommand("ffmpeg", args);
+      await runCommand(getFfmpegExecutable(), args);
       if (label !== "premium") {
         console.warn(`[story-video-transcode] used fallback pipeline: ${label}`);
       }
@@ -347,7 +351,8 @@ async function extractPosterFrame(
   profile: VideoTranscodeProfile,
 ): Promise<void> {
   await ensureFfmpegReady();
-  const vf = profile === "avatar" ? AVATAR_VIDEO_FILTER : STORY_VIDEO_FILTER_SAFE;
+  const vf =
+    profile === "avatar" ? AVATAR_VIDEO_FILTER : POSTER_FRAME_FILTER_DEFAULT;
   const args = [
     "-y",
     "-hide_banner",
@@ -365,7 +370,7 @@ async function extractPosterFrame(
     "4",
     outputPath,
   ];
-  await runCommand("ffmpeg", args);
+  await runCommand(getFfmpegExecutable(), args);
 }
 
 export async function transcodeStoryVideoBuffer(
@@ -389,23 +394,34 @@ export async function transcodeStoryVideoBuffer(
     await fs.writeFile(inPath, input);
     await transcodeToStreamableMp4(inPath, outPath, trim, profile);
     const buffer = await fs.readFile(outPath);
-    if (profile === "avatar") {
-      try {
-        await extractPosterFrame(outPath, posterPath, profile);
-        const posterBuffer = await fs.readFile(posterPath);
-        return {
-          buffer,
-          ext: OUTPUT_EXT,
-          contentType: OUTPUT_CONTENT_TYPE,
-          posterBuffer,
-          posterExt: POSTER_EXT,
-          posterContentType: POSTER_CONTENT_TYPE,
-        };
-      } catch (err) {
-        console.warn("[story-video-transcode] avatar poster extraction failed:", err);
-      }
+    try {
+      await extractPosterFrame(outPath, posterPath, profile);
+      const posterBuf = await fs.readFile(posterPath);
+      return {
+        buffer,
+        ext: OUTPUT_EXT,
+        contentType: OUTPUT_CONTENT_TYPE,
+        posterBuffer: posterBuf,
+        posterExt: POSTER_EXT,
+        posterContentType: POSTER_CONTENT_TYPE,
+      };
+    } catch (err) {
+      console.warn("[story-video-transcode] poster extraction failed:", err);
     }
     return { buffer, ext: OUTPUT_EXT, contentType: OUTPUT_CONTENT_TYPE };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+/** Один JPEG-кадр из уже готового видеофайла (бэкфилл постеров на диске / во времени после GetObject). */
+export async function extractPosterJpegBufferFromVideoFile(inputPath: string): Promise<Buffer> {
+  await ensureFfmpegReady();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "poster-extract-"));
+  const outPath = path.join(tempDir, `frame${POSTER_EXT}`);
+  try {
+    await extractPosterFrame(inputPath, outPath, "default");
+    return await fs.readFile(outPath);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -419,14 +435,12 @@ export async function transcodeStoryVideoFileToPath(
 ): Promise<{ videoPath: string; posterPath?: string }> {
   const outPath = path.join(targetDir, `${randomUUID()}${OUTPUT_EXT}`);
   await transcodeToStreamableMp4(inputPath, outPath, trim, profile);
-  if (profile === "avatar") {
-    const posterPath = outPath.slice(0, -OUTPUT_EXT.length) + POSTER_EXT;
-    try {
-      await extractPosterFrame(outPath, posterPath, profile);
-      return { videoPath: outPath, posterPath };
-    } catch (err) {
-      console.warn("[story-video-transcode] avatar poster extraction failed:", err);
-    }
+  const posterPath = outPath.slice(0, -OUTPUT_EXT.length) + POSTER_EXT;
+  try {
+    await extractPosterFrame(outPath, posterPath, profile);
+    return { videoPath: outPath, posterPath };
+  } catch (err) {
+    console.warn("[story-video-transcode] poster extraction failed:", err);
   }
   return { videoPath: outPath };
 }

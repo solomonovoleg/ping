@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { ErrorFallbackScreen } from "./ErrorFallbackScreen";
 
 type Props = {
   children: ReactNode;
@@ -8,7 +9,7 @@ type Props = {
 type State = { hasError: boolean; error: Error | null };
 
 const TRANSIENT_ERROR_RE =
-  /(Failed to fetch|NetworkError|Load failed|dynamically imported module|Loading chunk|Importing a module script failed|timeout)/i;
+  /(Failed to fetch|NetworkError|Load failed|dynamically imported module|Loading chunk|Importing a module script failed|not a valid JavaScript MIME type|timeout)/i;
 
 function isTransientError(error: Error | null): boolean {
   if (!error) return false;
@@ -54,42 +55,21 @@ export class ErrorBoundary extends Component<Props, State> {
       }
       const transient = isTransientError(this.state.error);
       return (
-        <div className="min-h-[100dvh] w-full flex flex-col items-center justify-center gap-4 bg-background p-6 text-center">
-          <p className="text-lg font-medium text-foreground">Что-то пошло не так</p>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            {transient
-              ? "Временный сбой загрузки. Попробуйте ещё раз — обычно помогает без перезагрузки."
-              : "Произошла ошибка. Попробуйте снова или обновите страницу."}
-          </p>
-          {import.meta.env.DEV && this.state.error && (
-            <pre className="text-left text-xs text-muted-foreground max-w-full overflow-auto p-3 bg-muted rounded-lg">
-              {this.state.error.message}
-            </pre>
-          )}
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={this.resetBoundary}
-              className="min-h-[var(--uix-touch-min)] px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
-            >
-              Попробовать снова
-            </button>
-            <button
-              type="button"
-              onClick={() => window.history.back()}
-              className="min-h-[var(--uix-touch-min)] px-4 py-2 rounded-xl bg-secondary text-foreground text-sm font-medium hover:opacity-90"
-            >
-              Назад
-            </button>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="min-h-[var(--uix-touch-min)] px-4 py-2 rounded-xl bg-secondary text-foreground text-sm font-medium hover:opacity-90"
-            >
-              Обновить страницу
-            </button>
-          </div>
-        </div>
+        <ErrorFallbackScreen
+          title="Что-то пошло не так"
+          subtitle={
+            transient
+              ? "Временный сбой загрузки. Попробуйте ещё раз — обычно помогает."
+              : "Произошла ошибка. Попробуйте обновить страницу."
+          }
+          onRetry={this.resetBoundary}
+          onBack={() => window.history.back()}
+          devError={
+            import.meta.env.DEV && this.state.error
+              ? this.state.error.message
+              : null
+          }
+        />
       );
     }
     return this.props.children;

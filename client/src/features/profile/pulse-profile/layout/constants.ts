@@ -11,9 +11,9 @@ export const PULSE_AVATAR_PLUS_HIT_PX = 44;
 export const PULSE_AVATAR_PLUS_CONTAINER_OFFSET_PX =
   Math.round(PULSE_AVATAR_PLUS_BADGE_PX * 0.75) + (PULSE_AVATAR_PLUS_HIT_PX - PULSE_AVATAR_PLUS_BADGE_PX) / 2;
 /** Карточка героя заходит на обложку (margin-top). */
-export const PULSE_PROFILE_CARD_OVERLAP_PX = 52;
+export const PULSE_PROFILE_CARD_OVERLAP_PX = 46;
 /** Высота блока обложки (хедер профиля). */
-export const PULSE_PROFILE_COVER_HEIGHT_PX = 133;
+export const PULSE_PROFILE_COVER_HEIGHT_PX = 152;
 /** Верхний padding скролла при обложке-оверлее: cover − нахлёст карточки героя. */
 export const PULSE_PROFILE_SCROLL_BODY_PADDING_TOP_PX =
   PULSE_PROFILE_COVER_HEIGHT_PX - PULSE_PROFILE_CARD_OVERLAP_PX;

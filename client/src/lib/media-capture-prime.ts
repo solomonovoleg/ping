@@ -3,7 +3,11 @@
  * Браузер запоминает разрешение для origin; важно вызывать getUserMedia с одними и теми же
  * смысловыми constraints (как при звонках), иначе часть движков ведёт себя как новый запрос.
  */
-import { getMediaConstraints } from "@/features/call/call-ice-config";
+import {
+  getMediaConstraints,
+  getVideoCallGetUserMediaAttempts,
+  isMobileCaptureProfile,
+} from "@/features/call/call-ice-config";
 
 export type MediaPrimeResult = "granted" | "denied" | "unavailable";
 
@@ -48,8 +52,25 @@ export async function primeMicrophoneCapture(): Promise<MediaPrimeResult> {
     sessionMicPrimed = true;
     return "granted";
   }
+  const micAttempts: MediaStreamConstraints[] = isMobileCaptureProfile()
+    ? [getMediaConstraints(false), { audio: true, video: false }]
+    : [{ audio: true, video: false }, getMediaConstraints(false)];
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(false));
+    let stream: MediaStream | null = null;
+    let lastErr: unknown = null;
+    for (const c of micAttempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!stream) {
+      const name = lastErr instanceof Error ? lastErr.name : "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") return "denied";
+      return "unavailable";
+    }
     stopTracks(stream);
     sessionMicPrimed = true;
     return "granted";
@@ -71,7 +92,21 @@ export async function primeCameraAndMicrophoneCapture(): Promise<MediaPrimeResul
     return "granted";
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(true));
+    let stream: MediaStream | null = null;
+    let lastErr: unknown = null;
+    for (const c of getVideoCallGetUserMediaAttempts()) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!stream) {
+      const name = lastErr instanceof Error ? lastErr.name : "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") return "denied";
+      return "unavailable";
+    }
     stopTracks(stream);
     sessionAvPrimed = true;
     return "granted";

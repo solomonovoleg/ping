@@ -29,6 +29,8 @@ export { ChatDetailMessageSelectionBar } from "./ChatDetailMessageSelectionBar";
 export { ChatDetailOlderMessagesLoadingRow, ChatDetailMessagesEmptyState } from "./ChatDetailMessageListStates";
 export { ChatDetailMessageDatePill } from "./ChatDetailMessageDatePill";
 export { ChatDetailComposerTopChrome, ChatDetailComposerReplyDraftStrips } from "./ChatDetailComposerStrips";
+export { ChatDetailComposerUploadStrip } from "./ChatDetailComposerUploadStrip";
+export type { ChatDetailComposerUploadStripProps } from "./ChatDetailComposerUploadStrip";
 export { ChatDetailNativeAttachMenu, ChatDetailComposerSpellFooter } from "./ChatDetailComposerExtras";
 export { ChatDetailVoicePreviewModal, ChatDetailVideoNoteModal } from "./ChatDetailMediaPreviewModals";
 export type { ChatDetailVideoNotePhase } from "./ChatDetailMediaPreviewModals";

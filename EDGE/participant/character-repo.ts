@@ -16,7 +16,7 @@ export async function ensureCharacterRow(participantId: string): Promise<Charact
       [participantId],
     );
     const { rows } = await pool.query<CharacterRow>(
-      `SELECT participant_id, level, xp, mood, happy_score, care_streak_days,
+      `SELECT participant_id, level, xp, primary_xp, secondary_xp, mood, happy_score, care_streak_days,
               last_fed_at, last_interaction_at, updated_at, extra
        FROM edge_character_states WHERE participant_id = $1`,
       [participantId],
@@ -67,6 +67,7 @@ export async function updateCharacterFeedFull(
     await pool.query(
       `UPDATE edge_character_states
        SET xp = $2,
+           primary_xp = $2,
            happy_score = $3,
            mood = $4,
            level = $5,
@@ -102,6 +103,7 @@ export async function updateCharacterAfterInteract(
     await pool.query(
       `UPDATE edge_character_states
        SET xp = $2,
+           primary_xp = $2,
            happy_score = $3,
            mood = $4,
            level = $5,
@@ -145,14 +147,18 @@ export async function incrementCharacterTaskXp(
   participantId: string,
   xpDelta: number,
   now: Date,
+  target: "primary" | "secondary" = "primary",
 ): Promise<CharacterRow | null> {
   const pool: Pool | null = getEdgePool();
   if (!pool) return null;
   const c = await ensureCharacterRow(participantId);
   if (!c) return null;
   const clamped = Math.max(-500, Math.min(500, Math.floor(xpDelta)));
-  const newXp = Math.max(0, c.xp + clamped);
-  const newLevel = Math.floor(newXp / 100);
+  const newPrimary = Math.max(0, c.primary_xp + (target === "primary" ? clamped : 0));
+  const newSecondary = Math.max(0, c.secondary_xp + (target === "secondary" ? clamped : 0));
+  // Legacy поля `xp/level` пока отражают primary-рейтинг для совместимости.
+  const newXp = newPrimary;
+  const newLevel = Math.floor(newPrimary / 100);
   const happyBump =
     clamped > 0 ? Math.min(3, clamped) : clamped < 0 ? Math.max(-6, clamped) : 0;
   const newHappy = Math.min(100, Math.max(0, c.happy_score + happyBump));
@@ -161,13 +167,15 @@ export async function incrementCharacterTaskXp(
     await pool.query(
       `UPDATE edge_character_states
        SET xp = $2,
+           primary_xp = $7,
+           secondary_xp = $8,
            level = $3,
            happy_score = $4,
            mood = $5,
            last_interaction_at = $6,
            updated_at = $6
        WHERE participant_id = $1`,
-      [participantId, newXp, newLevel, newHappy, newMood, now],
+      [participantId, newXp, newLevel, newHappy, newMood, now, newPrimary, newSecondary],
     );
     return ensureCharacterRow(participantId);
   } catch (e) {

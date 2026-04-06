@@ -44,7 +44,10 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
 
   useEffect(() => {
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    // data: и blob: без crossOrigin — иначе в части WebView картинка не грузится и «Готово» вечно неактивно.
+    if (/^https?:\/\//i.test(imageDataUrl)) {
+      img.crossOrigin = "anonymous";
+    }
     img.onload = () => {
       imgRef.current = img;
       const fit = profileCoverInitialScale(img.width, img.height, PREVIEW_W, PREVIEW_H);
@@ -167,14 +170,23 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
 
   return (
     <div
-      className={cn("fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-sm p-0 sm:p-4", className)}
+      className={cn(
+        "fixed inset-0 z-[300] flex justify-center bg-black/65 backdrop-blur-sm",
+        /* iOS Safari: нижняя панель браузера перекрывает fixed; поднимаем sheet + safe area */
+        "items-end px-3 pt-3 max-sm:pb-[max(4.75rem,calc(env(safe-area-inset-bottom,0px)+3rem))]",
+        "sm:items-center sm:p-4 sm:pb-4",
+        className,
+      )}
       onClick={onCancel}
       role="dialog"
       aria-modal="true"
       aria-labelledby="profile-cover-adjust-title"
     >
       <div
-        className="bg-background rounded-t-2xl sm:rounded-2xl shadow-xl border border-border overflow-hidden w-full max-w-[400px] max-h-[min(92dvh,720px)] flex flex-col"
+        className={cn(
+          "flex min-h-0 w-full max-w-[400px] flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-xl",
+          "max-h-[min(calc(100dvh-5.5rem),720px)] sm:max-h-[min(92dvh,720px)] sm:rounded-2xl",
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-3 border-b border-border shrink-0">
@@ -186,15 +198,14 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
           </p>
         </div>
 
-        <div className="px-3 pt-2 pb-1 flex-1 min-h-0 flex flex-col items-center overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto overscroll-contain px-3 pt-2 pb-1">
           <div
             className={cn(
-              "relative select-none touch-none rounded-xl overflow-hidden border-2 border-border bg-black/20",
-              !reducedMotion && "ring-1 ring-primary/20"
+              "relative w-full max-w-[340px] select-none touch-none overflow-hidden rounded-xl border-2 border-border bg-black/20",
+              !reducedMotion && "ring-1 ring-primary/20",
             )}
             style={{
-              width: PREVIEW_W,
-              height: PREVIEW_H,
+              aspectRatio: `${PREVIEW_W} / ${PREVIEW_H}`,
               touchAction: "none",
             }}
             onWheel={handleWheel}
@@ -206,7 +217,7 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
           >
             <canvas
               ref={canvasRef}
-              className="block w-full h-full cursor-move"
+              className="block h-full w-full cursor-move"
               width={PREVIEW_W}
               height={PREVIEW_H}
               aria-hidden
@@ -242,11 +253,11 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
           </div>
         </div>
 
-        <div className="p-3 flex gap-2 border-t border-border shrink-0 pb-[max(12px,env(safe-area-inset-bottom))]">
+        <div className="flex shrink-0 gap-2 border-t border-border bg-background p-3 pb-[max(12px,env(safe-area-inset-bottom,0px))] sm:pb-3">
           <Button
             type="button"
             variant="outline"
-            className="flex-1 min-h-[var(--uix-touch-min)]"
+            className="min-h-[var(--uix-touch-min)] flex-1"
             onClick={onCancel}
             disabled={exporting}
           >
@@ -254,11 +265,11 @@ export function ProfileCoverAdjustModal({ imageDataUrl, onConfirm, onCancel, cla
           </Button>
           <Button
             type="button"
-            className="flex-1 min-h-[var(--uix-touch-min)]"
+            className="min-h-[var(--uix-touch-min)] flex-1"
             onClick={() => void handleConfirm()}
             disabled={!ready || exporting}
           >
-            {exporting ? "Сохранение…" : "Готово"}
+            {exporting ? "Сохранение…" : "Сохранить"}
           </Button>
         </div>
       </div>

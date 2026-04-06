@@ -20,6 +20,15 @@ export type Gender = (typeof GENDER_VALUES)[number];
 export const PLATFORM_ROLES = ["user", "moderator", "admin", "super_admin"] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
+export const BUSINESS_STATUS_VALUES = [
+  "none",
+  "pending",
+  "approved",
+  "rejected",
+  "revision_required",
+] as const;
+export type BusinessStatus = (typeof BUSINESS_STATUS_VALUES)[number];
+
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   publicId: integer("public_id").notNull().unique(),
@@ -59,8 +68,15 @@ export const users = pgTable("users", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" }),
   /** FCM токен для пуш-уведомлений (Android / iOS через FCM) */
   fcmToken: text("fcm_token"),
+  /** iOS PushKit VoIP token (hex) для APNs voip — системный экран входящего (CallKit) */
+  iosVoipToken: text("ios_voip_token"),
   /** Включены ли пуш-уведомления о новых сообщениях и звонках */
   pushEnabled: boolean("push_enabled").notNull().default(true),
+  /**
+   * Мобильные push модуля Push: микропосты в подписках, ответы на ваши Push, новые подписчики на ваши Push.
+   * Лента в чатах и in-app уведомления (колокольчик) зависят от других настроек / всегда доступны как события.
+   */
+  pushFeedNotificationsEnabled: boolean("push_feed_notifications_enabled").notNull().default(true),
   /** Описание профиля (как в ВК/Instagram) */
   bio: text("bio"),
   /** URL шапки профиля (баннер сверху) */
@@ -87,6 +103,46 @@ export const users = pgTable("users", {
   vibeEnabled: boolean("vibe_enabled").notNull().default(false),
   /** Делиться атмосферой с собеседником (если true — собеседник тоже видит вайб) */
   vibeShareWithPartner: boolean("vibe_share_with_partner").notNull().default(false),
+  /**
+   * PRIME CODE (API HUB): непустая строка — доступ к разделу API HUB на Борде.
+   * Задаётся только из админки; клиенту в /auth/me отдаётся только флаг `boardApiHubAccess`.
+   */
+  boardApiHubPrimeCode: varchar("board_api_hub_prime_code", { length: 64 }),
+  /** Бизнес-статус аккаунта (модерируется через заявки). */
+  businessStatus: varchar("business_status", { length: 32 }).notNull().default("none"),
+  businessStatusUpdatedAt: timestamp("business_status_updated_at", { withTimezone: true, mode: "date" }),
+  businessStatusUpdatedBy: varchar("business_status_updated_by"),
+  /** Контактный телефон бизнеса (публичный), показывается только для approved бизнес-профиля. */
+  businessContactPhone: varchar("business_contact_phone", { length: 64 }),
+  /** Контактный адрес бизнеса (публичный), показывается только для approved бизнес-профиля. */
+  businessAddress: text("business_address"),
+  /** Клиентский IP на момент регистрации (за прокси — см. trust proxy) */
+  signupIp: varchar("signup_ip", { length: 64 }),
+  /** Сырой X-Forwarded-For (цепочка прокси), усечённый */
+  signupForwardedFor: text("signup_forwarded_for"),
+  signupUserAgent: text("signup_user_agent"),
+  /** SHA-256 от User-Agent для группировки без хранения полной строки отдельно (UA всё же храним усечённым для админки) */
+  signupUaHash: varchar("signup_ua_hash", { length: 64 }),
+  signupAcceptLanguage: varchar("signup_accept_language", { length: 256 }),
+  /** Язык входящих сообщений (перевод в чате); синхронизируется с клиентом, BCP-47 короткий код. */
+  messageTranslateLocale: varchar("message_translate_locale", { length: 10 }),
+  signupSecChUa: text("signup_sec_ch_ua"),
+  signupSecChUaMobile: varchar("signup_sec_ch_ua_mobile", { length: 32 }),
+  signupSecChUaPlatform: varchar("signup_sec_ch_ua_platform", { length: 256 }),
+  signupReferer: text("signup_referer"),
+  signupOrigin: varchar("signup_origin", { length: 256 }),
+  /**
+   * Пользователь создан в админке (медиа-студия): не логинится по телефону, маркер для аудита и политик.
+   */
+  isStudioSynthetic: boolean("is_studio_synthetic").notNull().default(false),
+  /** Какой админ создал studio user (users.id); ON DELETE SET NULL в БД */
+  studioCreatedByAdminId: varchar("studio_created_by_admin_id"),
+  /** Стабильный ID браузера/приложения (first-party cookie + тело запроса) */
+  signupDeviceId: varchar("signup_device_id", { length: 128 }),
+  /** SHA-256 от нормализованного JSON clientSignals с клиента */
+  signupClientSignalsHash: varchar("signup_client_signals_hash", { length: 64 }),
+  /** Усечённый JSON сигналов с клиента (таймзона, экран и т.д.) для просмотра в админке */
+  signupClientSignalsJson: text("signup_client_signals_json"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow(),
 });
 
@@ -97,6 +153,19 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
   publicId: true,
   invitedById: true,
+  signupIp: true,
+  signupForwardedFor: true,
+  signupUserAgent: true,
+  signupUaHash: true,
+  signupAcceptLanguage: true,
+  signupSecChUa: true,
+  signupSecChUaMobile: true,
+  signupSecChUaPlatform: true,
+  signupReferer: true,
+  signupOrigin: true,
+  signupDeviceId: true,
+  signupClientSignalsHash: true,
+  signupClientSignalsJson: true,
 });
 
 /** Регистрация: либо plaintext phone (dev / без секрета), либо пара hash+cipher (прод с PHONE_AT_REST_SECRET). */
@@ -107,6 +176,19 @@ export type InsertUser = {
   phone?: string | null;
   phoneLookupHash?: string | null;
   phoneCipher?: string | null;
+  signupIp?: string | null;
+  signupForwardedFor?: string | null;
+  signupUserAgent?: string | null;
+  signupUaHash?: string | null;
+  signupAcceptLanguage?: string | null;
+  signupSecChUa?: string | null;
+  signupSecChUaMobile?: string | null;
+  signupSecChUaPlatform?: string | null;
+  signupReferer?: string | null;
+  signupOrigin?: string | null;
+  signupDeviceId?: string | null;
+  signupClientSignalsHash?: string | null;
+  signupClientSignalsJson?: string | null;
 };
 
 export const updateProfileSchema = createInsertSchema(users).pick({
@@ -132,6 +214,9 @@ export const updateProfileSchema = createInsertSchema(users).pick({
   referralLimit: true,
   vibeEnabled: true,
   vibeShareWithPartner: true,
+  boardApiHubPrimeCode: true,
+  businessContactPhone: true,
+  businessAddress: true,
 }).partial();
 
 export type User = typeof users.$inferSelect;

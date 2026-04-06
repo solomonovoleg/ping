@@ -170,7 +170,7 @@ const MOODS: Record<MoodKey, {
 };
 
 const BARS = [3,5,8,12,9,14,10,6,11,15,8,5,13,9,4,7,12,10,6,14,9,5,11,8,15,7,4,10,13,6];
-const SMART = ["Буду! 🙌","Скоро","Понял 👍","Напомни","Класс! 🔥"];
+const SMART = ["Буду! 🙌", "Хорошо", "Понял 👍", "Напомни", "Класс! 🔥"];
 
 /* ─── OVERLAYS ─────────────────────────────────────────────────────── */
 function HeartsOverlay({ color }: { color: string }) {
@@ -814,7 +814,7 @@ export function MobileChatLight() {
       {/* SMART REPLIES — hide during recording */}
       {recState === "idle" && (
         <div className="shrink-0 px-3 pb-1.5 flex gap-2 overflow-x-auto relative" style={{ scrollbarWidth:"none",zIndex:10 }}>
-          {["Буду! 🙌","Скоро","Понял 👍","Напомни","Класс! 🔥"].map(r=>(
+          {SMART.map((r) => (
             <button key={r} onClick={() => { setActiveSR(r); setInputText(r); }}
               className="shrink-0 px-3.5 py-1.5 rounded-full text-[12px] font-medium transition-all duration-300 border whitespace-nowrap"
               style={activeSR===r

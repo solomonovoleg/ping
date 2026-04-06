@@ -12,8 +12,8 @@ function queryFromReq(req: Request): string {
 }
 
 export function registerAdminVkParserRoutes(app: Express): void {
-  app.get("/api/admin/vk-parser/bindings", async (_req: Request, res: Response) => {
-    const pr = await proxyParserRequest("GET", "/v1/bindings");
+  app.get("/api/admin/vk-parser/bindings", async (req: Request, res: Response) => {
+    const pr = await proxyParserRequest("GET", "/v1/bindings", { requestId: req.requestId });
     sendParserProxyResponse(res, pr);
   });
 
@@ -27,6 +27,7 @@ export function registerAdminVkParserRoutes(app: Express): void {
         return;
       }
       const pr = await proxyParserRequest("POST", "/v1/bindings", {
+        requestId: req.requestId,
         body: JSON.stringify(req.body ?? {}),
       });
       if (pr.ok && pr.status >= 200 && pr.status < 300) {
@@ -57,6 +58,7 @@ export function registerAdminVkParserRoutes(app: Express): void {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
     const id = String(req.params.id ?? "").trim();
     const pr = await proxyParserRequest("PATCH", `/v1/bindings/${encodeURIComponent(id)}`, {
+      requestId: req.requestId,
       body: JSON.stringify(req.body ?? {}),
     });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
@@ -75,7 +77,9 @@ export function registerAdminVkParserRoutes(app: Express): void {
   app.delete("/api/admin/vk-parser/bindings/:id", async (req: Request, res: Response) => {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
     const id = String(req.params.id ?? "").trim();
-    const pr = await proxyParserRequest("DELETE", `/v1/bindings/${encodeURIComponent(id)}`);
+    const pr = await proxyParserRequest("DELETE", `/v1/bindings/${encodeURIComponent(id)}`, {
+      requestId: req.requestId,
+    });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
       await writeAuditLog({
         adminId: adminUserId,
@@ -91,7 +95,9 @@ export function registerAdminVkParserRoutes(app: Express): void {
   app.post("/api/admin/vk-parser/bindings/:id/run", async (req: Request, res: Response) => {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
     const id = String(req.params.id ?? "").trim();
-    const pr = await proxyParserRequest("POST", `/v1/bindings/${encodeURIComponent(id)}/run`);
+    const pr = await proxyParserRequest("POST", `/v1/bindings/${encodeURIComponent(id)}/run`, {
+      requestId: req.requestId,
+    });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
       try {
         const details = JSON.parse(pr.text) as Record<string, unknown>;
@@ -118,7 +124,7 @@ export function registerAdminVkParserRoutes(app: Express): void {
 
   app.post("/api/admin/vk-parser/run-all", async (req: Request, res: Response) => {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
-    const pr = await proxyParserRequest("POST", "/v1/run-all");
+    const pr = await proxyParserRequest("POST", "/v1/run-all", { requestId: req.requestId });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
       try {
         const j = JSON.parse(pr.text) as { results?: unknown };
@@ -142,14 +148,19 @@ export function registerAdminVkParserRoutes(app: Express): void {
   });
 
   app.get("/api/admin/vk-parser/items", async (req: Request, res: Response) => {
-    const pr = await proxyParserRequest("GET", "/v1/items", { query: queryFromReq(req) });
+    const pr = await proxyParserRequest("GET", "/v1/items", {
+      query: queryFromReq(req),
+      requestId: req.requestId,
+    });
     sendParserProxyResponse(res, pr);
   });
 
   app.post("/api/admin/vk-parser/items/:id/approve", async (req: Request, res: Response) => {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
     const id = String(req.params.id ?? "").trim();
-    const pr = await proxyParserRequest("POST", `/v1/items/${encodeURIComponent(id)}/approve`);
+    const pr = await proxyParserRequest("POST", `/v1/items/${encodeURIComponent(id)}/approve`, {
+      requestId: req.requestId,
+    });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
       try {
         const details = JSON.parse(pr.text) as { platformPostId?: string };
@@ -177,7 +188,9 @@ export function registerAdminVkParserRoutes(app: Express): void {
   app.post("/api/admin/vk-parser/items/:id/reject", async (req: Request, res: Response) => {
     const adminUserId = (req as ReqWithAdmin).adminUserId;
     const id = String(req.params.id ?? "").trim();
-    const pr = await proxyParserRequest("POST", `/v1/items/${encodeURIComponent(id)}/reject`);
+    const pr = await proxyParserRequest("POST", `/v1/items/${encodeURIComponent(id)}/reject`, {
+      requestId: req.requestId,
+    });
     if (pr.ok && pr.status >= 200 && pr.status < 300) {
       await writeAuditLog({
         adminId: adminUserId,
@@ -192,6 +205,7 @@ export function registerAdminVkParserRoutes(app: Express): void {
 
   app.post("/api/admin/vk-parser/test-token", async (req: Request, res: Response) => {
     const pr = await proxyParserRequest("POST", "/v1/test-token", {
+      requestId: req.requestId,
       body: JSON.stringify({ token: String(req.body?.token ?? "") }),
     });
     sendParserProxyResponse(res, pr);

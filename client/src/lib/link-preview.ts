@@ -18,15 +18,21 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview | null>
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   try {
-    const res = await apiFetch(`${API}/link-preview?url=${encodeURIComponent(url)}`);
+    // POST — тело JSON, без гигантского query (nginx/client_max_body_size / лимиты строки запроса).
+    const res = await apiFetch(`${API}/link-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as LinkPreview;
+    const empty = !data.image && !data.title && !data.description && !data.embedUrl;
     if (cache.size >= MAX_CACHE) {
       const first = cache.keys().next().value;
       if (first) cache.delete(first);
     }
-    cache.set(key, data);
-    return data;
+    cache.set(key, empty ? null : data);
+    return empty ? null : data;
   } catch {
     cache.set(key, null);
     return null;

@@ -50,7 +50,11 @@ export function PrizesSurfacePanel({ templates }: Props) {
       className="uix-content-x box-border min-h-full space-y-[var(--uix-space-4)] pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]"
       aria-label="Призы кампании"
     >
-      <h2 className={`${EDGE_PET_DISPLAY_TITLE} px-0.5`}>Призы</h2>
+      <h2
+        className={`${EDGE_PET_DISPLAY_TITLE} rounded-2xl border border-primary/15 bg-gradient-to-r from-primary/12 to-transparent px-4 py-3 dark:from-primary/14`}
+      >
+        Призы
+      </h2>
       <ul className="space-y-[var(--uix-space-3)]">
         {templates.map((t, i) => {
           const img = giftImage(t);
@@ -59,7 +63,7 @@ export function PrizesSurfacePanel({ templates }: Props) {
             <li key={i} className={EDGE_CARD}>
               <div className="flex gap-[var(--uix-space-3)]">
                 {img ? (
-                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border/40 bg-muted/30">
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-primary/20 bg-primary/5">
                     <img src={img} alt="" className="h-full w-full object-cover" loading="lazy" />
                   </div>
                 ) : (

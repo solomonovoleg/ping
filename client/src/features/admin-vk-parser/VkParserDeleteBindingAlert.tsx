@@ -8,6 +8,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { adminDialogSurfaceClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
 export function VkParserDeleteBindingAlert(props: {
@@ -20,7 +22,7 @@ export function VkParserDeleteBindingAlert(props: {
 }) {
   return (
     <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <AlertDialogContent className="max-w-md">
+      <AlertDialogContent className={cn("max-w-md", adminDialogSurfaceClass)}>
         <AlertDialogHeader>
           <AlertDialogTitle>Удалить привязку?</AlertDialogTitle>
           <AlertDialogDescription className="space-y-2">

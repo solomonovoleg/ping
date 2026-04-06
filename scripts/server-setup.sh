@@ -6,6 +6,68 @@ set -e
 cd "$(dirname "$0")/.."
 PORT="${PORT:-3080}"
 
+patch_env_ffmpeg_path() {
+  local bin_path="$1"
+  [ -z "$bin_path" ] && return 0
+  touch .env 2>/dev/null || true
+  if grep -q '^FFMPEG_PATH=' .env 2>/dev/null; then
+    sed -i.bak "s|^FFMPEG_PATH=.*|FFMPEG_PATH=$bin_path|" .env
+  else
+    printf '\nFFMPEG_PATH=%s\n' "$bin_path" >> .env
+  fi
+  echo "В .env записан FFMPEG_PATH=$bin_path (HEIC/видео через этот бинарник)."
+}
+
+try_install_static_ffmpeg_with_heif() {
+  if [ "${INSTALL_FFMPEG_STATIC_HEIF:-1}" != "1" ]; then
+    echo "INSTALL_FFMPEG_STATIC_HEIF=0 — пропуск автозагрузки статического ffmpeg."
+    return 0
+  fi
+  if ! command -v apt-get &>/dev/null; then
+    echo "apt-get недоступен — статический ffmpeg не ставим."
+    return 0
+  fi
+  local DEST="/opt/ping-moot/ffmpeg"
+  local BIN="$DEST/ffmpeg"
+  if [ -x "$BIN" ] && "$BIN" -hide_banner -decoders 2>&1 | grep -qiE 'heif|heic|libheif'; then
+    echo "Уже установлен $BIN с HEIF."
+    patch_env_ffmpeg_path "$BIN"
+    return 0
+  fi
+  echo "Скачивание статического ffmpeg (BtbN GPL, libx264 + HEIF), ~70–120 МБ…"
+  apt-get update -qq && apt-get install -y -qq curl ca-certificates xz-utils || true
+  mkdir -p "$DEST"
+  local TMP
+  TMP=$(mktemp -d)
+  local URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+  if ! curl -fsSL -o "$TMP/ff.txz" "$URL"; then
+    echo "Не удалось скачать $URL"
+    rm -rf "$TMP"
+    return 0
+  fi
+  if ! tar -xJf "$TMP/ff.txz" -C "$TMP"; then
+    echo "Не удалось распаковать архив ffmpeg."
+    rm -rf "$TMP"
+    return 0
+  fi
+  local FOUND
+  FOUND=$(find "$TMP" -type f -path '*/bin/ffmpeg' 2>/dev/null | head -1)
+  if [ -z "$FOUND" ]; then
+    echo "В архиве не найден bin/ffmpeg."
+    rm -rf "$TMP"
+    return 0
+  fi
+  install -m 0755 "$FOUND" "$BIN"
+  rm -rf "$TMP"
+  if "$BIN" -hide_banner -decoders 2>&1 | grep -qiE 'heif|heic|libheif'; then
+    echo "OK: $BIN — декодер HEIF/HEIC есть."
+    patch_env_ffmpeg_path "$BIN"
+  else
+    echo "Предупреждение: в статической сборке не найден HEIF — оставляем $BIN (есть libx264 для видео)."
+    patch_env_ffmpeg_path "$BIN"
+  fi
+}
+
 echo "=== PING MOOT — установка и запуск на порту $PORT ==="
 
 # Node.js (если ещё не установлен)
@@ -29,10 +91,26 @@ if ! command -v ffmpeg &>/dev/null; then
 fi
 if command -v ffmpeg &>/dev/null; then
   echo "ffmpeg: $(ffmpeg -version 2>/dev/null | head -n1)"
-  if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264; then
+  if ffmpeg -hide_banner -encoders 2>&1 | grep -q libx264; then
     echo "Кодер libx264: есть"
   else
     echo "ВНИМАНИЕ: в сборке ffmpeg нет libx264 — перекодирование постов может ломаться. Нужен полный пакет ffmpeg (Debian/Ubuntu: apt install ffmpeg)."
+  fi
+  if ffmpeg -hide_banner -decoders 2>&1 | grep -qiE 'heif|heic|libheif'; then
+    echo "Декодер HEIF/HEIC в системном ffmpeg: есть (фото с iPhone)"
+  else
+    echo "В системном ffmpeg нет HEIF — ставим статическую сборку (BtbN) в /opt/ping-moot/ffmpeg/ffmpeg …"
+    try_install_static_ffmpeg_with_heif || true
+  fi
+  heif_ok=""
+  if ffmpeg -hide_banner -decoders 2>&1 | grep -qiE 'heif|heic|libheif'; then heif_ok=1; fi
+  if [ -z "$heif_ok" ] && [ -x /opt/ping-moot/ffmpeg/ffmpeg ] && /opt/ping-moot/ffmpeg/ffmpeg -hide_banner -decoders 2>&1 | grep -qiE 'heif|heic|libheif'; then
+    heif_ok=1
+  fi
+  if [ -n "$heif_ok" ]; then
+    echo "Итог: декодер HEIF/HEIC доступен (PATH или FFMPEG_PATH в .env)."
+  else
+    echo "ВНИМАНИЕ: HEIF всё ещё недоступен — проверьте сеть/GitHub или задайте FFMPEG_PATH вручную в deploy.env."
   fi
 else
   echo "ОШИБКА: ffmpeg отсутствует — загрузка видео в ленту/сториз не будет работать."
@@ -97,7 +175,8 @@ fi
 PM2_APP_NAME="${PM2_APP_NAME:-ping-moot}"
 if grep -q '^DATABASE_URL=.\+' .env 2>/dev/null; then
   sed -i.bak 's/@base/@localhost/g; s/:base:5432/:localhost:5432/g' .env 2>/dev/null || true
-  DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
+  # Только первая строка — дубликаты DATABASE_URL в .env ломали cut и миграции шли «не туда».
+  DB_URL_RAW=$(grep '^DATABASE_URL=' .env 2>/dev/null | head -n1 | cut -d= -f2- | sed "s/^[\"']//;s/[\"']$//")
   export DATABASE_URL=$(echo "$DB_URL_RAW" | sed 's/@base/@localhost/g;s/:base:5432/:localhost:5432/g')
   # По умолчанию приложение не останавливаем: nginx продолжает проксировать на :PORT, нет длинного «connection refused».
   # run-migrations.cjs сам ретраит 53300 (too many clients). Если на слабом Postgres всё равно падает — один раз:
@@ -131,12 +210,16 @@ if [ -f PARSER/db/run-migrations.cjs ]; then
   node PARSER/db/run-migrations.cjs || echo "Предупреждение: миграции PARSER (проверь DATABASE_URL в .env)."
 fi
 
-# Бесплатный self-hosted ASR для титров групповых звонков (Vosk)
-if grep -q '^GROUP_CALLS_SERVER_ASR_ENABLED=1' .env 2>/dev/null; then
-  echo "Настройка Vosk ASR для групповых титров..."
-  if ! grep -q '^CALL_TRANSCRIPTS_ASR_URL=' .env 2>/dev/null; then
-    echo 'CALL_TRANSCRIPTS_ASR_URL=http://127.0.0.1:8099/transcribe' >> .env
-  fi
+# Расшифровка ГС/кружков и групповые титры: без CALL_TRANSCRIPTS_ASR_URL Node отдаёт 503 «не настроена».
+touch .env 2>/dev/null || true
+if ! grep -q '^CALL_TRANSCRIPTS_ASR_URL=' .env 2>/dev/null; then
+  echo 'CALL_TRANSCRIPTS_ASR_URL=http://127.0.0.1:8099/transcribe' >> .env
+  echo "В .env добавлен CALL_TRANSCRIPTS_ASR_URL (Vosk HTTP на localhost:8099)."
+fi
+
+# Self-hosted Vosk (systemd): групповые титры или явно VOSK_ASR_ENABLED=1 в .env
+if grep -q '^GROUP_CALLS_SERVER_ASR_ENABLED=1' .env 2>/dev/null || grep -q '^VOSK_ASR_ENABLED=1' .env 2>/dev/null; then
+  echo "Настройка Vosk ASR (HTTP + stream)..."
   if ! grep -q '^CALL_TRANSCRIPTS_ASR_WS_URL=' .env 2>/dev/null; then
     echo 'CALL_TRANSCRIPTS_ASR_WS_URL=ws://127.0.0.1:8100/stream' >> .env
   fi

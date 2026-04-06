@@ -17,15 +17,25 @@ type Props = {
 export function EdgeFeedCardEntrance({ children, className }: Props) {
   const reduced = usePrefersReducedMotion();
   if (reduced) {
-    return <div className={className}>{children}</div>;
+    return (
+      <motion.div
+        className={className}
+        initial={{ opacity: 0 }}
+        whileInView={{ opacity: 1 }}
+        viewport={{ once: true, amount: 0.08 }}
+        transition={{ duration: DURATION_NORMAL_S * 0.55, ease: EASING_OUT_BEZIER }}
+      >
+        {children}
+      </motion.div>
+    );
   }
   return (
     <motion.div
       className={cn(className)}
-      initial={{ opacity: 0, y: 12 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: 14, scale: 0.985, filter: "blur(1.8px)" }}
+      whileInView={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
       viewport={{ once: true, amount: 0.12 }}
-      transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+      transition={{ duration: DURATION_NORMAL_S * 1.08, ease: EASING_OUT_BEZIER }}
     >
       {children}
     </motion.div>

@@ -1,0 +1,380 @@
+openapi: 3.1.0
+info:
+  title: PING API HUB
+  version: 1.0.0
+servers:
+  - url: http://localhost:3092
+components:
+  securitySchemes:
+    PartnerKey:
+      type: apiKey
+      in: header
+      name: x-partner-api-key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    BridgeBearer:
+      type: http
+      scheme: bearer
+      description: Секрет API_HUB_BRIDGE_SECRET (только сервер PING → HUB, не для партнёрских приложений).
+  schemas:
+    PlatformBridgeBody:
+      type: object
+      required:
+        - chatId
+        - memberUserIds
+      properties:
+        event:
+          type: string
+          enum:
+            - message.created
+            - message.updated
+            - message.deleted
+            - message.reactions.updated
+            - message.transcript.updated
+          description: По умолчанию message.created, если не указано или неизвестное значение.
+        chatId:
+          type: string
+        memberUserIds:
+          type: array
+          items:
+            type: string
+        message:
+          type: object
+          description: Объект сообщения PING (для message.created и message.transcript.updated).
+        messageId:
+          type: string
+        content:
+          type: string
+        reactions:
+          type: array
+          items:
+            type: object
+        actorUserId:
+          type: string
+        emoji:
+          type: string
+          nullable: true
+    HubRealtimeEnvelope:
+      type: object
+      description: Сообщение по WebSocket / webhook после подключения с партнёрским токеном.
+      properties:
+        id:
+          type: string
+        partnerId:
+          type: string
+        channel:
+          type: string
+          enum: [message, receipt, presence]
+        event:
+          type: string
+          enum:
+            - message.created
+            - message.updated
+            - message.deleted
+            - message.reactions.updated
+            - message.transcript.updated
+            - message.delivered
+            - message.read
+            - presence.updated
+        payload:
+          type: object
+        emittedAt:
+          type: string
+          format: date-time
+security:
+  - PartnerKey: []
+paths:
+  /internal/platform/chat-message:
+    post:
+      summary: Мост realtime с платформы PING (server-to-server)
+      description: |
+        Вызывается только основным сервером PING. Bearer = `API_HUB_BRIDGE_SECRET`.
+        Опциональный заголовок `Idempotency-Key` (до 200 символов): повтор с тем же ключом в течение ~10 минут
+        вернёт `202` с `duplicate: true` без повторной рассылки событий.
+        События в WS/webhook — поле `event` в envelope; для моста в payload есть `recipientPingUserId` и `source: ping_platform`.
+      security:
+        - BridgeBearer: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlatformBridgeBody"
+      responses:
+        "202":
+          description: Принято; в теле `accepted`, `deliveredToSessions`, `event`; при дубликате — `duplicate: true`.
+        "400":
+          description: Неверное тело
+        "401":
+          description: Неверный Bearer
+        "403":
+          description: IP не в allowlist (`API_HUB_BRIDGE_ALLOWED_IPS`)
+        "503":
+          description: Секрет моста не задан на HUB
+  /health:
+    get:
+      summary: Service health
+      responses:
+        "200":
+          description: ok
+  /ready:
+    get:
+      summary: Service readiness
+      responses:
+        "200":
+          description: ok
+  /v1/auth/ping/start:
+    get:
+      summary: Start OAuth with PING
+      description: Optional loginCallbackUrl enables server-to-server POST { senderId, idempotencyKey } to CRM after successful callback.
+      parameters:
+        - in: query
+          name: pingUserId
+          schema:
+            type: string
+        - in: query
+          name: externalUserId
+          schema:
+            type: string
+        - in: query
+          name: loginCallbackUrl
+          schema:
+            type: string
+            format: uri
+        - in: query
+          name: redirectUrl
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: Auth start payload
+  /v1/auth/ping/callback:
+    get:
+      summary: OAuth callback
+      description: In OIDC mode, state is required and valid for ~10 minutes from /start.
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: state
+          description: Required in OIDC mode.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Access and refresh token pair
+        "302":
+          description: Redirect to partner redirectUrl after successful CRM callback
+  /v1/auth/refresh:
+    post:
+      summary: Refresh session
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Refreshed access token
+  /v1/auth/logout:
+    post:
+      summary: Logout
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Logout success
+  /v1/me:
+    get:
+      summary: Get current user profile
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Profile
+  /v1/contacts:
+    get:
+      summary: List contacts available in PING
+      description: With platform session (Bearer pm.*), proxies GET /api/contacts?list=1; each item includes pingUserId (= id).
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Contacts list
+    post:
+      summary: Add contact on PING
+      description: Proxies POST /api/contacts with { contactUserId }. Requires pm.* session and chat.write scope; not available in api_hub_demo mode.
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Contact added
+        "501":
+          description: Demo session without platform pm token
+  /v1/chats:
+    get:
+      summary: List chats
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Chats list
+  /v1/chats/{chatId}/messages:
+    get:
+      summary: List messages for chat
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      parameters:
+        - in: path
+          name: chatId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Messages list
+  /v1/chats/{chatId}/messages:send:
+    post:
+      summary: Send text or media message
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      parameters:
+        - in: path
+          name: chatId
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Message created
+  /v1/messages/{messageId}/reactions:
+    post:
+      summary: Add reaction
+      description: При прокси на PING в теле JSON укажите chatId вместе с emoji.
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      parameters:
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reaction stored
+  /v1/messages/{messageId}/status:
+    post:
+      summary: Update delivered or read status
+      description: При прокси на PING для status=read передайте chatId в теле JSON.
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      parameters:
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Status updated
+  /v1/platform/chat-media:
+    post:
+      summary: Upload chat media to PING (proxy)
+      description: multipart/form-data, field `file`. Proxies POST /api/upload/chat-media with user Bearer pm.*. Response includes url, optional posterUrl, pingPlatformOrigin.
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "201":
+          description: Created
+        "501":
+          description: Session without pm token
+  /v1/realtime/token:
+    get:
+      summary: Create short-lived realtime token
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Realtime token
+  /v1/realtime:
+    get:
+      summary: WebSocket endpoint
+      description: Connect via ws://host/v1/realtime?token=...
+      responses:
+        "101":
+          description: Switching protocols
+  /v1/presence:
+    post:
+      summary: Update online presence
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Presence updated
+  /v1/media/upload-init:
+    post:
+      summary: Init media upload
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "201":
+          description: Upload initialized
+  /v1/media/upload-complete:
+    post:
+      summary: Complete media upload
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "200":
+          description: Upload completed
+  /v1/media/file/{mediaId}:
+    get:
+      summary: Download media with signed token
+      parameters:
+        - in: path
+          name: mediaId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: token
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Binary media payload
+  /v1/media/messages/send:
+    post:
+      summary: Send voice or video note message
+      security:
+        - PartnerKey: []
+          BearerAuth: []
+      responses:
+        "201":
+          description: Media message created

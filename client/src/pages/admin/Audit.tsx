@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AdminPageHeader, AdminSectionTemplate, adminPageStackClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -22,6 +23,7 @@ import { fetchMe } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale";
+import { ScrollText } from "lucide-react";
 
 const PAGE_SIZE = 50;
 
@@ -53,20 +55,32 @@ export default function AdminAudit() {
   };
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Аудит</h1>
-      <Card>
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <CardTitle>Действия админов</CardTitle>
-          {canCsv ? (
+    <div className={cn(adminPageStackClass(), "space-y-4")}>
+      <AdminPageHeader title="Аудит" description="Журнал действий администраторов с фильтрами и постраничной навигацией." />
+      <AdminSectionTemplate
+        title="Действия админов"
+        actions={
+          canCsv ? (
             <Button type="button" variant="outline" size="sm" onClick={onCsv}>
               Скачать CSV (до 2000)
             </Button>
           ) : (
-            <p className="text-xs text-muted-foreground">CSV — только у администратора</p>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-4">
+            <p className="text-xs admin-text-muted">CSV — только у администратора</p>
+          )
+        }
+        bodyClassName="space-y-4"
+        isLoading={isLoading}
+        loadingRows={3}
+        error={error}
+        onRetry={() => void refetch()}
+        errorTitle="Не удалось загрузить аудит"
+        empty={!!log && log.length === 0}
+        emptyIcon={ScrollText}
+        emptyTitle="Записей пока нет"
+        emptyDescription="По текущим фильтрам журнал пуст. Измените фильтры или обновите список."
+        emptyActionLabel="Обновить"
+        onEmptyAction={() => void refetch()}
+      >
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-1">
               <Label htmlFor="audit-action">Действие</Label>
@@ -116,16 +130,6 @@ export default function AdminAudit() {
               </Button>
             </div>
           </div>
-
-          {isLoading && <p className="text-muted-foreground py-4">Загрузка...</p>}
-          {error && (
-            <p className="text-destructive py-4">
-              {error instanceof Error ? error.message : "Ошибка загрузки"}
-            </p>
-          )}
-          {log && log.length === 0 && (
-            <p className="text-muted-foreground py-4">Записей нет по текущим фильтрам.</p>
-          )}
           {log && log.length > 0 && (
             <>
               <Table>
@@ -182,8 +186,7 @@ export default function AdminAudit() {
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+      </AdminSectionTemplate>
     </div>
   );
 }

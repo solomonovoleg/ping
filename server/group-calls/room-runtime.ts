@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
+import { MAX_GROUP_MESH_PEERS } from "@shared/group-call-limits";
 import { isUserInActiveCall } from "../calls/session";
+
+export { MAX_GROUP_MESH_PEERS };
 
 export type GroupRoomMedia = "audio" | "video";
 
@@ -20,8 +23,6 @@ const rooms = new Map<string, GroupRoomLive>();
 const activeRoomIdByChatId = new Map<string, string>();
 /** Пользователь сейчас в групповом созвоне (WS join) */
 const userActiveGroupRoom = new Map<string, string>();
-
-export const MAX_GROUP_MESH_PEERS = 12;
 
 export function isUserInGroupCall(userId: string): boolean {
   return userActiveGroupRoom.has(userId);
@@ -133,6 +134,7 @@ export function rosterPayload(room: GroupRoomLive): {
   roomId: string;
   mediaType: GroupRoomMedia;
   hostUserId: string;
+  maxMeshPeers: number;
   participants: { userId: string; displayName: string }[];
   handRaisedUserIds: string[];
 } {
@@ -147,6 +149,7 @@ export function rosterPayload(room: GroupRoomLive): {
     roomId: room.roomId,
     mediaType: room.mediaType,
     hostUserId: room.createdByUserId,
+    maxMeshPeers: MAX_GROUP_MESH_PEERS,
     participants,
     handRaisedUserIds,
   };

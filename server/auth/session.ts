@@ -9,6 +9,33 @@ import { getPool } from "../db/client";
 const MemoryStoreClass = MemoryStore(session);
 const PgStore = connectPgSimple(session);
 
+function resolveRequiredSecret(envName: string, opts?: { minLength?: number; allowDevFallback?: string }): string {
+  const minLength = opts?.minLength ?? 24;
+  const raw = process.env[envName]?.trim();
+  if (raw && raw.length >= minLength) return raw;
+  if (process.env.ALLOW_INSECURE_SECRETS === "1" && opts?.allowDevFallback) {
+    console.warn(`[security] ${envName} is weak or missing, using insecure fallback (ALLOW_INSECURE_SECRETS=1).`);
+    return opts.allowDevFallback;
+  }
+  throw new Error(
+    `[security] ${envName} must be set and at least ${minLength} chars. ` +
+      `Set ALLOW_INSECURE_SECRETS=1 only for local development.`,
+  );
+}
+
+function parseSessionMaxAgeDays(): number {
+  const raw = process.env.SESSION_MAX_AGE_DAYS?.trim();
+  if (!raw) return 31;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return 31;
+  return Math.min(400, Math.max(1, n));
+}
+
+const SESSION_MAX_AGE_DAYS = parseSessionMaxAgeDays();
+const SESSION_MAX_AGE_MS = SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+/** connect-pg-simple: если в сохранённом sess нет cookie.expires, TTL в БД = ttl || 1 день — задаём явно под maxAge куки */
+const SESSION_STORE_TTL_SEC = Math.floor(SESSION_MAX_AGE_MS / 1000);
+
 /** Таблица для connect-pg-simple. Вызывать при старте приложения, если используем PostgreSQL. */
 export async function ensureSessionTable(): Promise<void> {
   const url = process.env.DATABASE_URL?.trim();
@@ -40,6 +67,7 @@ function createSessionStore(): session.Store {
         pool,
         createTableIfMissing: true,
         pruneSessionInterval: 60 * 15,
+        ttl: SESSION_STORE_TTL_SEC,
       });
     } catch (e) {
       console.warn("[session] PostgreSQL store failed, using memory:", (e as Error).message);
@@ -84,12 +112,17 @@ const secureOption =
 // sameSite: "none" нужен, если фронт и API на разных поддоменах; иначе "lax"
 const sameSite = process.env.SESSION_SAME_SITE === "none" ? ("none" as const) : ("lax" as const);
 
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 дней
+const sessionCookieDomainRaw = process.env.SESSION_COOKIE_DOMAIN?.trim();
+const sessionCookieDomain =
+  sessionCookieDomainRaw && sessionCookieDomainRaw.length > 0 ? sessionCookieDomainRaw : undefined;
 
 const sessionMiddleware = session({
   name: "ping.sid",
   store: createSessionStore(),
-  secret: process.env.SESSION_SECRET || "ping-moot-secret-change-in-production",
+  secret: resolveRequiredSecret("SESSION_SECRET", {
+    minLength: 24,
+    allowDevFallback: "dev-insecure-session-secret-change-me",
+  }),
   resave: false,
   saveUninitialized: false,
   proxy: true, // учитывать X-Forwarded-Proto за nginx, чтобы secure: "auto" работал
@@ -100,6 +133,7 @@ const sessionMiddleware = session({
     sameSite,
     maxAge: SESSION_MAX_AGE_MS,
     path: "/",
+    ...(sessionCookieDomain ? { domain: sessionCookieDomain } : {}),
   },
 });
 

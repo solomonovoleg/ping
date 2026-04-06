@@ -1,6 +1,6 @@
 /** Реэкспорт репозиториев участника (файлы ≤200 строк). */
 export type { ParticipantRow } from "./db-types.js";
-export { ensureParticipant } from "./participant-repo.js";
+export { ensureParticipant, getParticipantEdgeMeta } from "./participant-repo.js";
 export {
   ensureCharacterRow,
   updateCharacterDecay,

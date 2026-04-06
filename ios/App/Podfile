@@ -13,6 +13,8 @@ def capacitor_pods
   pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
   pod 'CapacitorCommunityContacts', :path => '../../node_modules/@capacitor-community/contacts'
   pod 'CapacitorCommunityMedia', :path => '../../node_modules/@capacitor-community/media'
+  pod 'CapacitorCommunityScreenBrightness', :path => '../../node_modules/@capacitor-community/screen-brightness'
+  pod 'CapacitorCommunitySpeechRecognition', :path => '../../node_modules/@capacitor-community/speech-recognition'
   pod 'CapacitorCamera', :path => '../../node_modules/@capacitor/camera'
   pod 'CapacitorHaptics', :path => '../../node_modules/@capacitor/haptics'
   pod 'CapacitorPreferences', :path => '../../node_modules/@capacitor/preferences'
@@ -21,7 +23,8 @@ end
 
 target 'App' do
   capacitor_pods
-  # Add your Pods here
+  # FCM на iOS: APNs device token → FCM token для сервера (FCM_SERVER_KEY). См. .env.example § iOS push.
+  pod 'FirebaseMessaging'
 end
 
 post_install do |installer|

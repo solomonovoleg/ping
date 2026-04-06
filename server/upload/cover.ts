@@ -5,6 +5,8 @@ import type { Express, Request, Response } from "express";
 import multer from "multer";
 import { requireAuth } from "../auth/session";
 import { s3Configured, uploadToS3 } from "./s3";
+import { convertHeicBufferToJpeg, convertHeicFileToJpegFile, isHeicLike } from "./heic-convert";
+import { formatUploadStorageError } from "./format-upload-storage-error";
 
 const log = (msg: string, err?: unknown) => {
   const prefix = "[upload/cover]";
@@ -58,6 +60,33 @@ const upload = multer({
   },
 });
 
+export const coverUploadMulter = upload;
+
+export async function persistCoverUpload(file: Express.Multer.File): Promise<string> {
+  if (!s3Configured) ensureDir(UPLOADS_DIR);
+  if (s3Configured && file.buffer) {
+    let buffer = file.buffer;
+    let ext = path.extname(file.originalname) || ".jpg";
+    let contentType = file.mimetype;
+    if (isHeicLike(contentType, file.originalname)) {
+      buffer = await convertHeicBufferToJpeg(buffer);
+      ext = ".jpg";
+      contentType = "image/jpeg";
+    }
+    return uploadToS3("covers", buffer, contentType, ext);
+  }
+  const f = file as Express.Multer.File & { filename?: string; path?: string };
+  let filename = f.filename ?? "";
+  if (f.path && isHeicLike(file.mimetype, file.originalname)) {
+    const stem = path.basename(f.path, path.extname(f.path));
+    const outPath = path.join(UPLOADS_DIR, `${stem}.jpg`);
+    await convertHeicFileToJpegFile(f.path, outPath);
+    fs.unlink(f.path, () => {});
+    filename = `${stem}.jpg`;
+  }
+  return `/uploads/covers/${filename}`;
+}
+
 export function registerCoverUploadRoutes(app: Express): void {
   if (!s3Configured) ensureDir(UPLOADS_DIR);
   app.post(
@@ -68,7 +97,7 @@ export function registerCoverUploadRoutes(app: Express): void {
     },
     requireAuth,
     upload.single("file"),
-    async (req: Request, res: Response, next: (err?: unknown) => void) => {
+    async (req: Request, res: Response) => {
       if (!req.file) {
         log("cover upload: no file in request");
         res.status(400).json({ message: "Файл не загружен. Отправьте поле «file»." });
@@ -76,25 +105,21 @@ export function registerCoverUploadRoutes(app: Express): void {
       }
       log(`cover upload: file received, mimetype=${req.file.mimetype}, size=${(req.file as Express.Multer.File & { size?: number }).size ?? req.file.buffer?.length ?? "?"}`);
       try {
-        if (s3Configured && req.file.buffer) {
-          const ext = path.extname(req.file.originalname) || ".jpg";
-          const url = await uploadToS3(
-            "covers",
-            req.file.buffer,
-            req.file.mimetype,
-            ext
-          );
-          log("cover upload: success (S3)", url);
-          res.status(201).json({ url });
-          return;
-        }
-        const filename = (req.file as Express.Multer.File & { filename?: string }).filename ?? "";
-        const url = `/uploads/covers/${filename}`;
-        log("cover upload: success (disk)", url);
+        const url = await persistCoverUpload(req.file);
+        log("cover upload: success", url);
         res.status(201).json({ url });
       } catch (e) {
         log("cover upload: error", e);
-        next(e);
+        const raw = e instanceof Error ? e.message : String(e);
+        if (/heic|heif|sharp|libvips|libheif|unsupported image|convert/i.test(raw)) {
+          res.status(500).json({
+            message: "Не удалось обработать HEIC/HEIF. Сохраните фото как JPEG или PNG.",
+          });
+          return;
+        }
+        res.status(503).json({
+          message: formatUploadStorageError(e, "[upload/cover]", { storageMode: s3Configured ? "s3" : "disk" }),
+        });
       }
     }
   );

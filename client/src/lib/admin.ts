@@ -1,4 +1,4 @@
-import { API, apiFetch } from "@/lib/api-base";
+import { API, apiFetch, toApiRequestError } from "@/lib/api-base";
 
 function adminFetch(path: string, init?: RequestInit) {
   return apiFetch(`${API}${path}`, { ...init, credentials: "include" });
@@ -13,7 +13,7 @@ export type DashboardStats = {
 
 export async function fetchDashboardStats(): Promise<DashboardStats> {
   const res = await adminFetch("/admin/dashboard/stats");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -38,9 +38,64 @@ export type DashboardAnalytics = {
 export async function fetchDashboardAnalytics(days = 14): Promise<DashboardAnalytics> {
   const safe = Math.min(90, Math.max(1, Math.floor(days)));
   const res = await adminFetch(`/admin/dashboard/analytics?days=${safe}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
+
+export type NewTelCallPasswordLogSummary = {
+  totalRequests: number;
+  startPasswordCalls: number;
+  statusPolls: number;
+  apiErrors: number;
+};
+
+export type NewTelCallPasswordLogDayBucket = {
+  day: string;
+  totalRequests: number;
+  startPasswordCalls: number;
+  statusPolls: number;
+  apiErrors: number;
+};
+
+export type NewTelCallPasswordLogRow = {
+  id: string;
+  createdAt: string;
+  scenario: string;
+  apiMethod: string;
+  durationMs: number;
+  httpStatus: number | null;
+  apiOk: boolean | null;
+  errorMessage: string | null;
+  requestRedacted: unknown;
+  responseSanitized: unknown;
+  /** Полный разбор: URL, слои ответа New-Tel, внутренние коды подтверждения */
+  detail: unknown;
+};
+
+export type NewTelCallPasswordLogResponse = {
+  days: number;
+  from: string;
+  summary: NewTelCallPasswordLogSummary;
+  byDay: NewTelCallPasswordLogDayBucket[];
+  rows: NewTelCallPasswordLogRow[];
+  truncated: boolean;
+  rowLimit: number;
+};
+
+export async function fetchNewTelCallPasswordLog(days = 14): Promise<NewTelCallPasswordLogResponse> {
+  const safe = Math.min(90, Math.max(1, Math.floor(days)));
+  const res = await adminFetch(`/admin/new-tel-call-password-log?days=${safe}`);
+  if (!res.ok) throw await toApiRequestError(res);
+  return res.json();
+}
+
+/** Эвристика для списка пользователей (сервер). */
+export type AdminSignupRisk = {
+  level: "none" | "watch" | "alert";
+  reasons: string[];
+  sameDeviceOthers: number;
+  sameIpUaOthers: number;
+};
 
 export type AdminUser = {
   id: string;
@@ -51,38 +106,148 @@ export type AdminUser = {
   deletedAt?: string | null;
   createdAt?: string | null;
   platformRole?: string;
+  invitedById?: string | null;
+  /** Сигнал «обратить внимание» в списке */
+  signupRisk?: AdminSignupRisk;
+  /** Сырые поля регистрации (в карточке деталей / GET user) */
+  signupIp?: string | null;
+  signupForwardedFor?: string | null;
+  signupUserAgent?: string | null;
+  signupUaHash?: string | null;
+  signupAcceptLanguage?: string | null;
+  signupSecChUa?: string | null;
+  signupSecChUaMobile?: string | null;
+  signupSecChUaPlatform?: string | null;
+  signupReferer?: string | null;
+  signupOrigin?: string | null;
+  signupDeviceId?: string | null;
+  signupClientSignalsHash?: string | null;
+  signupClientSignalsJson?: string | null;
+  /** Кто пригласил (если регистрация по рефералу) */
+  invitedByUser?: {
+    publicId: number;
+    displayName: string | null;
+    surname: string | null;
+  } | null;
   /** Количество приглашённых пользователей */
   referralCount?: number;
   /** Лимит приглашений (null = 3 по умолчанию). Админ может увеличить. */
   referralLimit?: number | null;
+  /** PRIME CODE: непустая строка — доступ к API HUB на Борде; пусто/null — отозвать */
+  boardApiHubPrimeCode?: string | null;
+  businessStatus?: "none" | "pending" | "approved" | "rejected" | "revision_required";
 };
 
-export async function fetchAdminUsers(opts: {
-  limit?: number;
-  offset?: number;
-  search?: string;
-  includeDeleted?: boolean;
-}): Promise<{ users: AdminUser[]; total: number }> {
+export type AdminBusinessStatusRequest = {
+  id: string;
+  userId: string;
+  reason: string;
+  links: string[];
+  consentModeration: boolean;
+  status: "submitted" | "approved" | "rejected" | "revision_required";
+  adminComment: string | null;
+  moderatedBy: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  moderatedAt: string | null;
+  user: {
+    id: string;
+    publicId: number;
+    displayName: string | null;
+    surname: string | null;
+    avatarUrl: string | null;
+    businessStatus: "none" | "pending" | "approved" | "rejected" | "revision_required";
+  };
+};
+
+export async function fetchAdminUsers(
+  opts: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    includeDeleted?: boolean;
+    sort?: "createdAt" | "referrals" | "invitedBy";
+    sortDir?: "asc" | "desc";
+  },
+  init?: RequestInit,
+): Promise<{ users: AdminUser[]; total: number }> {
   const params = new URLSearchParams();
   if (opts.limit != null) params.set("limit", String(opts.limit));
   if (opts.offset != null) params.set("offset", String(opts.offset));
   if (opts.search) params.set("search", opts.search);
   if (opts.includeDeleted) params.set("includeDeleted", "true");
-  const res = await adminFetch(`/admin/users?${params}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (opts.sort) params.set("sort", opts.sort);
+  if (opts.sortDir) params.set("sortDir", opts.sortDir);
+  const res = await adminFetch(`/admin/users?${params}`, init);
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
+}
+
+export async function fetchAdminBusinessStatusRequests(opts?: {
+  status?: "submitted" | "approved" | "rejected" | "revision_required";
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: AdminBusinessStatusRequest[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  const res = await adminFetch(`/admin/business-status-requests?${params.toString()}`);
+  if (!res.ok) throw await toApiRequestError(res);
+  return res.json();
+}
+
+export async function moderateAdminBusinessStatusRequest(
+  requestId: string,
+  action: "approve" | "reject" | "revision",
+  adminComment?: string,
+): Promise<void> {
+  const res = await adminFetch(`/admin/business-status-requests/${encodeURIComponent(requestId)}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ adminComment: adminComment?.trim() || undefined }),
+  });
+  if (!res.ok) {
+    throw await toApiRequestError(res);
+  }
 }
 
 export async function fetchAdminUser(id: string): Promise<AdminUser | null> {
   const res = await adminFetch(`/admin/users/${id}`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
+/** Профиль + связанные по сигналам регистрации (для модерации). */
+export async function fetchAdminUserSignupInsight(
+  userId: string,
+  opts?: { relatedLimit?: number },
+): Promise<{ user: AdminUser; related: AdminUserSignupRelatedGroups; hint: string }> {
+  const lim = Math.min(Math.max(opts?.relatedLimit ?? 40, 5), 100);
+  const res = await adminFetch(`/admin/users/${userId}/signup-related?limit=${lim}`);
+  if (res.status === 404) throw new Error("Пользователь не найден");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Ошибка загрузки");
+  }
+  return res.json();
+}
+
+export type AdminUserSignupRelatedGroups = {
+  byDeviceId: AdminUser[];
+  byIp: AdminUser[];
+  byUaHash: AdminUser[];
+  byClientSignalsHash: AdminUser[];
+};
+
 export async function updateAdminUser(
   id: string,
-  payload: Partial<Pick<AdminUser, "displayName" | "surname" | "referralLimit">> & { status?: string; city?: string; bio?: string }
+  payload: Partial<Pick<AdminUser, "displayName" | "surname" | "referralLimit" | "boardApiHubPrimeCode" | "publicId">> & {
+    status?: string;
+    city?: string;
+    bio?: string;
+  }
 ): Promise<AdminUser> {
   const res = await adminFetch(`/admin/users/${id}`, {
     method: "PATCH",
@@ -94,6 +259,34 @@ export async function updateAdminUser(
     throw new Error(data.message || "Ошибка сохранения профиля");
   }
   return res.json();
+}
+
+/** Массовая блокировка (до 100 за запрос). */
+export async function bulkBanUsers(ids: string[], reason?: string): Promise<{ affected: number }> {
+  const res = await adminFetch("/admin/users/bulk-ban", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, reason: reason ?? "" }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Ошибка массовой блокировки");
+  }
+  return res.json() as Promise<{ affected: number }>;
+}
+
+/** Массовое мягкое удаление (скрыть), до 100 за запрос. */
+export async function bulkDeleteUsers(ids: string[]): Promise<{ affected: number }> {
+  const res = await adminFetch("/admin/users/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Ошибка массового удаления");
+  }
+  return res.json() as Promise<{ affected: number }>;
 }
 
 export async function banUser(id: string, reason?: string): Promise<void> {
@@ -124,6 +317,19 @@ export async function deleteUser(id: string): Promise<void> {
   }
 }
 
+/** Безвозвратное удаление пользователя из БД (только admin/super_admin на сервере). */
+export async function banAndPurgeUser(id: string, confirmPublicId: number, reason?: string): Promise<void> {
+  const res = await adminFetch(`/admin/users/${id}/ban-and-purge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmPublicId, reason: reason ?? "" }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || "Ошибка полного удаления");
+  }
+}
+
 export type AdminEntry = {
   id: string;
   publicId: number;
@@ -135,7 +341,7 @@ export type AdminEntry = {
 
 export async function fetchAdmins(): Promise<AdminEntry[]> {
   const res = await adminFetch("/admin/admins");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -202,7 +408,6 @@ export type AdminParserUser = {
   publicId: number;
   displayName: string | null;
   surname: string | null;
-  phone: string;
 };
 
 export type ContentIngestConfig = {
@@ -266,14 +471,25 @@ export async function runContentIngestNow(): Promise<{
   return res.json();
 }
 
-export async function fetchParserUsers(search?: string): Promise<AdminParserUser[]> {
-  const params = new URLSearchParams();
-  if (search?.trim()) params.set("search", search.trim());
-  params.set("limit", "80");
-  const res = await adminFetch(`/admin/content-ingest/users?${params.toString()}`);
-  if (!res.ok) throw new Error("Ошибка загрузки пользователей для автопостинга");
-  const data = await res.json().catch(() => ({ users: [] }));
-  return data.users ?? [];
+/** Авторы для автопостинга / парсера ВК — тот же список, что в «Пользователи»; не ходит в микросервис парсера. */
+export async function fetchParserUsers(search?: string, init?: RequestInit): Promise<AdminParserUser[]> {
+  const { users } = await fetchAdminUsers(
+    {
+      limit: 80,
+      offset: 0,
+      search: search?.trim() || undefined,
+      includeDeleted: false,
+    },
+    init,
+  );
+  return users
+    .filter((u) => !u.isBlocked && !u.deletedAt)
+    .map((u) => ({
+      id: u.id,
+      publicId: u.publicId,
+      displayName: u.displayName,
+      surname: u.surname,
+    }));
 }
 
 /** Парсер ВК → посты от имени пользователя платформы */
@@ -504,15 +720,26 @@ export type AdminReferralCode = {
   expiresInHours?: number;
   maxUses?: number;
   useCount?: number;
+  /** Подпись при создании в админке (для учёта) */
+  adminNote?: string | null;
+};
+
+export type AdminReferralProgramSettings = {
+  defaultInvites: number;
+  repeatEnabled: boolean;
+  repeatInvites: number;
+  repeatAfterHours: number;
+  multiUseDefaultExpiresHours: number;
 };
 
 export async function createAdminReferralCode(opts?: {
-  format?: "phrase" | "digits";
   expiresInHours?: number;
   /** Без лимита использований до даты истечения */
   multiUse?: boolean;
   /** Фиксированное число регистраций (если не multiUse) */
   maxUses?: number;
+  /** Необязательная подпись: кто выдал, для какой кампании */
+  adminNote?: string;
 }): Promise<AdminReferralCode> {
   const res = await adminFetch("/admin/referrals/create", {
     method: "POST",
@@ -531,6 +758,110 @@ export async function fetchAdminReferralCodes(): Promise<AdminReferralCode[]> {
   if (!res.ok) throw new Error("Ошибка загрузки кодов");
   const data = await res.json();
   return data.codes ?? [];
+}
+
+export async function fetchAdminReferralProgramSettings(): Promise<AdminReferralProgramSettings> {
+  const res = await adminFetch("/admin/referrals/settings");
+  if (!res.ok) throw new Error("Не удалось загрузить настройки приглашений");
+  return res.json();
+}
+
+export async function patchAdminReferralProgramSettings(
+  payload: Partial<AdminReferralProgramSettings>,
+): Promise<AdminReferralProgramSettings> {
+  const res = await adminFetch("/admin/referrals/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось сохранить настройки приглашений");
+  }
+  return res.json();
+}
+
+export type AdminInviteMoreRequestRow = {
+  id: string;
+  userId: string;
+  message: string | null;
+  createdAt: string;
+  bonusInvites: number;
+  displayName: string | null;
+  surname: string | null;
+  publicId: number;
+};
+
+export async function fetchAdminInviteMoreRequests(): Promise<AdminInviteMoreRequestRow[]> {
+  const res = await adminFetch("/admin/invite-more-requests");
+  if (!res.ok) throw new Error("Не удалось загрузить заявки");
+  const data = await res.json();
+  return Array.isArray(data.requests) ? data.requests : [];
+}
+
+export async function patchAdminInviteMoreRequest(
+  id: string,
+  payload: { action: "approve" | "reject"; bonusInvites?: number }
+): Promise<void> {
+  const res = await adminFetch(`/admin/invite-more-requests/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось обработать заявку");
+  }
+}
+
+export type AdminHelpPageRow = {
+  id: string;
+  slug: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  updatedAt: string;
+};
+
+export async function fetchAdminHelpPages(): Promise<AdminHelpPageRow[]> {
+  const res = await adminFetch("/admin/help-pages");
+  if (!res.ok) throw new Error("Не удалось загрузить справки");
+  const data = await res.json();
+  return Array.isArray(data.pages) ? data.pages : [];
+}
+
+export async function updateAdminHelpPage(
+  slug: string,
+  payload: { title?: string; body?: string; sortOrder?: number }
+): Promise<AdminHelpPageRow> {
+  const res = await adminFetch(`/admin/help-pages/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось сохранить");
+  }
+  return res.json();
+}
+
+export async function createAdminHelpPage(payload: {
+  slug: string;
+  title: string;
+  body?: string;
+  sortOrder?: number;
+}): Promise<AdminHelpPageRow> {
+  const res = await adminFetch("/admin/help-pages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось создать");
+  }
+  return res.json();
 }
 
 export type ServiceChatHostState = {
@@ -619,5 +950,74 @@ export async function runServiceChatCampaign(payload: {
     const data = await res.json().catch(() => ({}));
     throw new Error((data as { message?: string }).message || "Не удалось запустить рассылку");
   }
+  return res.json();
+}
+
+// ── Group chats (admin) ──────────────────────────────────────
+
+export type AdminGroupChat = {
+  id: string;
+  type: string;
+  name: string | null;
+  avatarUrl: string | null;
+  inviteCode: string | null;
+  inviteLink: string | null;
+  createdAt: string;
+};
+
+export type AdminCreateGroupChatResult = {
+  chat: {
+    id: string;
+    type: string;
+    name: string | null;
+    avatarUrl: string | null;
+    inviteCode: string;
+    createdAt: string;
+  };
+  inviteLink: string;
+  creator: {
+    id: string;
+    publicId: number;
+    displayName: string | null;
+  };
+};
+
+export async function adminCreateGroupChat(body: {
+  creatorUserId: string;
+  name?: string;
+  avatarUrl?: string;
+}): Promise<AdminCreateGroupChatResult> {
+  const res = await adminFetch("/admin/group-chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось создать групповой чат");
+  }
+  return res.json();
+}
+
+export async function adminUploadGroupChatAvatar(
+  chatId: string,
+  file: File,
+): Promise<{ url: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await adminFetch(`/admin/group-chats/${chatId}/avatar`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { message?: string }).message || "Не удалось загрузить аватар чата");
+  }
+  return res.json();
+}
+
+export async function adminListGroupChats(): Promise<{ chats: AdminGroupChat[] }> {
+  const res = await adminFetch("/admin/group-chats");
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }

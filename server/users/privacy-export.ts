@@ -13,11 +13,12 @@ function publicUserSnapshot(u: User) {
   const {
     password: _p,
     fcmToken: _f,
+    iosVoipToken: _voip,
     phoneCipher: _c,
     phoneLookupHash: _h,
     phone: _storedPhone,
     ...rest
-  } = u as User & { password?: string; fcmToken?: string | null };
+  } = u as User & { password?: string; fcmToken?: string | null; iosVoipToken?: string | null };
   const phone = resolvePlainPhoneForUserRow(u);
   return { ...rest, phone };
 }

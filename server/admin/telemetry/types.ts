@@ -27,4 +27,35 @@ export type ModulesTelemetryPayload = {
   uptimeSec: number;
   modules: ModuleTelemetryRow[];
   recentErrors: TelemetryRecentError[];
+  clientTelemetry?: {
+    tablePasteFallback: {
+      counts: {
+        fallback_shown: number;
+        retry_clicked: number;
+        reopen_success: number;
+      };
+      uniqueUsers: number;
+      recent: Array<{
+        at: string;
+        event: "fallback_shown" | "retry_clicked" | "reopen_success";
+        chatId: string;
+        cols: number;
+        rows: number;
+        viaRetry: boolean;
+        userId: string;
+      }>;
+    };
+    /** С момента рестарта процесса; может отсутствовать на старых билдах API. */
+    iseeTimeToFirstPlay?: {
+      count: number;
+      uniqueUsers: number;
+      recent: Array<{
+        at: string;
+        userId: string;
+        ms: number;
+        postId: string;
+        connectionType: string | null;
+      }>;
+    };
+  };
 };

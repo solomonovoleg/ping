@@ -1,5 +1,5 @@
 import { forwardRef, type ReactNode } from "react";
-import { Image, Link2, Users, Phone, Video, FolderPlus, ImagePlus } from "lucide-react";
+import { Image, Link2, Users, Phone, Video, FolderPlus, ImagePlus, History } from "lucide-react";
 import { isGroupCallModuleEnabled } from "@/features/group-call/flags";
 
 /** Общая рамка меню под кнопкой «Ещё» в шапке чата (группа / личка). */
@@ -31,6 +31,8 @@ export type ChatDetailGroupMenuBodyProps = {
   onStartGroupCall: (video: boolean) => void;
   onCreateFolderClick: () => void;
   onPickGroupAvatar: () => void;
+  /** Журнал созвонов на борде (не дублируем отдельный экран в шапке). */
+  onOpenCallJournal: () => void;
   /** Нижний блок (обычно `ChatDetailAppearancePanel` в обёртке с border-t). */
   appearanceSection: ReactNode;
 };
@@ -45,6 +47,7 @@ export function ChatDetailGroupMenuBody({
   onStartGroupCall,
   onCreateFolderClick,
   onPickGroupAvatar,
+  onOpenCallJournal,
   appearanceSection,
 }: ChatDetailGroupMenuBodyProps) {
   const groupCallOn = isGroupCallModuleEnabled();
@@ -88,6 +91,17 @@ export function ChatDetailGroupMenuBody({
           </button>
         </>
       )}
+      <button
+        type="button"
+        onClick={onOpenCallJournal}
+        className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
+      >
+        <History className="h-5 w-5 shrink-0 text-primary" />
+        <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+          <span className="text-sm font-medium">Журнал созвонов</span>
+          <span className="text-[11px] text-muted-foreground leading-tight">Борд — недавние и титры</span>
+        </div>
+      </button>
       {myRole === "admin" && (
         <button
           type="button"

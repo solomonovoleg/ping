@@ -16,7 +16,7 @@ type Props = {
  */
 export function CompanionSurfaceDots({ visible, selectedIndex, onSelect, className }: Props) {
   return (
-    <div className={cn("bg-transparent", className)} role="tablist" aria-label="Разделы кампании">
+    <div className={cn("bg-transparent", className)} role="tablist" aria-label="Вкладки кампании">
       <div
         className={cn(
           "flex min-h-10 items-stretch overflow-x-auto overscroll-x-contain",
@@ -36,17 +36,20 @@ export function CompanionSurfaceDots({ visible, selectedIndex, onSelect, classNa
               aria-label={COMPANION_SURFACE_LABEL[id]}
               onClick={() => onSelect(i)}
               className={cn(
-                "relative shrink-0 rounded-none border-0 bg-transparent px-3.5 py-2.5 text-[11px] font-light tracking-wide shadow-none ring-0 transition-colors",
+                "relative shrink-0 rounded-none border-0 bg-transparent px-2.5 py-2.5 text-[11px] font-light tracking-wide shadow-none ring-0 transition-colors first:pl-1 sm:px-3 sm:first:pl-2",
                 "hover:bg-transparent focus-visible:ring-2 focus-visible:ring-primary/40",
-                "border-l border-border/10 first:border-l-0 first:pl-2 sm:first:pl-3",
-                active ? "text-primary" : "text-muted-foreground/70 hover:text-foreground/85",
+                active
+                  ? "text-primary"
+                  : "text-primary/55 hover:text-primary/90 dark:text-primary/50 dark:hover:text-primary/85",
               )}
             >
               <span className="inline-flex items-center gap-2">
                 <span
                   className={cn(
-                    "h-1 w-1 shrink-0 rounded-full transition-colors",
-                    active ? "bg-primary" : "bg-muted-foreground/35",
+                    "shrink-0 rounded-full transition-all duration-300",
+                    active
+                      ? "h-1.5 w-1.5 bg-primary shadow-[0_0_10px_hsl(var(--primary)/0.65)]"
+                      : "h-1 w-1 bg-primary/30",
                   )}
                   aria-hidden
                 />

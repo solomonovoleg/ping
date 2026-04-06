@@ -1,4 +1,4 @@
-import { Copy, Settings, UserCheck, UserX } from "lucide-react";
+import { Copy, Settings, UserCheck, UserX, Flag } from "lucide-react";
 import { userProfileRu } from "../i18n.ru";
 
 export function UserProfileMoreSheet({
@@ -7,6 +7,7 @@ export function UserProfileMoreSheet({
   isMe,
   onCopyLink,
   onOpenSettings,
+  onReportUser,
   onBlockUser,
   isBlockedByMe,
   onUnblockUser,
@@ -16,6 +17,8 @@ export function UserProfileMoreSheet({
   isMe: boolean;
   onCopyLink: () => void;
   onOpenSettings: () => void;
+  /** Чужой профиль: жалоба (store-moderation block-01) */
+  onReportUser?: () => void;
   /** Чужой профиль: открыть сценарий блокировки */
   onBlockUser?: () => void;
   /** Вы заблокировали этого пользователя */
@@ -33,7 +36,7 @@ export function UserProfileMoreSheet({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-[480px] rounded-2xl border border-border bg-background p-3 shadow-xl"
+        className="uix-responsive-max-w rounded-2xl border border-border bg-background p-3 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -59,7 +62,21 @@ export function UserProfileMoreSheet({
             <Settings className="h-4 w-4 shrink-0" aria-hidden />
             {m.settings}
           </button>
-        ) : isBlockedByMe && onUnblockUser ? (
+        ) : null}
+        {!isMe && onReportUser ? (
+          <button
+            type="button"
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-secondary min-h-[var(--uix-touch-min)]"
+            onClick={() => {
+              onClose();
+              requestAnimationFrame(() => onReportUser());
+            }}
+          >
+            <Flag className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            {m.reportUser}
+          </button>
+        ) : null}
+        {!isMe && isBlockedByMe && onUnblockUser ? (
           <button
             type="button"
             className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium hover:bg-secondary min-h-[var(--uix-touch-min)]"
@@ -71,7 +88,8 @@ export function UserProfileMoreSheet({
             <UserCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
             {m.unblockUser}
           </button>
-        ) : onBlockUser ? (
+        ) : null}
+        {!isMe && !isBlockedByMe && onBlockUser ? (
           <button
             type="button"
             className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-destructive hover:bg-destructive/10 min-h-[var(--uix-touch-min)]"

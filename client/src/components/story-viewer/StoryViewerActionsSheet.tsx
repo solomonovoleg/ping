@@ -1,4 +1,4 @@
-import { Share2, Archive, Trash2, Pin } from "lucide-react";
+import { Share2, Archive, Trash2, Pin, Flag } from "lucide-react";
 
 export function StoryViewerActionsSheet({
   open,
@@ -16,6 +16,9 @@ export function StoryViewerActionsSheet({
   onRequestDeleteConfirm,
   onCancelDeleteConfirm,
   onConfirmDelete,
+  showReport,
+  onReport,
+  reportLabel,
 }: {
   open: boolean;
   onDismiss: () => void;
@@ -32,6 +35,10 @@ export function StoryViewerActionsSheet({
   onRequestDeleteConfirm: () => void;
   onCancelDeleteConfirm: () => void;
   onConfirmDelete: () => void;
+  /** Чужая сториз: жалоба (блок 1 — store-moderation). */
+  showReport?: boolean;
+  onReport?: () => void;
+  reportLabel?: string;
 }) {
   if (!open) return null;
 
@@ -44,7 +51,7 @@ export function StoryViewerActionsSheet({
       }}
     >
       <div
-        className="mx-auto w-full max-w-[480px] rounded-t-[24px] border border-white/10 bg-[rgba(10,8,24,0.97)] p-2 text-white shadow-2xl backdrop-blur-xl"
+        className="w-full uix-responsive-max-w rounded-t-[24px] border border-white/10 bg-[rgba(10,8,24,0.97)] p-2 text-white shadow-2xl backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -56,6 +63,21 @@ export function StoryViewerActionsSheet({
           <Share2 className="h-4 w-4" />
           Поделиться сториз
         </button>
+        {showReport && onReport ? (
+          <button
+            type="button"
+            className="flex w-full min-h-[var(--uix-touch-min)] items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-amber-200/95 hover:bg-white/10"
+            aria-label={reportLabel ?? "Пожаловаться на сториз"}
+            onClick={() => {
+              onReport();
+              onDismiss();
+            }}
+            disabled={actionsBusy}
+          >
+            <Flag className="h-4 w-4" aria-hidden />
+            {reportLabel ?? "Пожаловаться"}
+          </button>
+        ) : null}
         {showAddToPinned ? (
           <button
             type="button"

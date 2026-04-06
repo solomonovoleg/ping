@@ -2,6 +2,7 @@ import { getEdgePool } from "../db/pool.js";
 import { ensureEdgeCampaign, findCampaignByPublicId } from "../companion/repo.js";
 import { ensureParticipant } from "../participant/participant-repo.js";
 import { reconcileCharacterDecay } from "../participant/decay-sync.js";
+import { effectiveLeaderboardXpFrozen } from "../participant/leaderboard-draw-freeze.js";
 import {
   applyTaskXpToParticipant,
   getParticipantState,
@@ -62,17 +63,27 @@ export async function applyTaskReward(
   const c0 = await reconcileCharacterDecay(p.id);
   if (!c0) return null;
 
+  const now = new Date();
+  if (
+    xpDelta !== 0 &&
+    effectiveLeaderboardXpFrozen(campaign, "secondary", now)
+  ) {
+    const state = await getParticipantState(edgeId, platformUserId);
+    if (!state) return null;
+    return { awarded: false, xpDelta: 0, taskKey, state, denyReason: "leaderboard_frozen" };
+  }
+
   const inserted = await tryInsertTaskGrant(edgeId, platformUserId, taskKey, refKey, xpDelta);
   if (inserted === null) return null;
 
-  const now = new Date();
   if (!inserted) {
     const state = await getParticipantState(edgeId, platformUserId);
     if (!state) return null;
     return { awarded: false, xpDelta: 0, taskKey, state, denyReason: "already_claimed" };
   }
 
-  const c1 = await applyTaskXpToParticipant(p.id, xpDelta, now);
+  /** Встроенные ключи — действия в ленте / подписка; очки идут в дополнительный рейтинг. */
+  const c1 = await applyTaskXpToParticipant(campaign, p.id, xpDelta, now, "secondary");
   if (!c1) return null;
 
   const state = await getParticipantState(edgeId, platformUserId);

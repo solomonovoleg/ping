@@ -33,12 +33,12 @@ export function OfflineBanner() {
 
   return (
     <div
-      className="fixed top-0 left-0 right-0 z-[300] flex items-center justify-center gap-2 py-2.5 px-4 bg-destructive text-destructive-foreground text-sm font-medium shadow-md"
-      style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
+      className="fixed left-0 right-0 top-0 z-[300] flex items-center justify-center gap-1.5 border-b border-destructive/25 bg-destructive/95 px-3 py-1.5 text-xs font-medium text-destructive-foreground shadow-sm"
+      style={{ paddingTop: "max(0.25rem, env(safe-area-inset-top))" }}
       role="status"
       aria-live="polite"
     >
-      <WifiOff className="w-4 h-4 flex-shrink-0" aria-hidden />
+      <WifiOff className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
       <span>Нет подключения к интернету</span>
     </div>
   );

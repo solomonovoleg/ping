@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { ChevronLeft, MessageSquare, MoreVertical, Send, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -8,7 +8,21 @@ import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useAiChat } from "@/features/chat/hooks/useAiChat";
 import { formatMessageTime } from "@/features/chat/utils/format";
 import { useChatSpacingPreset } from "./useChatSpacingPreset";
+import { useTouchEdgeNavigationEnabled } from "@/hooks/use-touch-edge-swipe";
+import { useChatEdgeSwipeBack } from "@/features/chat/hooks/useChatEdgeSwipeBack";
+import { triggerLightHaptic } from "@/lib/capacitor-native";
 import type { AiMemorySearchPayloadV1 } from "@/lib/ai-chat";
+import { acceptAiDisclosure, hasAcceptedAiDisclosure } from "@/lib/ai-disclosure";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 function AiMemorySearchAttachment({
   payload,
@@ -79,6 +93,20 @@ function AiMemorySearchAttachment({
 /** Экран чата с ИИ (AI OVER): список сообщений, ввод текста, подгрузка контекста */
 export function AiChatView() {
   const [, setLocation] = useLocation();
+  const [aiDisclosureOpen, setAiDisclosureOpen] = useState(() => !hasAcceptedAiDisclosure("ai_chat"));
+  const touchEdgeNavEnabled = useTouchEdgeNavigationEnabled();
+  const aiChatSwipeSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const goBackToChats = useCallback(() => {
+    void triggerLightHaptic();
+    setLocation("/");
+  }, [setLocation]);
+  useChatEdgeSwipeBack({
+    enabled: touchEdgeNavEnabled,
+    blocked: false,
+    onBack: goBackToChats,
+    surfaceRef: aiChatSwipeSurfaceRef,
+    surfaceGeneration: 1,
+  });
   const openChatMessage = (chatId: string, messageId: string) => {
     setLocation(`/chat/${encodeURIComponent(chatId)}?messageId=${encodeURIComponent(messageId)}`);
   };
@@ -88,6 +116,7 @@ export function AiChatView() {
   const spacing = useChatSpacingPreset();
 
   const handleSend = async () => {
+    if (aiDisclosureOpen) return;
     const text = input.trim();
     if (!text || ai.sending) return;
     setInput("");
@@ -96,7 +125,10 @@ export function AiChatView() {
   };
 
   return (
-    <div className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-background pb-[var(--uix-chat-bottom-pad)] uix-screen">
+    <div
+      ref={aiChatSwipeSurfaceRef}
+      className="absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden bg-background pb-[var(--uix-chat-bottom-pad)] uix-screen"
+    >
       <header
         className={cn(
           "uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center justify-between rounded-[20px] border border-border bg-background pt-safe-offset-2 shadow-sm dark:border-border",
@@ -180,6 +212,7 @@ export function AiChatView() {
               {ai.messages.map((msg) => (
                 <div key={msg.id} className={cn("flex flex-col max-w-[85%] gap-1.5", msg.role === "user" ? "ml-auto items-end" : "items-start")}>
                   <div
+                    data-chat-swipe-back-ignore
                     className={cn(
                       "relative rounded-2xl px-5 py-4 text-[15px] leading-relaxed",
                       msg.role === "user"
@@ -228,12 +261,12 @@ export function AiChatView() {
               placeholder="Введите сообщение..."
               className="min-h-[44px] max-h-28 w-full resize-none bg-transparent px-3 py-2 text-base md:text-[15px] text-foreground outline-none placeholder:text-slate-400"
               rows={1}
-              disabled={ai.sending}
+              disabled={ai.sending || aiDisclosureOpen}
             />
             <TapScaleButton
               type="button"
               onClick={handleSend}
-              disabled={!input.trim() || ai.sending}
+              disabled={!input.trim() || ai.sending || aiDisclosureOpen}
               haptic
               className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-600 to-indigo-400 text-white shadow-lg shadow-indigo-500/20 transition-all hover:brightness-110 disabled:opacity-50"
               aria-label="Отправить в AI чат"
@@ -243,6 +276,44 @@ export function AiChatView() {
           </div>
         </div>
       </section>
+
+      <AlertDialog
+        open={aiDisclosureOpen}
+        onOpenChange={(open) => {
+          if (!open && !hasAcceptedAiDisclosure("ai_chat")) return;
+          setAiDisclosureOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>AI-чат и обработка данных</AlertDialogTitle>
+            <AlertDialogDescription>
+              Для ответа AI-чат отправляет введённый вами текст и контекст диалога на внешний AI-провайдер (OpenRouter).
+              Не вводите чувствительные данные, если не хотите передавать их на внешнюю обработку.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={(e) => {
+                e.preventDefault();
+                setAiDisclosureOpen(false);
+                setLocation("/");
+              }}
+            >
+              Выйти из AI-чата
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                acceptAiDisclosure("ai_chat");
+                setAiDisclosureOpen(false);
+              }}
+            >
+              Понятно, продолжить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

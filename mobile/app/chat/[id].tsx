@@ -63,7 +63,7 @@ export default function ChatScreen() {
       const [c, m] = await Promise.all([getChat(id), getMessages(id)]);
       setChat(c);
       setMessages(m);
-      const skipReadAdvance = new Set(["system", "missed_call"]);
+      const skipReadAdvance = new Set(["system"]);
       const uid = user?.id ?? null;
       const lastIncoming = [...m].reverse().find(
         (msg) =>

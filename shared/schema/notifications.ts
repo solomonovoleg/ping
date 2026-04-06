@@ -2,7 +2,19 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./users";
 
-export const NOTIFICATION_TYPES = ["mention", "comment", "reaction", "follow"] as const;
+export const NOTIFICATION_TYPES = [
+  "mention",
+  "comment",
+  "comment_reply",
+  "reaction",
+  "follow",
+  "push_post",
+  "push_subscribe",
+  "push_reply",
+  "business_status_approved",
+  "business_status_rejected",
+  "business_status_revision",
+] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 /** Уведомления пользователя (упоминания, комментарии, реакции, подписки) */
@@ -13,6 +25,7 @@ export const notifications = pgTable("notifications", {
   actorId: varchar("actor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   postId: varchar("post_id"),
   commentId: varchar("comment_id"),
+  storyId: varchar("story_id"),
   /** Краткий текст для превью */
   excerpt: text("excerpt"),
   readAt: timestamp("read_at", { withTimezone: true, mode: "date" }),

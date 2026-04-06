@@ -36,18 +36,27 @@ npm run deploy
 
 В **`deploy.env`** для EDGE должны быть **`EDGE_DATABASE_URL`**, **`EDGE_UPSTREAM_URL`**, **`EDGE_SERVICE_SECRET`** (и при PM2 — **`EDGE_PM2_ENABLED=1`**), иначе миграции EDGE не запустятся или платформа не достучится до микросервиса.
 
-### Staging на том же VPS
+### Тест / staging (без ручного переноса ключей)
 
-Отдельная папка, порт, БД и имя PM2 — иначе staging перезапишет production.
+**`npm run deploy:test`** сначала читает **`deploy.env`** (всё как для прода: S3, TURN, New-Tel, FCM, секреты EDGE/парсера и т.д.), затем **`deploy.test.env`** и **перезаписывает только то, что в тестовом файле** — папка на VPS, порт, **тестовая `DATABASE_URL`**, домен в **`VITE_*`**, порты Пингок/EDGE/парсера. Второй файл **не должен** содержать пустых `export S3_*=` — иначе затрутся значения из `deploy.env`.
 
-| Переменная | Пример staging |
-|------------|----------------|
-| `VPS_PATH` | `/var/www/ping-moot-staging` |
-| `PORT` | `3081` |
-| `PM2_APP_NAME` | `ping-moot-staging` |
-| `DATABASE_URL` | `postgresql://ping_moot_staging:…@localhost:5432/ping_moot_staging` |
+**Поток для чайника:**
 
-На сервере: отдельный пользователь и БД PostgreSQL, nginx (если нужен) — прокси на `127.0.0.1:3081`. Удобно держать второй файл, например `deploy.staging.env`, и перед деплоем `cp deploy.staging.env deploy.env` или вызывать скрипт с подстановкой переменных.
+1. Один раз заполни **`deploy.env`** так же, как для рабочего прод-деплоя (все ключи в одном месте).
+2. **`npm run deploy:test`** (или `npm run deploy:test:init`): если нет `deploy.test.env`, скрипт **создаст его из `deploy.test.env.example`** и остановится с подсказкой.
+3. Открой **`deploy.test.env`** и исправь **только** строки **`DATABASE_URL`** / **`EDGE_DATABASE_URL`** (пароль тестовой БД на VPS) и при необходимости замени **pingdepo.ru** на свой тестовый домен.
+4. Снова **`npm run deploy:test`** — на сервер уйдёт полный `.env` (база + тестовый слой).
+
+Отдельная папка, порт, БД и имя PM2 на VPS — иначе тест перезапишет production.
+
+| Переменная | Пример теста (как в шаблоне) |
+|------------|------------------------------|
+| `VPS_PATH` | `/var/www/ping-moot-test` |
+| `PORT` | `5550` |
+| `PM2_APP_NAME` | `ping-moot-test` |
+| `DATABASE_URL` | `postgresql://ping_moot_test:…@localhost:5432/ping_moot_test` |
+
+Альтернатива: второй файл `deploy.staging.env` и перед деплоем `cp deploy.staging.env deploy.env` и обычный `npm run deploy` — или `DEPLOY_ENV_FILE=deploy.staging.env bash scripts/deploy.sh`.
 
 ---
 

@@ -8,6 +8,9 @@ on:
       - ".github/workflows/deploy.yml"
       - "client/**"
       - "server/**"
+      - "EDGE/**"
+      - "PARSER/**"
+      - "ПИНГОК МИКРО/**"
       - "shared/**"
       - "scripts/**"
       - "migrations/**"
@@ -42,6 +45,9 @@ jobs:
           filters: |
             server:
               - "server/**"
+              - "EDGE/**"
+              - "PARSER/**"
+              - "ПИНГОК МИКРО/**"
               - "shared/**"
               - "scripts/**"
               - "migrations/**"
@@ -74,6 +80,39 @@ jobs:
       DEPLOY_REMOTE_DIR: ${{ secrets.DEPLOY_REMOTE_DIR }}
       DEPLOY_APP_PORT: ${{ secrets.DEPLOY_APP_PORT }}
       DEPLOY_PM2_APP_NAME: ${{ secrets.DEPLOY_PM2_APP_NAME }}
+      EDGE_UPSTREAM_URL: ${{ secrets.EDGE_UPSTREAM_URL }}
+      EDGE_SERVICE_SECRET: ${{ secrets.EDGE_SERVICE_SECRET }}
+      EDGE_DATABASE_URL: ${{ secrets.EDGE_DATABASE_URL }}
+      EDGE_PROXY_TIMEOUT_MS: ${{ secrets.EDGE_PROXY_TIMEOUT_MS }}
+      EDGE_PORT: ${{ secrets.EDGE_PORT }}
+      EDGE_BIND: ${{ secrets.EDGE_BIND }}
+      EDGE_PG_POOL_MAX: ${{ secrets.EDGE_PG_POOL_MAX }}
+      EDGE_PM2_ENABLED: ${{ secrets.EDGE_PM2_ENABLED }}
+      EDGE_PM2_NAME: ${{ secrets.EDGE_PM2_NAME }}
+      PINGOK_MICRO_PORT: ${{ secrets.PINGOK_MICRO_PORT }}
+      PINGOK_MICRO_CORS_ORIGIN: ${{ secrets.PINGOK_MICRO_CORS_ORIGIN }}
+      PINGOK_MICRO_PARSE_PER_MIN: ${{ secrets.PINGOK_MICRO_PARSE_PER_MIN }}
+      PINGOK_MICRO_PM2_ENABLED: ${{ secrets.PINGOK_MICRO_PM2_ENABLED }}
+      PINGOK_PM2_NAME: ${{ secrets.PINGOK_PM2_NAME }}
+      PARSER_UPSTREAM_URL: ${{ secrets.PARSER_UPSTREAM_URL }}
+      PARSER_PROXY_TIMEOUT_MS: ${{ secrets.PARSER_PROXY_TIMEOUT_MS }}
+      PARSER_SERVICE_SECRET: ${{ secrets.PARSER_SERVICE_SECRET }}
+      PARSER_PLATFORM_URL: ${{ secrets.PARSER_PLATFORM_URL }}
+      PARSER_PORT: ${{ secrets.PARSER_PORT }}
+      PARSER_BIND: ${{ secrets.PARSER_BIND }}
+      PARSER_DATABASE_URL: ${{ secrets.PARSER_DATABASE_URL }}
+      VK_PARSER_TOKEN_KEY: ${{ secrets.VK_PARSER_TOKEN_KEY }}
+      PARSER_PM2_ENABLED: ${{ secrets.PARSER_PM2_ENABLED }}
+      PARSER_PM2_NAME: ${{ secrets.PARSER_PM2_NAME }}
+      FEED_WORKER_PM2_ENABLED: ${{ secrets.FEED_WORKER_PM2_ENABLED }}
+      FEED_WORKER_PM2_NAME: ${{ secrets.FEED_WORKER_PM2_NAME }}
+      FEED_WORKER_INTERVAL_SEC: ${{ secrets.FEED_WORKER_INTERVAL_SEC }}
+      API_HUB_SERVICE_SECRET: ${{ secrets.API_HUB_SERVICE_SECRET }}
+      API_HUB_BRIDGE_URL: ${{ secrets.API_HUB_BRIDGE_URL }}
+      API_HUB_BRIDGE_SECRET: ${{ secrets.API_HUB_BRIDGE_SECRET }}
+      API_HUB_BRIDGE_MAX_ATTEMPTS: ${{ secrets.API_HUB_BRIDGE_MAX_ATTEMPTS }}
+      API_HUB_BRIDGE_RETRY_BASE_MS: ${{ secrets.API_HUB_BRIDGE_RETRY_BASE_MS }}
+      API_HUB_BRIDGE_TIMEOUT_MS: ${{ secrets.API_HUB_BRIDGE_TIMEOUT_MS }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,11 +165,115 @@ jobs:
 
           rsync -az --delete \
             -e "sshpass -e ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
-            dist/index.cjs dist/seed-admin.cjs dist/seed-first-user.cjs \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/"
+            --exclude "public/" \
+            dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/dist/"
+
+      - name: Sync microservices env on server
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+          APP_PORT="${DEPLOY_APP_PORT:-3080}"
+          APP_NAME="${DEPLOY_PM2_APP_NAME:-ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+          MICRO_ENV_FILE="$(mktemp)"
+          trap 'rm -f "$MICRO_ENV_FILE"' EXIT
+
+          append_if_set() {
+            local key="$1"
+            local value="${!key:-}"
+            if [ -n "$value" ]; then
+              printf "%s=%s\n" "$key" "$value" >> "$MICRO_ENV_FILE"
+            fi
+          }
+
+          for key in \
+            EDGE_UPSTREAM_URL EDGE_SERVICE_SECRET EDGE_DATABASE_URL EDGE_PROXY_TIMEOUT_MS EDGE_PORT EDGE_BIND EDGE_PG_POOL_MAX EDGE_PM2_ENABLED EDGE_PM2_NAME \
+            PINGOK_MICRO_PORT PINGOK_MICRO_CORS_ORIGIN PINGOK_MICRO_PARSE_PER_MIN PINGOK_MICRO_PM2_ENABLED PINGOK_PM2_NAME \
+            PARSER_UPSTREAM_URL PARSER_PROXY_TIMEOUT_MS PARSER_SERVICE_SECRET PARSER_PLATFORM_URL PARSER_PORT PARSER_BIND PARSER_DATABASE_URL VK_PARSER_TOKEN_KEY PARSER_PM2_ENABLED PARSER_PM2_NAME \
+            FEED_WORKER_PM2_ENABLED FEED_WORKER_PM2_NAME FEED_WORKER_INTERVAL_SEC \
+            API_HUB_SERVICE_SECRET API_HUB_BRIDGE_URL API_HUB_BRIDGE_SECRET API_HUB_BRIDGE_MAX_ATTEMPTS API_HUB_BRIDGE_RETRY_BASE_MS API_HUB_BRIDGE_TIMEOUT_MS
+          do
+            append_if_set "$key"
+          done
+
+          if [ ! -s "$MICRO_ENV_FILE" ]; then
+            echo "No optional microservice secrets are set, skipping .env patch."
+          else
+            sshpass -e scp -P "${SSH_PORT}" -o StrictHostKeyChecking=no "$MICRO_ENV_FILE" \
+              "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/.micro-secrets.env"
+
+            sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+              "cd ${REMOTE_DIR} && touch .env && while IFS='=' read -r key value; do \
+                [ -z \"\$key\" ] && continue; \
+                escaped=\$(printf '%s' \"\$value\" | sed 's/[\\/&]/\\\\&/g'); \
+                if grep -q \"^\${key}=\" .env; then \
+                  sed -i.bak \"s|^\${key}=.*|\${key}=\${escaped}|\" .env; \
+                else \
+                  printf '%s=%s\n' \"\$key\" \"\$value\" >> .env; \
+                fi; \
+              done < .micro-secrets.env && rm -f .micro-secrets.env"
+          fi
 
           sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "cd ${REMOTE_DIR} && PORT=${APP_PORT} PM2_APP_NAME='${APP_NAME}' bash scripts/server-setup.sh"
+
+      - name: Verify microservices health on server
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/var/www/ping-moot}"
+
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ] || [ -z "${DEPLOY_PASSWORD:-}" ]; then
+            echo "Set DEPLOY_HOST, DEPLOY_USER, DEPLOY_PASSWORD in GitHub Secrets"
+            exit 1
+          fi
+
+          export SSHPASS="${DEPLOY_PASSWORD}"
+          sshpass -e ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd ${REMOTE_DIR} && \
+             set -euo pipefail; \
+             read_env(){ \
+               key=\"\$1\"; \
+               line=\$(grep -E \"^\${key}=\" .env 2>/dev/null | tail -1 || true); \
+               line=\${line#\${key}=}; \
+               line=\${line%\\\"}; line=\${line#\\\"}; \
+               line=\${line%\\'}; line=\${line#\\'}; \
+               printf '%s' \"\$line\"; \
+             }; \
+             EDGE_ENABLED=\$(read_env EDGE_PM2_ENABLED); \
+             EDGE_NAME=\$(read_env EDGE_PM2_NAME); \
+             EDGE_PORT_VAL=\$(read_env EDGE_PORT); \
+             [ -z \"\$EDGE_NAME\" ] && EDGE_NAME='ping-moot-edge'; \
+             [ -z \"\$EDGE_PORT_VAL\" ] && EDGE_PORT_VAL='3092'; \
+             if [ \"\$EDGE_ENABLED\" = '1' ]; then pm2 describe \"\$EDGE_NAME\" >/dev/null; curl -fsS --max-time 5 \"http://127.0.0.1:\${EDGE_PORT_VAL}/v1/health\" >/dev/null; fi; \
+             PARSER_ENABLED=\$(read_env PARSER_PM2_ENABLED); \
+             PARSER_NAME=\$(read_env PARSER_PM2_NAME); \
+             PARSER_PORT_VAL=\$(read_env PARSER_PORT); \
+             [ -z \"\$PARSER_NAME\" ] && PARSER_NAME='ping-moot-parser'; \
+             [ -z \"\$PARSER_PORT_VAL\" ] && PARSER_PORT_VAL='3093'; \
+             if [ \"\$PARSER_ENABLED\" = '1' ]; then pm2 describe \"\$PARSER_NAME\" >/dev/null; curl -fsS --max-time 5 \"http://127.0.0.1:\${PARSER_PORT_VAL}/v1/health\" >/dev/null; fi; \
+             PINGOK_ENABLED=\$(read_env PINGOK_MICRO_PM2_ENABLED); \
+             PINGOK_NAME=\$(read_env PINGOK_PM2_NAME); \
+             PINGOK_PORT_VAL=\$(read_env PINGOK_MICRO_PORT); \
+             [ -z \"\$PINGOK_NAME\" ] && PINGOK_NAME='pingok-micro'; \
+             [ -z \"\$PINGOK_PORT_VAL\" ] && PINGOK_PORT_VAL='3091'; \
+             if [ \"\$PINGOK_ENABLED\" != '0' ]; then pm2 describe \"\$PINGOK_NAME\" >/dev/null; curl -fsS --max-time 5 \"http://127.0.0.1:\${PINGOK_PORT_VAL}/health\" >/dev/null; fi; \
+             FEED_WORKER_ENABLED=\$(read_env FEED_WORKER_PM2_ENABLED); \
+             FEED_WORKER_NAME=\$(read_env FEED_WORKER_PM2_NAME); \
+             [ -z \"\$FEED_WORKER_NAME\" ] && FEED_WORKER_NAME='ping-moot-feed-worker'; \
+             if [ \"\$FEED_WORKER_ENABLED\" = '1' ]; then pm2 describe \"\$FEED_WORKER_NAME\" >/dev/null; fi; \
+             echo 'Microservices health checks passed.'"
 
   deploy-client:
     runs-on: ubuntu-latest

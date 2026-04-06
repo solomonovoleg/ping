@@ -14,6 +14,7 @@ type Props = {
   timeFromClientX: (clientX: number) => number;
   setRange: (s: number, e: number) => void;
   seekToStart: () => void;
+  previewCurrentRange: () => void;
   onPointerDownHandle: (kind: "L" | "R" | "M", e: ReactPointerEvent<HTMLElement>) => void;
 };
 
@@ -29,6 +30,7 @@ export function PostVideoTrimmerTimeline({
   timeFromClientX,
   setRange,
   seekToStart,
+  previewCurrentRange,
   onPointerDownHandle,
 }: Props) {
   const selectionLen = Math.max(0, endSec - startSec);
@@ -50,6 +52,7 @@ export function PostVideoTrimmerTimeline({
           let s = t - len / 2;
           setRange(s, s + len);
           seekToStart();
+          previewCurrentRange();
         }}
       >
         <div

@@ -1,7 +1,7 @@
 /**
  * Очередь исходящих сообщений офлайн: текст и голос → IndexedDB, отправка при появлении сети.
  */
-import { sendMessage, uploadVoice, ChatRequestError, type ChatMessage } from "@/lib/chat";
+import { sendMessage, uploadChatMediaWithMeta, uploadVoice, ChatRequestError, type ChatMessage } from "@/lib/chat";
 import { getAuthToken } from "@/lib/api-base";
 import type { ApiMessage } from "@/features/chat/types";
 
@@ -11,6 +11,7 @@ const STORE = "items";
 
 const MAX_QUEUE_ITEMS = 80;
 const MAX_VOICE_BYTES = 4 * 1024 * 1024;
+const MAX_VIDEO_NOTE_BYTES = 64 * 1024 * 1024;
 
 export const CHAT_OUTBOX_FLUSHED = "ping:chat-outbox-flushed";
 
@@ -26,11 +27,13 @@ type OutboxRow = {
   userId: string;
   folderId?: string;
   replyToId?: string;
-  kind: "text" | "voice";
+  kind: "text" | "voice" | "video_note";
   createdAtMs: number;
   text?: string;
   voiceMime?: string;
   voiceBuffer?: ArrayBuffer;
+  videoMime?: string;
+  videoBuffer?: ArrayBuffer;
 };
 
 const objectUrlByLocalId = new Map<string, string>();
@@ -136,6 +139,33 @@ export async function enqueueOutboxVoice(params: {
   return true;
 }
 
+export async function enqueueOutboxVideoNote(params: {
+  localId: string;
+  chatId: string;
+  userId: string;
+  folderId?: string | null;
+  blob: Blob;
+}): Promise<boolean> {
+  if (params.blob.size > MAX_VIDEO_NOTE_BYTES) return false;
+  const db = await openDb();
+  if (!db) return false;
+  if ((await countAll(db)) >= MAX_QUEUE_ITEMS) return false;
+  const videoBuffer = await params.blob.arrayBuffer();
+  const row: OutboxRow = {
+    localId: params.localId,
+    chatId: params.chatId,
+    userId: params.userId,
+    folderId: params.folderId ?? undefined,
+    kind: "video_note",
+    createdAtMs: Date.now(),
+    videoMime: params.blob.type || "video/webm",
+    videoBuffer,
+  };
+  const tx = db.transaction(STORE, "readwrite");
+  await idbReq(tx.objectStore(STORE).put(row));
+  return true;
+}
+
 async function listAllRows(db: IDBDatabase): Promise<OutboxRow[]> {
   const tx = db.transaction(STORE, "readonly");
   const store = tx.objectStore(STORE);
@@ -159,7 +189,7 @@ export async function removeOutboxItem(localId: string): Promise<void> {
   await idbReq(tx.objectStore(STORE).delete(localId));
 }
 
-function registerVoiceDisplayUrl(localId: string, url: string): void {
+function registerOutboxDisplayUrl(localId: string, url: string): void {
   const prev = objectUrlByLocalId.get(localId);
   if (prev && prev !== url) {
     try {
@@ -201,12 +231,25 @@ export async function getPendingApiMessagesForChat(
     } else if (r.kind === "voice" && r.voiceBuffer) {
       const blob = new Blob([r.voiceBuffer], { type: r.voiceMime || "audio/webm" });
       const url = URL.createObjectURL(blob);
-      registerVoiceDisplayUrl(r.localId, url);
+      registerOutboxDisplayUrl(r.localId, url);
       out.push({
         id: r.localId,
         chatId,
         senderId: userId,
         type: "voice",
+        content: url,
+        createdAt: iso,
+        sendStatus: "sending",
+      });
+    } else if (r.kind === "video_note" && r.videoBuffer) {
+      const blob = new Blob([r.videoBuffer], { type: r.videoMime || "video/webm" });
+      const url = URL.createObjectURL(blob);
+      registerOutboxDisplayUrl(r.localId, url);
+      out.push({
+        id: r.localId,
+        chatId,
+        senderId: userId,
+        type: "video_note",
         content: url,
         createdAt: iso,
         sendStatus: "sending",
@@ -272,6 +315,18 @@ export async function flushChatOutbox(): Promise<void> {
           });
           await removeOutboxItem(row.localId);
           dispatchFlushed(row.chatId, row.localId, sent);
+        } else if (row.kind === "video_note" && row.videoBuffer) {
+          const blob = new Blob([row.videoBuffer], { type: row.videoMime || "video/webm" });
+          const type = blob.type || "video/webm";
+          const file = new File([blob], type.includes("mp4") ? "video-note.mp4" : "video-note.webm", { type });
+          const uploaded = await uploadChatMediaWithMeta(file);
+          const sent = await sendMessage(row.chatId, {
+            type: "video_note",
+            content: uploaded.url,
+            folderId: row.folderId,
+          });
+          await removeOutboxItem(row.localId);
+          dispatchFlushed(row.chatId, row.localId, sent);
         }
       } catch (e) {
         if (
@@ -298,6 +353,7 @@ export function ensureChatOutboxOnlineFlush(): void {
     void flushChatOutbox();
   });
   window.setInterval(() => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     if (isLikelyOnline()) void flushChatOutbox();
   }, 25_000);
 }

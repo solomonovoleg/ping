@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Heart, MoreHorizontal, Send, Share2, Volume2, VolumeX, X } from "lucide-react";
+import {
+  storyHorizontalShouldCommit,
+  storyVerticalCloseShouldCommit,
+} from "@/components/story-viewer/story-gesture-physics";
 
 interface Story {
   id: number;
@@ -68,12 +72,10 @@ const STORY_CONTENT: Record<number, { headline: string; sub: string; emoji: stri
   6: { headline: "Desert", sub: "Red dunes", emoji: "🏜️" },
 };
 
-const TAP_MOVE_MAX_PX = 10;
+const TAP_MOVE_MAX_PX = 12;
 const TAP_MAX_MS = 220;
-const H_SWIPE_START_PX = 16;
-const H_SWIPE_COMMIT_PX = 58;
-const V_SWIPE_START_PX = 14;
-const V_SWIPE_CLOSE_COMMIT_PX = 84;
+const H_SWIPE_START_PX = 12;
+const V_SWIPE_START_PX = 12;
 
 function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesViewerProps = {}) {
   const [userIdx, setUserIdx] = useState(initialMode === "other" ? 1 : 0);
@@ -87,7 +89,8 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
   const [seconds, setSeconds] = useState(0);
   const [doubleTapHeart, setDoubleTapHeart] = useState(false);
   const lastTap = useRef(0);
-  const pointerStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const pointerStartRef = useRef<{ x: number; y: number; at: number; atPerf: number } | null>(null);
+  const gestureTrackRef = useRef({ lastX: 0, lastY: 0, t: 0 });
   const pointerIntentRef = useRef<"none" | "tap" | "swipe-x" | "swipe-y">("none");
 
   const user = USERS[userIdx] ?? USERS[0];
@@ -166,7 +169,9 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
 
   const onMainPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType !== "touch") return;
-    pointerStartRef.current = { x: e.clientX, y: e.clientY, at: Date.now() };
+    const nowPerf = performance.now();
+    pointerStartRef.current = { x: e.clientX, y: e.clientY, at: Date.now(), atPerf: nowPerf };
+    gestureTrackRef.current = { lastX: e.clientX, lastY: e.clientY, t: nowPerf };
     pointerIntentRef.current = "tap";
     setPaused(true);
     try {
@@ -179,6 +184,7 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
   const onMainPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const start = pointerStartRef.current;
     if (!start) return;
+    gestureTrackRef.current = { lastX: e.clientX, lastY: e.clientY, t: performance.now() };
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
     const absX = Math.abs(dx);
@@ -186,11 +192,13 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
 
     if (pointerIntentRef.current === "tap") {
       if (absX <= TAP_MOVE_MAX_PX && absY <= TAP_MOVE_MAX_PX) return;
-      if (absY > absX && absY > V_SWIPE_START_PX) {
+      const verticalWins = absY > absX * 1.08 && absY > V_SWIPE_START_PX;
+      const horizontalWins = absX > absY * 1.04 && absX > H_SWIPE_START_PX;
+      if (verticalWins && !horizontalWins) {
         pointerIntentRef.current = "swipe-y";
         return;
       }
-      if (absX > absY && absX > H_SWIPE_START_PX) {
+      if (horizontalWins || (absX > H_SWIPE_START_PX && absX >= absY * 0.96)) {
         pointerIntentRef.current = "swipe-x";
         return;
       }
@@ -218,19 +226,58 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
     pointerIntentRef.current = "none";
 
     if (intent === "swipe-y") {
-      if (dy < -V_SWIPE_CLOSE_COMMIT_PX && absY > absX * 1.15) onClose?.();
+      const tr = gestureTrackRef.current;
+      if (storyVerticalCloseShouldCommit(dy, absX, absY, e.clientY, tr.lastY, tr.t, performance.now())) {
+        onClose?.();
+      }
       return;
     }
 
     if (intent === "swipe-x") {
-      if (absX < H_SWIPE_COMMIT_PX || absX < absY * 1.1) return;
+      if (absX < absY * 1.02) return;
+      const tr = gestureTrackRef.current;
+      if (
+        !storyHorizontalShouldCommit(
+          start.x,
+          e.clientX,
+          tr.lastX,
+          tr.t,
+          performance.now(),
+          start.atPerf,
+        )
+      )
+        return;
       if (dx < 0) goNextUser();
       else goPrevUser();
       return;
     }
 
+    if (intent === "none" || intent === "tap") {
+      if (absX >= absY * 1.04) {
+        const tr = gestureTrackRef.current;
+        if (
+          storyHorizontalShouldCommit(
+            start.x,
+            e.clientX,
+            tr.lastX,
+            tr.t,
+            performance.now(),
+            start.atPerf,
+          )
+        ) {
+          if (dx < 0) goNextUser();
+          else goPrevUser();
+          return;
+        }
+      }
+    }
+
     if (absX > TAP_MOVE_MAX_PX || absY > TAP_MOVE_MAX_PX) return;
-    if (heldMs > TAP_MAX_MS) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xTap = e.clientX - rect.left;
+    const inEdgeTapZone = xTap <= rect.width * 0.34 || xTap >= rect.width * 0.66;
+    if (!inEdgeTapZone && heldMs > TAP_MAX_MS) return;
 
     const now = Date.now();
     if (now - lastTap.current < 280) {
@@ -242,13 +289,13 @@ function MobileStoriesViewerComponent({ initialMode = "own", onClose }: StoriesV
     }
     lastTap.current = now;
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    if (x <= rect.width * 0.32) {
+    const x = xTap;
+    const third = 1 / 3;
+    if (x <= rect.width * third) {
       goPrev();
       return;
     }
-    if (x >= rect.width * 0.68) goNext();
+    if (x >= rect.width * (1 - third)) goNext();
   };
 
   const onMainPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {

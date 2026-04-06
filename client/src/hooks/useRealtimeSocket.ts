@@ -1,7 +1,7 @@
-import { useRef, useEffect, type MutableRefObject } from "react";
-import { RealtimeSocketTransport } from "@/lib/realtime-socket-transport";
+import { useRef, useEffect, useState, type MutableRefObject } from "react";
+import { RealtimeSocketTransport, type RealtimeLinkState } from "@/lib/realtime-socket-transport";
 
-export type { ChatMessagePayload } from "@/lib/realtime-socket-transport";
+export type { ChatMessagePayload, RealtimeLinkState } from "@/lib/realtime-socket-transport";
 
 export type UseRealtimeSocketOptions = {
   userId: string | undefined;
@@ -25,6 +25,10 @@ export function useRealtimeSocket({
   onSocketConnectedRef,
 }: UseRealtimeSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
+  const linkStateNotifierRef = useRef<(state: RealtimeLinkState) => void>(() => {});
+  const [realtimeLinkState, setRealtimeLinkState] = useState<RealtimeLinkState>("idle");
+  linkStateNotifierRef.current = setRealtimeLinkState;
+
   const transportRef = useRef<RealtimeSocketTransport | null>(null);
   if (!transportRef.current) {
     transportRef.current = new RealtimeSocketTransport({
@@ -32,15 +36,22 @@ export function useRealtimeSocket({
       callMessageHandlerRef,
       onSocketDisconnectedRef,
       onSocketConnectedRef,
+      linkStateNotifierRef,
     });
   }
   const transport = transportRef.current;
 
   useEffect(() => {
+    if (!userId) {
+      setRealtimeLinkState("idle");
+      transport.clearOpenThreadChatIds();
+      return;
+    }
     return transport.startBackgroundConnection(userId, refetchAuth);
   }, [transport, userId, refetchAuth]);
 
   return {
+    realtimeLinkState,
     wsRef,
     ensureOpenWs: transport.ensureOpenWs,
     closeWs: transport.closeWs,
@@ -51,5 +62,11 @@ export function useRealtimeSocket({
     subscribeTyping: transport.subscribeTyping,
     sendVoiceRecording: transport.sendVoiceRecording,
     subscribeVoiceRecording: transport.subscribeVoiceRecording,
+    sendComposerPulse: transport.sendComposerPulse,
+    subscribeComposerPulse: transport.subscribeComposerPulse,
+    sendMarkChatRead: transport.sendMarkChatRead,
+    sendSubscribeChatThread: transport.sendSubscribeChatThread,
+    sendUnsubscribeChatThread: transport.sendUnsubscribeChatThread,
+    clearOpenThreadChatIds: transport.clearOpenThreadChatIds,
   };
 }

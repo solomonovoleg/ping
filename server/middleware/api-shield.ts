@@ -1,29 +1,15 @@
 import type { NextFunction, Request, Response } from "express";
-import rateLimit from "express-rate-limit";
 import { getUserId } from "../auth/session";
-import { platformGetPublic } from "../admin/ops/platform.repo";
 
 const WINDOW_MS = 60_000;
 
-/**
- * Два независимых счётчика на ключ (IP / userId):
- * - **read** — только GET: высокий потолок (чат, уведомления, частые обновления как в мессенджерах).
- * - **mutation** — POST/PUT/PATCH/DELETE: умеренный потолок (спам действий).
- *
- * Один полный перезагруз SPA легко даёт 50–150 параллельных GET; за минуту несколько F5 + фоновые
- * поллинги не должны упираться в 429. Жёсткий анти-DDoS — на nginx/CDN; здесь защита от грубого перебора.
- */
-/** Неавторизованные GET: по IP (офисный NAT, мобильная сеть — общий IP у многих). */
+/** Бывшие пороги API-shield (для экрана админки / справки); лимитирование отключено. */
 const LIMIT_ANON_READ_NORMAL = 6000;
 const LIMIT_ANON_READ_STRICT = 2500;
-/** Авторизованные GET: по userId. */
 const LIMIT_AUTH_READ_NORMAL = 12000;
 const LIMIT_AUTH_READ_STRICT = 6000;
-
-/** Неавторизованные мутации: по IP. */
 const LIMIT_ANON_MUTATION_NORMAL = 4000;
 const LIMIT_ANON_MUTATION_STRICT = 1500;
-/** Авторизованные мутации: по userId. */
 const LIMIT_AUTH_MUTATION_NORMAL = 8000;
 const LIMIT_AUTH_MUTATION_STRICT = 4000;
 
@@ -33,25 +19,8 @@ const buckets = new Map<
   { total: number; anonymous: number; authenticated: number; limited429: number }
 >();
 
-let strictCache = false;
-let strictCachedAt = 0;
-const STRICT_CACHE_MS = 12_000;
-
-export function invalidateApiShieldSettingsCache(): void {
-  strictCachedAt = 0;
-}
-
-async function isStrictShieldEnabled(): Promise<boolean> {
-  if (Date.now() - strictCachedAt < STRICT_CACHE_MS) return strictCache;
-  try {
-    const p = await platformGetPublic();
-    strictCache = p.strictApiShield;
-  } catch {
-    strictCache = false;
-  }
-  strictCachedAt = Date.now();
-  return strictCache;
-}
+/** После смены настроек платформы; раньше сбрасывала кеш strict shield. */
+export function invalidateApiShieldSettingsCache(): void {}
 
 function currentMinuteKey(): number {
   return Math.floor(Date.now() / 60_000);
@@ -94,89 +63,12 @@ export function apiTrafficRecordMiddleware(req: Request, _res: Response, next: N
     next();
     return;
   }
-  /** Админка не смешиваем с пользовательским трафиком — иначе полезёт в картину «боты». */
   if (path.startsWith("/api/admin")) {
     next();
     return;
   }
   recordApiTrafficHit(req);
   next();
-}
-
-function shieldSkipPath(path: string): boolean {
-  if (path === "/api/build-info" || path === "/api/time") return true;
-  if (path.startsWith("/api/auth/login") || path.startsWith("/api/auth/register")) return true;
-  if (path.startsWith("/api/platform/")) return true;
-  if (path.startsWith("/api/admin")) return true;
-  return false;
-}
-
-const SHIELD_MSG = {
-  message: "Слишком много запросов за короткое время. Подождите около минуты и обновите страницу.",
-};
-
-function createShieldHandler() {
-  return (req: Request, res: Response, _next: NextFunction, options: { statusCode: number; message: unknown }) => {
-    recordApiTraffic429();
-    res.status(options.statusCode).json(options.message);
-  };
-}
-
-/** Лимит только на GET (чтение API). */
-export function createApiShieldReadLimiter() {
-  return rateLimit({
-    windowMs: WINDOW_MS,
-    limit: async (req: Request) => {
-      const strict = await isStrictShieldEnabled();
-      const uid = getUserId(req);
-      if (uid) return strict ? LIMIT_AUTH_READ_STRICT : LIMIT_AUTH_READ_NORMAL;
-      return strict ? LIMIT_ANON_READ_STRICT : LIMIT_ANON_READ_NORMAL;
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req: Request) => {
-      const uid = getUserId(req);
-      if (uid) return `shield-read:u:${uid}`;
-      return `shield-read:ip:${req.ip ?? "unknown"}`;
-    },
-    skip: (req: Request) => {
-      const path = req.originalUrl.split("?")[0] || "";
-      if (shieldSkipPath(path)) return true;
-      if (req.method !== "GET") return true;
-      return false;
-    },
-    message: SHIELD_MSG,
-    handler: createShieldHandler(),
-  });
-}
-
-/** Лимит на POST / PUT / PATCH / DELETE. */
-export function createApiShieldMutationLimiter() {
-  return rateLimit({
-    windowMs: WINDOW_MS,
-    limit: async (req: Request) => {
-      const strict = await isStrictShieldEnabled();
-      const uid = getUserId(req);
-      if (uid) return strict ? LIMIT_AUTH_MUTATION_STRICT : LIMIT_AUTH_MUTATION_NORMAL;
-      return strict ? LIMIT_ANON_MUTATION_STRICT : LIMIT_ANON_MUTATION_NORMAL;
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req: Request) => {
-      const uid = getUserId(req);
-      if (uid) return `shield-mut:u:${uid}`;
-      return `shield-mut:ip:${req.ip ?? "unknown"}`;
-    },
-    skip: (req: Request) => {
-      const path = req.originalUrl.split("?")[0] || "";
-      if (shieldSkipPath(path)) return true;
-      const m = req.method;
-      if (m === "GET" || m === "HEAD" || m === "OPTIONS") return true;
-      return false;
-    },
-    message: SHIELD_MSG,
-    handler: createShieldHandler(),
-  });
 }
 
 export type TrafficShieldMinute = {
@@ -219,7 +111,7 @@ export function getTrafficShieldAdminPayload(): {
   const cur = buckets.get(nowKey);
   return {
     generatedAt: new Date().toISOString(),
-    strictApiShield: strictCache,
+    strictApiShield: false,
     windowMs: WINDOW_MS,
     limits: {
       read: {
@@ -241,6 +133,6 @@ export function getTrafficShieldAdminPayload(): {
     history,
     uptimeSec: Math.round(process.uptime()),
     note:
-      "Два лимита в минуту на IP или userId: отдельно GET (чтение) и отдельно POST/PUT/PATCH/DELETE. Счётчики в памяти процесса (сброс при рестарте). При атаке с множества IP — nginx / CDN.",
+      "Серверные rate-limit на /api отключены. Ниже — прежние пороги для справки; фактический strictApiShield — из настроек платформы. Анти-DDoS — nginx/CDN.",
   };
 }

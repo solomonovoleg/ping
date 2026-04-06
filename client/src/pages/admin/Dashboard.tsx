@@ -3,11 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { ru } from "date-fns/locale";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { fetchDashboardAnalytics, fetchDashboardStats } from "@/lib/admin";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { ServerProcessLiveCards, ServerProcessHistoryChart } from "@/features/admin-monitors/server-process-monitor";
+import {
+  AdminPageHeader,
+  AdminPanelCard,
+  AdminStatCard,
+  adminPageStackClass,
+} from "@/features/admin-shell";
 import { Users, UserX, UserMinus, UserPlus } from "lucide-react";
 
 const REGISTRATION_DAYS = 14;
@@ -16,7 +22,7 @@ export default function AdminDashboard() {
   const reducedMotion = usePrefersReducedMotion();
   const animate = !reducedMotion;
 
-  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useQuery({
     queryKey: ["admin", "dashboard", "stats"],
     queryFn: fetchDashboardStats,
   });
@@ -46,19 +52,19 @@ export default function AdminDashboard() {
 
   if (statsLoading) {
     return (
-      <div className="space-y-6">
-        <div className="h-8 w-32 rounded bg-muted animate-pulse" />
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+      <div className={adminPageStackClass()}>
+        <div className="h-10 w-48 animate-pulse rounded-lg bg-[hsl(var(--admin-elevated))]" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <div className="flex items-center gap-4 p-4">
-                <div className="h-10 w-10 rounded-lg bg-muted" />
+            <div key={i} className="admin-surface-card animate-pulse p-5">
+              <div className="flex gap-4">
+                <div className="h-11 w-11 shrink-0 rounded-xl bg-[hsl(var(--admin-elevated-strong))]" />
                 <div className="flex-1 space-y-2">
-                  <div className="h-4 w-24 rounded bg-muted" />
-                  <div className="h-4 w-12 rounded bg-muted" />
+                  <div className="h-4 w-24 rounded bg-[hsl(var(--admin-elevated-strong))]" />
+                  <div className="h-8 w-16 rounded bg-[hsl(var(--admin-elevated-strong))]" />
                 </div>
               </div>
-            </Card>
+            </div>
           ))}
         </div>
       </div>
@@ -67,38 +73,34 @@ export default function AdminDashboard() {
 
   if (statsError || !stats) {
     return (
-      <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Дашборд</h1>
-        <p className="text-destructive">
-          {statsError instanceof Error ? statsError.message : "Не удалось загрузить статистику"}
-        </p>
+      <div className={adminPageStackClass()}>
+        <AdminPageHeader title="Дашборд" description="Сводка по пользователям и активности" showUserChrome={false} />
+        <ErrorWithRetry
+          title="Не удалось загрузить статистику"
+          description={statsError instanceof Error ? statsError.message : "Ошибка загрузки"}
+          onRetry={() => void refetchStats()}
+          className="min-h-[220px]"
+        />
       </div>
     );
   }
 
   const cards = [
-    { title: "Всего пользователей", value: stats.total, icon: Users },
-    { title: "Заблокировано", value: stats.blocked, icon: UserX },
-    { title: "Удалено (скрыто)", value: stats.deleted, icon: UserMinus },
-    { title: "За сегодня", value: stats.registeredToday, icon: UserPlus },
+    { title: "Всего пользователей", value: stats.total, icon: Users, accent: "violet" as const },
+    { title: "Заблокировано", value: stats.blocked, icon: UserX, accent: "rose" as const },
+    { title: "Удалено (скрыто)", value: stats.deleted, icon: UserMinus, accent: "amber" as const },
+    { title: "За сегодня", value: stats.registeredToday, icon: UserPlus, accent: "emerald" as const },
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Дашборд</h1>
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-        {cards.map(({ title, value, icon: Icon }) => (
-          <Card key={title} className="overflow-hidden">
-            <div className="flex items-center gap-4 p-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <Icon className="h-5 w-5 text-muted-foreground" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm text-muted-foreground">{title}</p>
-                <p className="text-2xl font-bold tabular-nums">{value}</p>
-              </div>
-            </div>
-          </Card>
+    <div className={adminPageStackClass()}>
+      <AdminPageHeader
+        title="Дашборд"
+        description="Сводка по пользователям, нагрузке процесса и регистрациям"
+      />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map(({ title, value, icon, accent }) => (
+          <AdminStatCard key={title} label={title} value={value} icon={icon} accent={accent} />
         ))}
       </div>
 
@@ -106,26 +108,33 @@ export default function AdminDashboard() {
 
       {analyticsLoading && !analytics ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="h-72 animate-pulse bg-muted/30" />
-          <Card className="h-72 animate-pulse bg-muted/30" />
+          <div className="admin-surface-card h-72 animate-pulse bg-[hsl(var(--admin-elevated)/0.5)]" />
+          <div className="admin-surface-card h-72 animate-pulse bg-[hsl(var(--admin-elevated)/0.5)]" />
         </div>
       ) : analyticsError ? (
-        <Card className="p-4">
-          <p className="text-destructive text-sm mb-2">
-            {analyticsError instanceof Error ? analyticsError.message : "Не удалось загрузить графики"}
-          </p>
-          <Button type="button" variant="outline" size="sm" onClick={() => refetchAnalytics()}>
-            Повторить
-          </Button>
-        </Card>
+        <ErrorWithRetry
+          title="Не удалось загрузить графики"
+          description={analyticsError instanceof Error ? analyticsError.message : "Не удалось загрузить данные"}
+          onRetry={() => void refetchAnalytics()}
+          className="min-h-[220px]"
+        />
+      ) : registrationChartData.length === 0 ? (
+        <ListEmptyState
+          icon={UserPlus}
+          title="Недостаточно данных для графика"
+          description="Новые регистрации пока не поступали или аналитика ещё не успела собраться."
+          actionLabel="Повторить"
+          onAction={() => void refetchAnalytics()}
+          className="min-h-[220px]"
+        />
       ) : (
         <div className="grid gap-6 lg:grid-cols-2">
-          <Card className="p-4 pt-5">
-            <div className="flex items-center gap-2 mb-1">
-              <UserPlus className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-base font-semibold">Новые регистрации по дням</h2>
+          <AdminPanelCard className="p-4 pt-5">
+            <div className="mb-1 flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-[hsl(var(--admin-muted))]" />
+              <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Новые регистрации по дням</h2>
             </div>
-            <p className="text-xs text-muted-foreground mb-4">
+            <p className="mb-4 text-xs admin-text-muted">
               Последние {REGISTRATION_DAYS} дней (UTC), без удалённых аккаунтов
             </p>
             <div className="h-64 w-full min-h-[16rem]">
@@ -133,13 +142,21 @@ export default function AdminDashboard() {
                 <AreaChart data={registrationChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="regFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                      <stop offset="0%" stopColor="hsl(var(--admin-accent))" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="hsl(var(--admin-accent))" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-                  <YAxis allowDecimals={false} width={32} tick={{ fontSize: 11 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--admin-border))" opacity={0.5} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11, fill: "hsl(215 16% 62%)" }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    width={32}
+                    tick={{ fontSize: 11, fill: "hsl(215 16% 62%)" }}
+                  />
                   <Tooltip
                     contentStyle={{ borderRadius: 8 }}
                     formatter={(v: number) => [v, "Регистраций"]}
@@ -151,7 +168,7 @@ export default function AdminDashboard() {
                   <Area
                     type="monotone"
                     dataKey="count"
-                    stroke="hsl(var(--primary))"
+                    stroke="hsl(var(--admin-accent))"
                     fill="url(#regFill)"
                     strokeWidth={2}
                     isAnimationActive={animate}
@@ -159,7 +176,7 @@ export default function AdminDashboard() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          </Card>
+          </AdminPanelCard>
 
           <ServerProcessHistoryChart
             data={analytics?.serverMetrics.history ?? []}

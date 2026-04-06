@@ -1,9 +1,20 @@
 import type { Express, Request, Response } from "express";
 import { requireAuth, getUserId } from "../auth/session";
+import { createUserSlidingRateLimit } from "../middleware/create-user-sliding-rate-limit";
+import { parseNonNegativeIntQuery, parsePositiveIntQuery } from "../http/parse-positive-int-query";
+import { sendStoriesRouteError } from "./stories-http-error/stories-http-error";
 import * as storiesService from "./service";
 
+const STORIES_NO_STORE = "private, no-store, max-age=0";
+
 export function registerStoriesRoutes(app: Express): void {
-  app.get("/api/users/:userId/stories", async (req: Request, res: Response) => {
+  const createStoryRateLimit = createUserSlidingRateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    message: "Слишком много сторис за короткое время",
+  });
+
+  app.get("/api/users/:userId/stories", requireAuth, async (req: Request, res: Response) => {
     const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
     const viewerId = getUserId(req);
     if (!userIdParam) {
@@ -14,14 +25,13 @@ export function registerStoriesRoutes(app: Express): void {
       const list = await storiesService.listStoriesByUserIdOrPublicId(userIdParam, viewerId);
       res.json(list);
     } catch (e) {
-      console.error("Stories list error:", e);
-      res.status(500).json({ message: "Ошибка загрузки сториз" });
+      sendStoriesRouteError(res, e, "Ошибка загрузки сториз");
     }
   });
 
-  app.post("/api/stories", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/stories", requireAuth, createStoryRateLimit, async (req: Request, res: Response) => {
     const userId = getUserId(req)!;
-    const { mediaUrl, thumbnailUrl, expiresInHours } = req.body ?? {};
+    const { mediaUrl, thumbnailUrl, expiresInHours, caption } = req.body ?? {};
     const media = typeof mediaUrl === "string" ? mediaUrl.trim() : "";
     if (!media) {
       res.status(400).json({ message: "Укажите mediaUrl" });
@@ -33,12 +43,11 @@ export function registerStoriesRoutes(app: Express): void {
         media,
         typeof thumbnailUrl === "string" ? thumbnailUrl.trim() || null : null,
         expiresInHours,
+        typeof caption === "string" ? caption : null,
       );
       res.status(201).json(result);
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Create story error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось создать сториз" });
+      sendStoriesRouteError(res, e, "Не удалось создать сториз");
     }
   });
 
@@ -53,9 +62,7 @@ export function registerStoriesRoutes(app: Express): void {
       await storiesService.recordStoryView(storyId, viewerId);
       res.json({ ok: true });
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Story view error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Ошибка" });
+      sendStoriesRouteError(res, e, "Ошибка записи просмотра");
     }
   });
 
@@ -65,9 +72,7 @@ export function registerStoriesRoutes(app: Express): void {
       const list = await storiesService.listArchivedStories(userId);
       res.json(list);
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Stories archive error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось загрузить архив сториз" });
+      sendStoriesRouteError(res, e, "Не удалось загрузить архив сториз");
     }
   });
 
@@ -82,27 +87,39 @@ export function registerStoriesRoutes(app: Express): void {
       const list = await storiesService.listStoryViewers(storyId, viewerId);
       res.json(list);
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Story viewers list error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось загрузить просмотры сториз" });
+      sendStoriesRouteError(res, e, "Не удалось загрузить просмотры сториз");
     }
   });
 
   app.get("/api/stories/feed", requireAuth, async (req: Request, res: Response) => {
     const viewerId = getUserId(req)!;
-    const limitRaw = req.query.limit;
-    const offsetRaw = req.query.offset;
-    const limit = typeof limitRaw === "string" ? Number.parseInt(limitRaw, 10) : undefined;
-    const offset = typeof offsetRaw === "string" ? Number.parseInt(offsetRaw, 10) : undefined;
+    const limit = parsePositiveIntQuery(req.query.limit, 18, 40);
+    const offset = parseNonNegativeIntQuery(req.query.offset, 0, 10000);
     try {
+      res.setHeader("Cache-Control", STORIES_NO_STORE);
       const page = await storiesService.getStoriesFeedPage(viewerId, {
-        limit: Number.isFinite(limit) ? limit : undefined,
-        offset: Number.isFinite(offset) ? offset : undefined,
+        limit,
+        offset,
       });
       res.json(page);
     } catch (e) {
-      console.error("Stories feed error:", e);
-      res.status(500).json({ message: "Ошибка загрузки ленты сторис" });
+      sendStoriesRouteError(res, e, "Ошибка загрузки ленты сторис");
+    }
+  });
+
+  /** Одна сторис по id (доступ как в ленте); до динамических сегментов `…/view`, `…/likes` не дотягивается. */
+  app.get("/api/stories/:id", requireAuth, async (req: Request, res: Response) => {
+    const viewerId = getUserId(req)!;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      res.status(400).json({ message: "id required" });
+      return;
+    }
+    try {
+      const story = await storiesService.getStoryByIdForViewer(viewerId, id);
+      res.json(story);
+    } catch (e) {
+      sendStoriesRouteError(res, e, "Ошибка загрузки сториз");
     }
   });
 
@@ -117,9 +134,7 @@ export function registerStoriesRoutes(app: Express): void {
       await storiesService.deleteOwnStory(id, userId);
       res.status(204).end();
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Delete story error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось удалить сториз" });
+      sendStoriesRouteError(res, e, "Не удалось удалить сториз");
     }
   });
 
@@ -134,9 +149,7 @@ export function registerStoriesRoutes(app: Express): void {
       await storiesService.archiveOwnStory(id, userId);
       res.json({ ok: true });
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Archive story error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось архивировать сториз" });
+      sendStoriesRouteError(res, e, "Не удалось архивировать сториз");
     }
   });
 
@@ -151,9 +164,7 @@ export function registerStoriesRoutes(app: Express): void {
       const result = await storiesService.likeStory(storyId, userId);
       res.status(201).json(result);
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Story like error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось поставить лайк" });
+      sendStoriesRouteError(res, e, "Не удалось поставить лайк");
     }
   });
 
@@ -168,9 +179,7 @@ export function registerStoriesRoutes(app: Express): void {
       const result = await storiesService.unlikeStory(storyId, userId);
       res.json(result);
     } catch (e) {
-      const err = e as { status?: number; message?: string };
-      console.error("Story unlike error:", e);
-      res.status(err.status ?? 500).json({ message: err.message ?? "Не удалось убрать лайк" });
+      sendStoriesRouteError(res, e, "Не удалось убрать лайк");
     }
   });
 }

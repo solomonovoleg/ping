@@ -1,5 +1,9 @@
 import { usePulseProfileTheme } from "../pulse-profile-theme";
+import { PulseStatCounterFigures } from "./PulseStatCounterFigures";
+import { PulseStatCounterSurface } from "./PulseStatCounterSurface";
 import { useCountUp } from "./useCountUp";
+
+const STAT_COUNTER_MS = 850;
 
 export function StatCounter({
   target,
@@ -13,47 +17,10 @@ export function StatCounter({
   compact?: boolean;
 }) {
   const { th } = usePulseProfileTheme();
-  const count = useCountUp(target, 850);
-  const inner = (
-    <>
-      <span
-        style={{
-          fontSize: compact ? 15 : 21,
-          fontWeight: 800,
-          color: th.text,
-          lineHeight: 1,
-          letterSpacing: "-0.03em",
-        }}
-      >
-        {count}
-      </span>
-      <span
-        style={{
-          fontSize: compact ? 9 : 10.5,
-          color: th.text,
-          fontWeight: 400,
-          marginTop: compact ? 1 : 2,
-        }}
-      >
-        {label}
-      </span>
-    </>
-  );
-  const padClass = compact ? "py-1.5" : "py-2";
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={`flex min-h-[var(--uix-touch-min)] min-w-0 flex-1 cursor-pointer flex-col items-center justify-center ${padClass} active:opacity-90`}
-      >
-        {inner}
-      </button>
-    );
-  }
+  const count = useCountUp(target, STAT_COUNTER_MS);
   return (
-    <div className={`pointer-events-none flex min-w-0 flex-1 flex-col items-center justify-center ${padClass}`}>
-      {inner}
-    </div>
+    <PulseStatCounterSurface onClick={onClick} compact={compact}>
+      <PulseStatCounterFigures count={count} label={label} compact={compact} textColor={th.text} />
+    </PulseStatCounterSurface>
   );
 }

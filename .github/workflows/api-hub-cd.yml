@@ -1,0 +1,33 @@
+name: api-hub-cd
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "stage"
+        type: choice
+        options:
+          - stage
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm ci
+        run: npm ci
+      - name: Build API HUB
+        run: npm run build:api-hub
+      - name: Package artifact
+        run: tar -czf api-hub-${{ github.sha }}.tgz api-hub
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-hub-${{ inputs.environment }}
+          path: api-hub-${{ github.sha }}.tgz

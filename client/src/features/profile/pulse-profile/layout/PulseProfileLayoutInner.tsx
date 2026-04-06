@@ -1,14 +1,14 @@
-import { useEffect, useState } from "react";
-import { usePrefersReducedMotion } from "@/lib/motion";
 import { usePulseProfileTheme } from "../pulse-profile-theme";
-import { PULSE_PROFILE_COVER_HEIGHT_PX, PULSE_PROFILE_NAV_CONTENT_PB } from "./constants";
+import { usePrefersReducedMotion } from "@/lib/motion";
+import { PULSE_PROFILE_NAV_CONTENT_PB } from "./constants";
 import type { PulseProfileLayoutProps } from "./types";
-import { PulseProfileCoverHeader } from "./PulseProfileCoverHeader";
+import { usePulseProfileLayoutScroll } from "./hooks/usePulseProfileLayoutScroll";
+import { buildPulseProfileMetaLine } from "./pulse-profile-meta-line";
+import { PulseProfileLayoutCoverSection } from "./PulseProfileLayoutCoverSection";
+import { PulseProfileLayoutIdentityPinsSection } from "./PulseProfileLayoutIdentityPinsSection";
+import { PulseProfileLayoutTabsAndFeed } from "./PulseProfileLayoutTabsAndFeed";
 import { PulseProfileHeroCard } from "./PulseProfileHeroCard";
-import { PulseProfileIdentityBlock } from "./PulseProfileIdentityBlock";
 import { PulseProfileLayoutKeyframes } from "./PulseProfileLayoutKeyframes";
-import { PulseProfilePinnedStrip } from "./PulseProfilePinnedStrip";
-import { PulseProfileTabsRow } from "./PulseProfileTabsRow";
 
 export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
   const {
@@ -20,15 +20,20 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
     onBack,
     onMore,
     usernamePill,
+    onUsernamePillPress,
     displayName,
     showVerified,
+    isBusinessApproved = false,
     idChip,
+    businessChip = null,
     genderChip,
     birthChip,
     cityChip = null,
     bio,
     linkDisplay,
     linkHref,
+    businessContactPhone = null,
+    businessAddress = null,
     postsCount,
     followersCount,
     followingCount,
@@ -62,27 +67,8 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
 
   const { th } = usePulseProfileTheme();
   const reducedMotion = usePrefersReducedMotion();
-  const [scrollY, setScrollY] = useState(0);
-
-  const metaParts: string[] = [];
-  if (idChip) metaParts.push(idChip);
-  if (genderChip) metaParts.push(genderChip);
-  if (birthChip) metaParts.push(`🎂 ${birthChip}`);
-  if (cityChip) metaParts.push(cityChip);
-  const metaLine = metaParts.join(" · ");
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const fn = () => {
-      const y = el.scrollTop;
-      if (renderCover) setScrollY(y);
-      onScrollYChange?.(y);
-    };
-    el.addEventListener("scroll", fn, { passive: true });
-    fn();
-    return () => el.removeEventListener("scroll", fn);
-  }, [scrollRef, renderCover, onScrollYChange]);
+  const scrollY = usePulseProfileLayoutScroll(scrollRef, renderCover, onScrollYChange);
+  const metaLine = buildPulseProfileMetaLine({ idChip, businessChip, genderChip, birthChip, cityChip });
 
   return (
     <div
@@ -98,19 +84,15 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
 
       <div style={{ paddingBottom: PULSE_PROFILE_NAV_CONTENT_PB }}>
         {renderCover ? (
-          <div
-            className="relative w-full shrink-0"
-            style={{ height: PULSE_PROFILE_COVER_HEIGHT_PX }}
-          >
-            <PulseProfileCoverHeader
-              coverUrl={coverUrl}
-              onCoverError={onCoverError}
-              scrollY={scrollY}
-              usernamePill={usernamePill}
-              onBack={onBack}
-              onMore={onMore}
-            />
-          </div>
+          <PulseProfileLayoutCoverSection
+            coverUrl={coverUrl}
+            onCoverError={onCoverError}
+            scrollY={scrollY}
+            usernamePill={usernamePill}
+            onUsernamePillPress={onUsernamePillPress}
+            onBack={onBack}
+            onMore={onMore}
+          />
         ) : null}
 
         <PulseProfileHeroCard
@@ -118,6 +100,7 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
           reducedMotion={reducedMotion}
           displayName={displayName}
           showVerified={showVerified}
+          isBusinessApproved={isBusinessApproved}
           metaLine={metaLine}
           avatarInner={avatarInner}
           hasStoryGradient={hasStoryGradient}
@@ -141,32 +124,27 @@ export function PulseProfileLayoutInner(props: PulseProfileLayoutProps) {
         />
 
         <div style={!renderCover ? { background: th.bg } : undefined}>
-          <PulseProfileIdentityBlock
+          <PulseProfileLayoutIdentityPinsSection
             mutualFollowers={mutualFollowers}
             bio={bio}
             linkDisplay={linkDisplay}
             linkHref={linkHref}
+            businessContactPhone={businessContactPhone}
+            businessAddress={businessAddress}
             actionRow={actionRow}
+            pinnedStrip={pinnedStrip}
+            onHighlightNew={onHighlightNew}
           />
 
-          {pinnedStrip !== undefined ? (
-            pinnedStrip
-          ) : (
-            <PulseProfilePinnedStrip onHighlightNew={onHighlightNew} />
-          )}
-
-          <PulseProfileTabsRow
+          <PulseProfileLayoutTabsAndFeed
+            postBorder={th.postBorder}
             activeTab={activeTab}
             onTabChange={onTabChange}
             postView={postView}
             onTogglePostView={onTogglePostView}
+            addContentStrip={addContentStrip}
+            postsContent={postsContent}
           />
-
-          {addContentStrip ? <div className="mx-4 mt-3 mb-1">{addContentStrip}</div> : null}
-
-          <div className="mt-3" style={{ borderTop: `1px solid ${th.postBorder}` }}>
-            {postsContent}
-          </div>
         </div>
       </div>
     </div>

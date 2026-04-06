@@ -1,20 +1,77 @@
 PODS:
-  - Capacitor (8.2.0):
+  - Capacitor (7.6.0):
     - CapacitorCordova
-  - CapacitorCamera (8.0.2):
+  - CapacitorCamera (7.0.5):
     - Capacitor
   - CapacitorCommunityContacts (7.1.0):
     - Capacitor
-  - CapacitorCommunityMedia (9.0.2):
+  - CapacitorCommunityMedia (8.0.1):
     - Capacitor
     - SDWebImage
-  - CapacitorCordova (8.2.0)
+  - CapacitorCommunityScreenBrightness (7.0.0):
+    - Capacitor
+  - CapacitorCommunitySpeechRecognition (7.0.1):
+    - Capacitor
+  - CapacitorCordova (7.6.0)
   - CapacitorHaptics (7.0.4):
     - Capacitor
-  - CapacitorPreferences (8.0.1):
+  - CapacitorPreferences (7.0.4):
     - Capacitor
-  - CapacitorPushNotifications (8.0.2):
+  - CapacitorPushNotifications (7.0.6):
     - Capacitor
+  - FirebaseCore (12.11.0):
+    - FirebaseCoreInternal (~> 12.11.0)
+    - GoogleUtilities/Environment (~> 8.1)
+    - GoogleUtilities/Logger (~> 8.1)
+  - FirebaseCoreInternal (12.11.0):
+    - "GoogleUtilities/NSData+zlib (~> 8.1)"
+  - FirebaseInstallations (12.11.0):
+    - FirebaseCore (~> 12.11.0)
+    - GoogleUtilities/Environment (~> 8.1)
+    - GoogleUtilities/UserDefaults (~> 8.1)
+    - PromisesObjC (~> 2.4)
+  - FirebaseMessaging (12.11.0):
+    - FirebaseCore (~> 12.11.0)
+    - FirebaseInstallations (~> 12.11.0)
+    - GoogleDataTransport (~> 10.1)
+    - GoogleUtilities/AppDelegateSwizzler (~> 8.1)
+    - GoogleUtilities/Environment (~> 8.1)
+    - GoogleUtilities/Reachability (~> 8.1)
+    - GoogleUtilities/UserDefaults (~> 8.1)
+    - nanopb (~> 3.30910.0)
+  - GoogleDataTransport (10.1.0):
+    - nanopb (~> 3.30910.0)
+    - PromisesObjC (~> 2.4)
+  - GoogleUtilities/AppDelegateSwizzler (8.1.0):
+    - GoogleUtilities/Environment
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Network
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Environment (8.1.0):
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Logger (8.1.0):
+    - GoogleUtilities/Environment
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Network (8.1.0):
+    - GoogleUtilities/Logger
+    - "GoogleUtilities/NSData+zlib"
+    - GoogleUtilities/Privacy
+    - GoogleUtilities/Reachability
+  - "GoogleUtilities/NSData+zlib (8.1.0)":
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Privacy (8.1.0)
+  - GoogleUtilities/Reachability (8.1.0):
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/UserDefaults (8.1.0):
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Privacy
+  - nanopb (3.30910.0):
+    - nanopb/decode (= 3.30910.0)
+    - nanopb/encode (= 3.30910.0)
+  - nanopb/decode (3.30910.0)
+  - nanopb/encode (3.30910.0)
+  - PromisesObjC (2.4.0)
   - SDWebImage (5.21.7):
     - SDWebImage/Core (= 5.21.7)
   - SDWebImage/Core (5.21.7)
@@ -24,13 +81,24 @@ DEPENDENCIES:
   - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
   - "CapacitorCommunityContacts (from `../../node_modules/@capacitor-community/contacts`)"
   - "CapacitorCommunityMedia (from `../../node_modules/@capacitor-community/media`)"
+  - "CapacitorCommunityScreenBrightness (from `../../node_modules/@capacitor-community/screen-brightness`)"
+  - "CapacitorCommunitySpeechRecognition (from `../../node_modules/@capacitor-community/speech-recognition`)"
   - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
   - "CapacitorHaptics (from `../../node_modules/@capacitor/haptics`)"
   - "CapacitorPreferences (from `../../node_modules/@capacitor/preferences`)"
   - "CapacitorPushNotifications (from `../../node_modules/@capacitor/push-notifications`)"
+  - FirebaseMessaging
 
 SPEC REPOS:
   trunk:
+    - FirebaseCore
+    - FirebaseCoreInternal
+    - FirebaseInstallations
+    - FirebaseMessaging
+    - GoogleDataTransport
+    - GoogleUtilities
+    - nanopb
+    - PromisesObjC
     - SDWebImage
 
 EXTERNAL SOURCES:
@@ -42,6 +110,10 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor-community/contacts"
   CapacitorCommunityMedia:
     :path: "../../node_modules/@capacitor-community/media"
+  CapacitorCommunityScreenBrightness:
+    :path: "../../node_modules/@capacitor-community/screen-brightness"
+  CapacitorCommunitySpeechRecognition:
+    :path: "../../node_modules/@capacitor-community/speech-recognition"
   CapacitorCordova:
     :path: "../../node_modules/@capacitor/ios"
   CapacitorHaptics:
@@ -52,16 +124,26 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/push-notifications"
 
 SPEC CHECKSUMS:
-  Capacitor: 49a454e1cdbd520bc106a220adca7913536a4933
-  CapacitorCamera: 66bb9c4ea1703a5acf2a328bac0e613d278c399c
+  Capacitor: 6e644e9e3369368ac601c77a0fad57f34b78aaa6
+  CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
   CapacitorCommunityContacts: 35c8d69a138c4019548682a2d4632350b5b94044
-  CapacitorCommunityMedia: da5c6177f2f0bc7ab88a574934914257e71cc597
-  CapacitorCordova: a9ac88d84a1f5280f33b349fe50fce1902683ac0
+  CapacitorCommunityMedia: d1538b56a3303298e7cf45a18b11e624fbcbdc8e
+  CapacitorCommunityScreenBrightness: 508f3d0f79024cd8da7d063f456870a4a1932723
+  CapacitorCommunitySpeechRecognition: 3e03566c44c2bb3b52391a33d4518b1adbdeb38f
+  CapacitorCordova: f163aa2e84b79efc54d6a75b305bc7e05fb80c5d
   CapacitorHaptics: bf3f58fc5dc7975a7ad5b7c725e5bb5bd435ae81
-  CapacitorPreferences: cca2021f386efb75947c850334447d9ff22b14f1
-  CapacitorPushNotifications: 5a1de4191a9fdbeacc84907313eede0bd59d2eb0
+  CapacitorPreferences: 69d9991307507aeab8ef8019c10b9babfda0e9ca
+  CapacitorPushNotifications: b8e30637549ce91468b8c4dddbef2657be831f4c
+  FirebaseCore: 1b39aa6e67b4b4d5771045abf9c9a57a585ff1e7
+  FirebaseCoreInternal: 26601b1134d192ef73e80c0c0110fb96477db687
+  FirebaseInstallations: 3b65e8f4faed02bad1abf5de40e8286c5b13073d
+  FirebaseMessaging: ff23938c6c1a1d0f5e22e915131d6e14c6a74b99
+  GoogleDataTransport: aae35b7ea0c09004c3797d53c8c41f66f219d6a7
+  GoogleUtilities: 00c88b9a86066ef77f0da2fab05f65d7768ed8e1
+  nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
+  PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
 
-PODFILE CHECKSUM: ffb2e5f5ae2bd21d887d8dc84c736179227cd511
+PODFILE CHECKSUM: 449e4655d3d083d41ac0faa6200ac7096ac51443
 
 COCOAPODS: 1.16.2

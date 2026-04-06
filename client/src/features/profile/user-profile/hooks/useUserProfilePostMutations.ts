@@ -16,12 +16,15 @@ export function useUserProfilePostMutations(toast: ProfileToast) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
     },
+    onError: (e) =>
+      toast({ title: e instanceof Error ? e.message : t.genericError, variant: "destructive" }),
   });
 
   const deletePostMutation = useMutation({
     mutationFn: (postId: string) => deletePost(postId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
+      queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
       toast({ title: t.postDeleted });
     },
     onError: (e) =>

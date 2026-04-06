@@ -1,10 +1,10 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { users } from "./users";
 
-export const chatTypeEnum = ["dm", "group"] as const;
+export const chatTypeEnum = ["dm", "group", "business"] as const;
 export type ChatType = (typeof chatTypeEnum)[number];
 
 export const chats = pgTable("chats", {
@@ -12,6 +12,10 @@ export const chats = pgTable("chats", {
   type: text("type", { enum: chatTypeEnum }).notNull().default("dm"),
   name: text("name"),
   avatarUrl: text("avatar_url"),
+  shortCode: varchar("short_code", { length: 12 }),
+  inviteCode: text("invite_code"),
+  /** Личка 1:1: каждый участник видит входящие на своём языке (см. users.message_translate_locale). */
+  dmMultilingualEnabled: boolean("dm_multilingual_enabled").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

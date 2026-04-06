@@ -10,8 +10,9 @@ alwaysApply: false
 
 ## Кратко
 
-- Серверный `.env` при деплое **полностью собирается из deploy.env**. Всё нужное (в т.ч. DATABASE_URL) должно быть в deploy.env.
+- Серверный `.env` при деплое собирается из переменных после чтения файлов: **`npm run deploy`** — только `deploy.env`; **`npm run deploy:test`** — `deploy.env` затем `deploy.test.env` (наложение). Секреты держать в `deploy.env`, в тестовом файле — только отличия стенда.
 - **Не допускай потери DATABASE_URL:** без него приложение переходит на память, старые логины пропадают. Если в deploy.env нет DATABASE_URL, скрипт должен попытаться восстановить его с сервера (сброс пароля БД, запись в deploy.env и в .env).
+- **Веб-пуши:** `VITE_FIREBASE_*` и `VITE_FIREBASE_VAPID_KEY` держать в **`deploy.env`** — при деплое они экспортируются и вшиваются в бандл; в серверный `.env` не попадают (отдельно от FCM service account на VPS).
 - Не удаляй и не отключай блок восстановления DATABASE_URL в `scripts/deploy.sh` без замены на явное требование DATABASE_URL в deploy.env.
 
 При сомнениях — смотри полный текст в `docs/DEPLOY_RULES.md`.

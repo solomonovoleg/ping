@@ -183,6 +183,20 @@ async function buildAll() {
       "@shared": path.join(root, "shared"),
     },
   });
+  console.log("building delete-seed-stories...");
+  await esbuild({
+    entryPoints: [path.join(root, "scripts/delete-seed-stories.ts")],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: path.join(root, "dist/delete-seed-stories.cjs"),
+    minify: false,
+    external: seedExternals,
+    logLevel: "info",
+    alias: {
+      "@shared": path.join(root, "shared"),
+    },
+  });
 }
 
 buildAll().catch((err) => {

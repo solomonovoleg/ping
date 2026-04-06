@@ -21,6 +21,7 @@ import type {
   VoiceTask,
 } from "@shared/schema";
 import type { VibeAxes, VibeThemeCode } from "@shared/chat-vibe-types";
+import type { SignupRiskSummary } from "../admin/signup-risk";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -81,20 +82,65 @@ export interface IStorage {
   getBlockedRelationIds(viewerId: string): Promise<string[]>;
   getNextPublicId(): Promise<number>;
   createUser(user: InsertUser): Promise<User>;
+  applyStudioSyntheticFlags(userId: string, createdByAdminId: string): Promise<User | undefined>;
+  listStudioSyntheticUsersForAdmin(opts: { limit: number; offset: number }): Promise<{ users: User[]; total: number }>;
+  /**
+   * Админка: другие аккаунты с теми же сигналами регистрации (устройство / IP / UA / clientSignals).
+   * Один человек за одним Wi‑Fi даст совпадение по IP; серия регистраций с одного браузера — по signupDeviceId.
+   */
+  listUsersRelatedBySignupSignals(
+    userId: string,
+    opts?: { limit?: number },
+  ): Promise<{
+    byDeviceId: User[];
+    byIp: User[];
+    byUaHash: User[];
+    byClientSignalsHash: User[];
+  }>;
   updateUserProfile(userId: string, data: UpdateProfile): Promise<User | undefined>;
+  /**
+   * Админка: сменить публичный номер профиля (public_id). Не затрагивает внутренний UUID (users.id).
+   * Только при свободном newPublicId; роли admin/super_admin — на уровне HTTP.
+   */
+  adminSetUserPublicId(
+    userId: string,
+    newPublicId: number,
+  ): Promise<
+    | { ok: true; user: User }
+    | { ok: false; reason: "not_found" | "taken" | "invalid" }
+  >;
+  /** Установить хеш пароля (сброс пароля, админ — при необходимости). */
+  setUserPasswordHash(userId: string, passwordHash: string): Promise<boolean>;
   /** Обновить время последней активности (для статуса «в сети») */
   updateUserLastSeen(userId: string): Promise<void>;
   /** Сохранить FCM токен для пуш-уведомлений */
   updateUserFcmToken(userId: string, token: string | null): Promise<void>;
+  /** iOS VoIP (PushKit) токен для APNs voip / CallKit */
+  updateUserIosVoipToken(userId: string, token: string | null): Promise<void>;
 
   /** Админка: статистика пользователей */
   getAdminStats(): Promise<{ total: number; blocked: number; deleted: number; registeredToday: number }>;
   /** Админка: регистрации по дням (UTC), без удалённых */
   getUserRegistrationsByDay(days: number): Promise<{ day: string; count: number }[]>;
   /** Админка: список пользователей с пагинацией (без удалённых по умолчанию) */
-  listUsersForAdmin(opts: { limit: number; offset: number; includeDeleted?: boolean; search?: string }): Promise<{ users: User[]; total: number }>;
+  listUsersForAdmin(opts: {
+    limit: number;
+    offset: number;
+    includeDeleted?: boolean;
+    search?: string;
+    /** Сортировка списка в админке */
+    sort?: "createdAt" | "referrals" | "invitedBy";
+    sortDir?: "asc" | "desc";
+  }): Promise<{ users: User[]; total: number }>;
+  /** Админка: эвристика подозрительной регистрации (устройство / IP+UA) для строк списка */
+  getAdminUserSignupRiskSummaries(userIds: string[]): Promise<Record<string, SignupRiskSummary>>;
   setUserBlocked(userId: string, blocked: boolean, opts?: { bannedBy: string; banReason?: string }): Promise<User | undefined>;
   setUserDeleted(userId: string, deleted: boolean): Promise<User | undefined>;
+  /**
+   * Безвозвратно удалить пользователя из БД (каскады FK + очистка referral_codes, сессий и ссылок без FK).
+   * Возвращает false, если пользователя не было.
+   */
+  purgeUserPermanently(userId: string): Promise<boolean>;
   setPlatformRole(userId: string, role: string): Promise<User | undefined>;
   /** Список пользователей с ролью отличной от user (для раздела «Админы») */
   listAdmins(): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "platformRole">[]>;
@@ -104,8 +150,13 @@ export interface IStorage {
     inviterUserId: string,
     code: string,
     expiresAt: Date,
-    opts?: { maxUses?: number; bypassInviterLimit?: boolean }
-  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number }>;
+    opts?: {
+      maxUses?: number;
+      bypassInviterLimit?: boolean;
+      adminNote?: string;
+      edgeMoneyInviteBatchId?: string | null;
+    },
+  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number; adminNote?: string | null }>;
   /** Найти код по строке (нормализованной), только если не истёк и остались использования */
   getReferralCodeByCode(
     code: string,
@@ -118,10 +169,16 @@ export interface IStorage {
   countReferralsByInviter(inviterUserId: string): Promise<number>;
   /** Количество приглашённых по списку userId (для админки) */
   getReferralCountsForUserIds(userIds: string[]): Promise<Record<string, number>>;
+  /** Краткие данные пользователей по id (колонка «кем приглашён») */
+  getUsersPublicBriefByIds(
+    userIds: string[],
+  ): Promise<Record<string, { publicId: number; displayName: string | null; surname: string | null }>>;
   /** Активные коды пользователя (есть оставшиеся использования, не истекли) */
   listActiveReferralCodesByInviter(
     inviterUserId: string
-  ): Promise<{ id: string; code: string; expiresAt: Date; maxUses: number; useCount: number }[]>;
+  ): Promise<
+    { id: string; code: string; expiresAt: Date; maxUses: number; useCount: number; adminNote?: string | null }[]
+  >;
   /** Список пользователей, приглашённых данным пользователем (для настроек) */
   listInvitedUsers(inviterUserId: string): Promise<Pick<User, "id" | "publicId" | "displayName" | "surname" | "avatarUrl" | "createdAt">[]>;
 
@@ -145,14 +202,49 @@ export interface IStorage {
     }
   ): Promise<void>;
   deleteChatMemberPrefs(userId: string, chatId: string): Promise<void>;
+  getChatMemberListSection(userId: string, chatId: string): Promise<string>;
+  isChatListSectionPushMutedForUser(userId: string, section: string): Promise<boolean>;
+  listUserChatListCustomFolders(userId: string): Promise<
+    import("@shared/schema").UserChatListCustomFolder[]
+  >;
+  getUserChatListCustomFolder(
+    userId: string,
+    folderId: string,
+  ): Promise<import("@shared/schema").UserChatListCustomFolder | undefined>;
+  listUserChatListBuiltinTabPrefs(userId: string): Promise<import("@shared/schema").UserChatListBuiltinTabPrefs[]>;
+  nextUserChatListCustomFolderSortOrder(userId: string): Promise<number>;
+  createUserChatListCustomFolder(userId: string, id: string, name: string, sortOrder: number): Promise<void>;
+  updateUserChatListCustomFolder(
+    userId: string,
+    folderId: string,
+    patch: { name?: string; pushMuted?: boolean },
+  ): Promise<boolean>;
+  deleteUserChatListCustomFolder(userId: string, folderId: string): Promise<boolean>;
+  resetUserChatMemberPrefsListSection(userId: string, fromSection: string, toSection: string): Promise<void>;
+  upsertUserChatListBuiltinTabPrefs(
+    userId: string,
+    tabId: import("@shared/schema").ChatListSection,
+    patch: { labelOverride?: string | null; pushMuted?: boolean },
+  ): Promise<void>;
   /** Удалить чат и связанные данные (сообщения, папки — каскадом в БД). */
   deleteChatCascade(chatId: string): Promise<boolean>;
   /** Найти или создать личный чат между двумя пользователями. */
   getOrCreateDmChat(userId: string, otherUserId: string): Promise<Chat>;
   createChat(data: InsertChat): Promise<Chat>;
+  getChatByInviteCode(code: string): Promise<Chat | undefined>;
+  getChatByShortCode(code: string): Promise<Chat | undefined>;
   addChatMember(data: InsertChatMember): Promise<ChatMember>;
   removeChatMember(chatId: string, userId: string): Promise<boolean>;
-  updateChat(chatId: string, data: { name?: string; avatarUrl?: string }): Promise<Chat | undefined>;
+  updateChat(
+    chatId: string,
+    data: {
+      name?: string;
+      avatarUrl?: string;
+      shortCode?: string | null;
+      inviteCode?: string | null;
+      dmMultilingualEnabled?: boolean;
+    },
+  ): Promise<Chat | undefined>;
   updateLastRead(chatId: string, userId: string, readUpTo?: Date): Promise<void>;
   /** Обновить lastReadAt напрямую из messages.created_at (сохраняет микросекундную точность PostgreSQL). */
   updateLastReadByMessageId(chatId: string, userId: string, messageId: string): Promise<void>;
@@ -173,6 +265,10 @@ export interface IStorage {
   getLastMessage(chatId: string): Promise<Message | undefined>;
   createMessage(data: InsertMessage): Promise<Message>;
   getMessage(chatId: string, messageId: string): Promise<Message | undefined>;
+  /** Сообщения чата по списку id (один round-trip к БД вместо N× getMessage). */
+  getMessagesByIdsInChat(chatId: string, messageIds: string[]): Promise<Map<string, Message>>;
+  /** Сообщение по id (для жалоб и служебных проверок без chatId в клиенте). */
+  getMessageById(messageId: string): Promise<Message | undefined>;
   deleteMessage(chatId: string, messageId: string): Promise<boolean>;
   updateMessage(chatId: string, messageId: string, content: string): Promise<Message | undefined>;
   updateMessageTranscript(chatId: string, messageId: string, transcript: string): Promise<Message | undefined>;

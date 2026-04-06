@@ -1,121 +1,106 @@
+import type { Request, RequestHandler } from "express";
 import rateLimit from "express-rate-limit";
-import { getUserId } from "./session";
 
-const WINDOW_MS = 15 * 60 * 1000; // 15 минут
-const MAX_LOGIN = 10;
-const MAX_REGISTER = 5;
+const passthrough: RequestHandler = (_req, _res, next) => next();
 
-export const loginLimiter = rateLimit({
-  windowMs: WINDOW_MS,
-  max: MAX_LOGIN,
-  message: { message: "Слишком много попыток входа. Попробуйте позже." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
-export const registerLimiter = rateLimit({
-  windowMs: WINDOW_MS,
-  max: MAX_REGISTER,
-  message: { message: "Слишком много регистраций. Попробуйте позже." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+function createLimiter(windowMs: number, max: number, message: string): RequestHandler {
+  return createLimiterWithKey(windowMs, max, message);
+}
 
-const CONTACTS_MATCH_WINDOW_MS = 15 * 60 * 1000;
-const MAX_CONTACTS_MATCH_PER_WINDOW = 25;
+function requestIp(req: Request): string {
+  return (req.ip || "unknown").trim() || "unknown";
+}
 
-/** Сопоставление телефонной книги с аккаунтами Ping (анти-спам перебора). */
-export const contactsPhoneMatchLimiter = rateLimit({
-  windowMs: CONTACTS_MATCH_WINDOW_MS,
-  max: MAX_CONTACTS_MATCH_PER_WINDOW,
-  message: { message: "Слишком частая проверка контактов. Подождите немного." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const uid = getUserId(req);
-    return uid ? `contacts-match:${uid}` : `contacts-match-ip:${req.ip ?? "unknown"}`;
+function createLimiterWithKey(
+  windowMs: number,
+  max: number,
+  message: string,
+  keyGenerator?: (req: Request) => string,
+): RequestHandler {
+  if (process.env.RATE_LIMIT_DISABLED === "1") return passthrough;
+  return rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyGenerator ?? ((req) => requestIp(req)),
+    skipSuccessfulRequests: process.env.RATE_LIMIT_SKIP_SUCCESS === "1",
+    message: { message },
+  });
+}
+
+export const loginLimiter = createLimiterWithKey(
+  envNumber("RATE_LIMIT_LOGIN_WINDOW_MS", 5 * 60 * 1000),
+  envNumber("RATE_LIMIT_LOGIN_MAX", 10),
+  "Слишком много попыток входа. Повторите позже.",
+  (req) => {
+    const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+    return `${requestIp(req)}|${phone.slice(0, 20)}`;
   },
-});
+);
 
-const PROFILE_PATCH_WINDOW_MS = 15 * 60 * 1000;
-const MAX_PROFILE_PATCH_PER_WINDOW = 45;
-
-/** Анти-спам и усложнение перебора полей профиля (ставить после requireAuth). */
-export const profilePatchLimiter = rateLimit({
-  windowMs: PROFILE_PATCH_WINDOW_MS,
-  max: MAX_PROFILE_PATCH_PER_WINDOW,
-  message: { message: "Слишком частое сохранение профиля. Подождите немного." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const uid = getUserId(req);
-    return uid ? `profile-patch:${uid}` : `profile-patch-ip:${req.ip ?? "unknown"}`;
+export const registerLimiter = createLimiterWithKey(
+  envNumber("RATE_LIMIT_REGISTER_WINDOW_MS", 15 * 60 * 1000),
+  envNumber("RATE_LIMIT_REGISTER_MAX", 10),
+  "Слишком много попыток регистрации. Повторите позже.",
+  (req) => {
+    const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+    return `${requestIp(req)}|${phone.slice(0, 20)}`;
   },
-});
+);
 
-/** Выгрузка данных — тяжёлая; лимит как у типичных «скачать копию»: много раз в день не нужно, но не мешаем тестам. */
-const DATA_EXPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const MAX_DATA_EXPORT_PER_DAY = 30;
+export const contactsPhoneMatchLimiter = createLimiterWithKey(
+  envNumber("RATE_LIMIT_CONTACTS_MATCH_WINDOW_MS", 10 * 60 * 1000),
+  envNumber("RATE_LIMIT_CONTACTS_MATCH_MAX", 20),
+  "Слишком много запросов сопоставления контактов. Повторите позже.",
+  (req) => `${requestIp(req)}|${String((req.session as { userId?: string } | undefined)?.userId ?? "-")}`,
+);
 
-export const dataExportLimiter = rateLimit({
-  windowMs: DATA_EXPORT_WINDOW_MS,
-  max: MAX_DATA_EXPORT_PER_DAY,
-  message: { message: "Достигнут лимит выгрузок за сутки. Завтра можно снова, либо обратитесь в поддержку." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const uid = getUserId(req);
-    return uid ? `data-export:${uid}` : `data-export-ip:${req.ip ?? "unknown"}`;
+export const profilePatchLimiter = createLimiter(
+  envNumber("RATE_LIMIT_PROFILE_PATCH_WINDOW_MS", 5 * 60 * 1000),
+  envNumber("RATE_LIMIT_PROFILE_PATCH_MAX", 30),
+  "Слишком много изменений профиля. Повторите позже.",
+);
+
+export const dataExportLimiter = createLimiter(
+  envNumber("RATE_LIMIT_DATA_EXPORT_WINDOW_MS", 60 * 60 * 1000),
+  envNumber("RATE_LIMIT_DATA_EXPORT_MAX", 3),
+  "Слишком много запросов выгрузки данных. Повторите позже.",
+);
+
+export const linkPreviewLimiter = createLimiter(
+  envNumber("RATE_LIMIT_LINK_PREVIEW_WINDOW_MS", 60 * 1000),
+  envNumber("RATE_LIMIT_LINK_PREVIEW_MAX", 60),
+  "Слишком много запросов предпросмотра ссылок. Повторите позже.",
+);
+
+export const dmByPublicIdLimiter = createLimiter(
+  envNumber("RATE_LIMIT_DM_BY_PUBLIC_ID_WINDOW_MS", 5 * 60 * 1000),
+  envNumber("RATE_LIMIT_DM_BY_PUBLIC_ID_MAX", 50),
+  "Слишком много запросов. Повторите позже.",
+);
+
+export const referralsCheckLimiter = createLimiter(
+  envNumber("RATE_LIMIT_REFERRALS_CHECK_WINDOW_MS", 10 * 60 * 1000),
+  envNumber("RATE_LIMIT_REFERRALS_CHECK_MAX", 60),
+  "Слишком много проверок кода приглашения. Повторите позже.",
+);
+
+/** Опрос «звонок уже подтверждён?» при сбросе пароля — чаще, чем loginLimiter. */
+export const passwordResetPollLimiter = createLimiterWithKey(
+  envNumber("RATE_LIMIT_PASSWORD_RESET_POLL_WINDOW_MS", 10 * 60 * 1000),
+  envNumber("RATE_LIMIT_PASSWORD_RESET_POLL_MAX", 200),
+  "Слишком много запросов проверки. Подождите или нажмите «Продолжить».",
+  (req) => {
+    const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+    const cid = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
+    return `${requestIp(req)}|${phone.slice(0, 24)}|${cid.slice(0, 24)}`;
   },
-});
-
-const LINK_PREVIEW_WINDOW_MS = 15 * 60 * 1000;
-const MAX_LINK_PREVIEW_PER_WINDOW = 60;
-
-/** Серверный fetch по URL — после requireAuth, защита от SSRF+нагрузки. */
-export const linkPreviewLimiter = rateLimit({
-  windowMs: LINK_PREVIEW_WINDOW_MS,
-  max: MAX_LINK_PREVIEW_PER_WINDOW,
-  message: { message: "Слишком много превью ссылок. Подождите немного." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const uid = getUserId(req);
-    return uid ? `link-preview:${uid}` : `link-preview-ip:${req.ip ?? "unknown"}`;
-  },
-});
-
-/**
- * Только маршрут GET /api/chats/dm-by-public-id/:id (открытие чата по public id, как /chat/15).
- * Переписка, догрузка истории и отправка идут через другие URL — сюда не попадают.
- * ~1 запрос на каждое открытие такого чата; 120/мин — запас для активного листания, всё ещё режет перебор сотнями.
- */
-const DM_BY_PUBLIC_ID_WINDOW_MS = 60_000;
-/** Листание списка + быстрые возвраты; только этот маршрут, не весь API. */
-const MAX_DM_BY_PUBLIC_ID_PER_MINUTE = 300;
-
-/** После requireAuth: ограничить перебор public id в URL (анти-скрейп). */
-export const dmByPublicIdLimiter = rateLimit({
-  windowMs: DM_BY_PUBLIC_ID_WINDOW_MS,
-  max: MAX_DM_BY_PUBLIC_ID_PER_MINUTE,
-  message: { message: "Слишком много открытий чатов по ссылке за минуту. Подождите немного." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => {
-    const uid = getUserId(req);
-    return uid ? `dm-by-pid:${uid}` : `dm-by-pid-ip:${req.ip ?? "unknown"}`;
-  },
-});
-
-const REFERRALS_CHECK_WINDOW_MS = 15 * 60 * 1000;
-const MAX_REFERRALS_CHECK_PER_WINDOW = 40;
-
-/** Публичная проверка кода — только по IP, без перебора кодов. */
-export const referralsCheckLimiter = rateLimit({
-  windowMs: REFERRALS_CHECK_WINDOW_MS,
-  max: MAX_REFERRALS_CHECK_PER_WINDOW,
-  message: { message: "Слишком много проверок кода. Подождите немного." },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => `referrals-check:${req.ip ?? "unknown"}`,
-});
+);

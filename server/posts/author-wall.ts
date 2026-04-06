@@ -6,9 +6,12 @@ import { getDb } from "../db";
 import { posts, users, postComments, postReactions, postShares, postViews, savedPosts } from "@shared/schema";
 import { storage } from "../storage";
 import { loadLatestCommentsByPostIds } from "./load-latest-comments";
+import { normalizePostMediaPublic } from "./normalize-post-media";
+import { filterFeedRowsForEdgeAudience } from "./edge-display-audience";
 
 type Row = {
   id: string;
+  linkCode: string;
   authorId: string;
   text: string;
   imageUrl: string | null;
@@ -16,6 +19,9 @@ type Row = {
   hashtags: string[] | null;
   isDraft: boolean;
   visibility: string;
+  edgeId: string | null;
+  edgeDisplayAudience: string | null;
+  linkEmbedEnabled: boolean;
   createdAt: Date;
   authorDisplayName: string | null;
   authorSurname: string | null;
@@ -25,6 +31,7 @@ type Row = {
 
 export type AuthorWallPost = {
   id: string;
+  linkCode: string;
   authorId: string;
   text: string;
   imageUrl: string | null;
@@ -50,6 +57,7 @@ export type AuthorWallPost = {
     avatar: string | null;
     likes: number;
   }[];
+  linkEmbedEnabled: boolean;
 };
 
 export async function getAuthorWall(
@@ -60,6 +68,7 @@ export async function getAuthorWall(
   const db = getDb();
   const selectFields = {
     id: posts.id,
+    linkCode: posts.linkCode,
     authorId: posts.authorId,
     text: posts.text,
     imageUrl: posts.imageUrl,
@@ -67,6 +76,9 @@ export async function getAuthorWall(
     hashtags: posts.hashtags,
     isDraft: posts.isDraft,
     visibility: posts.visibility,
+    edgeId: posts.edgeId,
+    edgeDisplayAudience: posts.edgeDisplayAudience,
+    linkEmbedEnabled: posts.linkEmbedEnabled,
     createdAt: posts.createdAt,
     authorDisplayName: users.displayName,
     authorSurname: users.surname,
@@ -74,7 +86,10 @@ export async function getAuthorWall(
     authorPublicId: users.publicId,
   };
   const draftCond = authorId === viewerId ? undefined : eq(posts.isDraft, false);
-  const whereClause = draftCond ? and(eq(posts.authorId, authorId), draftCond) : eq(posts.authorId, authorId);
+  const wallCond = eq(posts.showOnAuthorWall, true);
+  const whereClause = draftCond
+    ? and(eq(posts.authorId, authorId), draftCond, wallCond)
+    : and(eq(posts.authorId, authorId), wallCond);
   let rows = await db
     .select(selectFields)
     .from(posts)
@@ -89,6 +104,8 @@ export async function getAuthorWall(
       rows = rows.filter((r: Row) => (r.visibility ?? "public").toLowerCase() === "public");
     }
   }
+
+  rows = await filterFeedRowsForEdgeAudience(viewerId, rows);
 
   const postIds = rows.map((r: Row) => r.id);
   const counts: Record<string, number> = {};
@@ -179,15 +196,15 @@ export async function getAuthorWall(
   }
 
   return rows.map((r: Row) => {
-    const urls = (r.mediaUrls && Array.isArray(r.mediaUrls) && r.mediaUrls.length > 0)
-      ? r.mediaUrls
-      : (r.imageUrl ? [r.imageUrl] : []);
+    const { imageUrl: outImg, mediaUrls: urls } = normalizePostMediaPublic(r.imageUrl, r.mediaUrls);
     return {
       id: r.id,
+      linkCode: r.linkCode,
       authorId: r.authorId,
       text: r.text,
-      imageUrl: r.imageUrl ?? null,
+      imageUrl: outImg,
       mediaUrls: urls,
+      linkEmbedEnabled: r.linkEmbedEnabled !== false,
       hashtags: (r.hashtags && Array.isArray(r.hashtags)) ? r.hashtags : [],
       reactions: reactionsByPost[r.id] ?? [],
       reactionUsers: reactionUsersByPost[r.id] ?? {},

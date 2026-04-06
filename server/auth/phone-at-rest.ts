@@ -79,7 +79,7 @@ export function resolvePlainPhoneForUserRow(row: {
 
 export function buildUserInsertWithPhone(
   normalizedPhone: string,
-  rest: { password: string; publicId: number; invitedById?: string | null },
+  rest: Omit<InsertUser, "phone" | "phoneLookupHash" | "phoneCipher">,
 ): InsertUser {
   if (isPhoneAtRestEnabled()) {
     const { phoneLookupHash: h, phoneCipher: c } = preparePhoneForStorage(normalizedPhone);

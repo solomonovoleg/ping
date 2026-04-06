@@ -57,8 +57,9 @@ node EDGE/db/run-migrations.cjs
 | POST | `/v1/participant/feed?edgeId=` | то же |
 | GET | `/v1/participant/leaderboard?edgeId=` | секрет + `X-Platform-User-Id` |
 | POST | `/v1/participant/interact?edgeId=` | то же, тело `{ "kind": "play" \| "pet" }` |
-| POST | `/v1/campaign/draw` | только секрет (сервер-сервер), тело `{ "edgeId", "giftKey"?, "count"? }` |
+| POST | `/v1/campaign/draw` | только секрет; тело `{ edgeId, giftKey?, count?, pool?, method?, topN?, rankingKind? }` |
+| POST | `/v1/creator/campaigns/:edgeId/prize-draw` | секрет + **`X-Platform-User-Id`** — розыгрыш владельцем кампании |
 
-Клиент приложения ходит на **`/api/edge/...`** на домене платформы (кука/Bearer), не на порт EDGE. Розыгрыш призов — **`POST /api/admin/edge/draw-prize`** на платформе (роль администратора).
+Клиент приложения ходит на **`/api/edge/...`** на домене платформы (кука/Bearer), не на порт EDGE. Создатель: **`POST /api/edge/creator/campaigns/:edgeId/prize-draw`** (ЛС победителям только с его аккаунта). Админ: **`POST /api/admin/edge/draw-prize`**.
 
 Подробнее: `docs/EDGE_PRODUCT_SPEC.md`, `docs/EDGE_MICROSERVICE_PLAN.md`, `docs/EDGE_DATABASE.md`.

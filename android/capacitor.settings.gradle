@@ -8,6 +8,12 @@ project(':capacitor-community-contacts').projectDir = new File('../node_modules/
 include ':capacitor-community-media'
 project(':capacitor-community-media').projectDir = new File('../node_modules/@capacitor-community/media/android')
 
+include ':capacitor-community-screen-brightness'
+project(':capacitor-community-screen-brightness').projectDir = new File('../node_modules/@capacitor-community/screen-brightness/android')
+
+include ':capacitor-community-speech-recognition'
+project(':capacitor-community-speech-recognition').projectDir = new File('../node_modules/@capacitor-community/speech-recognition/android')
+
 include ':capacitor-camera'
 project(':capacitor-camera').projectDir = new File('../node_modules/@capacitor/camera/android')
 

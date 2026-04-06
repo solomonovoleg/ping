@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
 import { ListEmptyState } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
 import type { AdminVkParserBinding, AdminVkParserItem } from "@/lib/admin";
@@ -39,15 +39,15 @@ export function VkParserQueueCard(props: {
   const showRefetchHint = props.queueFetching && !props.queueLoading && props.queueTotal > 0;
 
   return (
-    <Card>
-      <CardHeader className="space-y-4">
+    <AdminPanelCard className="p-5 sm:p-6">
+      <div className="space-y-4">
         <div>
-          <CardTitle className="text-lg" id="vk-parser-queue-title">
+          <h2 className="text-lg font-semibold text-[hsl(210_20%_98%)]" id="vk-parser-queue-title">
             Очередь и история
-          </CardTitle>
-          <CardDescription className="mt-1.5">
+          </h2>
+          <p className="mt-1.5 text-sm admin-text-muted">
             Модерация и архив импорта. Фильтры не меняют данные на сервере — только отображение.
-          </CardDescription>
+          </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           <div className="space-y-1.5 min-w-[200px] flex-1">
@@ -87,8 +87,8 @@ export function VkParserQueueCard(props: {
             </select>
           </div>
         </div>
-      </CardHeader>
-      <CardContent>
+      </div>
+      <div>
         {showRefetchHint ? (
           <p className="text-xs text-muted-foreground flex items-center gap-1.5 mb-3" aria-live="polite">
             <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden />
@@ -168,7 +168,7 @@ export function VkParserQueueCard(props: {
             ) : null}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </AdminPanelCard>
   );
 }

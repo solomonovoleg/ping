@@ -19,6 +19,7 @@ import {
   users,
 } from "../shared/schema";
 import { insertFollowsDesignatedToSeeds } from "./seed-auto-follow";
+import { mintUniquePostLinkCode } from "../server/posts/post-link-code";
 
 const DEFAULT_USERS_COUNT = 24;
 const MIN_USERS_COUNT = 20;
@@ -640,6 +641,7 @@ async function main() {
       const [createdPost] = await db
         .insert(posts)
         .values({
+          linkCode: await mintUniquePostLinkCode(),
           authorId: author.id,
           text,
           imageUrl: Math.random() < 0.7 ? POST_FEED_IMAGES[textIndex % POST_FEED_IMAGES.length]! : null,

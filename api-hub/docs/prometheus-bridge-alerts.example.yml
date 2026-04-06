@@ -1,0 +1,44 @@
+# Пример правил для Prometheus / Alertmanager (подставьте свой job и окно).
+# Импорт: добавьте файл в prometheus.yml rule_files или объедините с существующими правилами.
+
+groups:
+  - name: api_hub_bridge
+    rules:
+      - alert: ApiHubBridgeAuthFailures
+        expr: increase(api_hub_bridge_auth_401_total[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Много 401 на мосту PING→HUB"
+          description: "Проверьте API_HUB_BRIDGE_SECRET на платформе и HUB."
+
+      - alert: ApiHubBridgeForbiddenIp
+        expr: increase(api_hub_bridge_forbidden_ip_403_total[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Мост отклоняет по IP allowlist"
+          description: "Сверьте API_HUB_BRIDGE_ALLOWED_IPS и X-Forwarded-For / trust proxy."
+
+      - alert: ApiHubBridgeValidationErrors
+        expr: increase(api_hub_bridge_validation_400_total[15m]) > 50
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Рост 400 на мосте"
+          description: "Возможна несовместимая версия платформы или битый payload."
+
+      - alert: ApiHubBridgeNoAccepts
+        expr: |
+          increase(api_hub_bridge_requests_total[30m]) > 5
+          and
+          increase(api_hub_bridge_accepted_202_total[30m]) == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Запросы к мосту есть, но ни одного 202"
+          description: "Проверьте секрет, IP, 503 bridge_not_configured, валидацию тела."

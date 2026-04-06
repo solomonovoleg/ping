@@ -1,9 +1,13 @@
 import type { ReactNode } from "react";
-import { Link } from "lucide-react";
 import { usePulseProfileTheme } from "../pulse-profile-theme";
-import { PulseProfileMutualFollowersRow } from "./PulseProfileMutualFollowersRow";
 import type { PulseProfileMutualFollowersModel } from "./types";
 import { PULSE_BODY_AFTER_CARD_PT } from "./constants";
+import { pulseProfileIdentityBioMarginTopPx } from "./pulse-profile-identity-spacing";
+import { PulseProfileIdentityActionSlot } from "./PulseProfileIdentityActionSlot";
+import { PulseProfileIdentityBio } from "./PulseProfileIdentityBio";
+import { PulseProfileBusinessContactsCard } from "./PulseProfileBusinessContactsCard";
+import { PulseProfileIdentityExternalLink } from "./PulseProfileIdentityExternalLink";
+import { PulseProfileIdentityMutualGate } from "./PulseProfileIdentityMutualGate";
 
 /** Блок под карточкой героя: общие подписчики, био, ссылка, действия (имя и мета — внутри `PulseProfileHeroCard`). */
 export function PulseProfileIdentityBlock({
@@ -11,47 +15,41 @@ export function PulseProfileIdentityBlock({
   bio,
   linkDisplay,
   linkHref,
+  businessContactPhone,
+  businessAddress,
   actionRow,
 }: {
   mutualFollowers: PulseProfileMutualFollowersModel | null;
   bio: string | null;
   linkDisplay: string | null;
   linkHref: string | null;
+  businessContactPhone?: string | null;
+  businessAddress?: string | null;
   actionRow: ReactNode;
 }) {
   const { th } = usePulseProfileTheme();
+  const showMutualRow = !!(mutualFollowers && mutualFollowers.count > 0);
+  const bioMarginTop = pulseProfileIdentityBioMarginTopPx(showMutualRow);
+
   return (
     <div className="px-4" style={{ paddingTop: PULSE_BODY_AFTER_CARD_PT }}>
-      {mutualFollowers && mutualFollowers.count > 0 ? (
-        <PulseProfileMutualFollowersRow data={mutualFollowers} />
-      ) : null}
+      <PulseProfileIdentityMutualGate data={mutualFollowers} />
 
       {bio ? (
-        <p
-          style={{
-            fontSize: 14,
-            color: th.text,
-            lineHeight: 1.55,
-            marginTop: mutualFollowers && mutualFollowers.count > 0 ? 11 : 0,
-            fontWeight: 400,
-          }}
-        >
-          {bio}
-        </p>
-      ) : null}
-      {linkDisplay && linkHref ? (
-        <a
-          href={linkHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-2 flex items-center gap-1.5 break-all"
-        >
-          <Link style={{ width: 12, height: 12, color: th.accent, flexShrink: 0 }} aria-hidden />
-          <span style={{ fontSize: 12.5, color: th.accent, fontWeight: 600 }}>{linkDisplay}</span>
-        </a>
+        <PulseProfileIdentityBio text={bio} textColor={th.text} marginTop={bioMarginTop} />
       ) : null}
 
-      <div className="mt-4">{actionRow}</div>
+      {linkDisplay && linkHref ? (
+        <PulseProfileIdentityExternalLink linkDisplay={linkDisplay} linkHref={linkHref} accent={th.accent} />
+      ) : null}
+
+      <PulseProfileBusinessContactsCard
+        phone={businessContactPhone ?? null}
+        address={businessAddress ?? null}
+        accent={th.accent}
+      />
+
+      <PulseProfileIdentityActionSlot>{actionRow}</PulseProfileIdentityActionSlot>
     </div>
   );
 }

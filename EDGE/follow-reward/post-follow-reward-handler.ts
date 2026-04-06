@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { applyFollowCreatorRewards } from "./apply-follow-reward.js";
-import { pickFollowDmPayloadForCreator } from "./follow-dm-config.js";
+import { pickFollowDmPayloadForAwardedCampaigns } from "./follow-dm-config.js";
 
 export async function postFollowReward(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -24,7 +24,9 @@ export async function postFollowReward(req: Request, res: Response, next: NextFu
     }
 
     const followDm =
-      out.awardedCount > 0 ? await pickFollowDmPayloadForCreator(followed) : null;
+      out.awardedCount > 0 && out.awardedCampaignPublicIds.length > 0
+        ? await pickFollowDmPayloadForAwardedCampaigns(followed, out.awardedCampaignPublicIds)
+        : null;
 
     res.json({
       campaignsTried: out.campaignsTried,

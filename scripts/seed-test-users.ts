@@ -8,6 +8,7 @@ import { hashPassword } from "../server/auth/password";
 import { ensureUserColumns, getDb } from "../server/db";
 import { users, posts, stories, contacts } from "../shared/schema";
 import { insertFollowsDesignatedToSeeds } from "./seed-auto-follow";
+import { mintUniquePostLinkCode } from "../server/posts/post-link-code";
 import { eq } from "drizzle-orm";
 
 const TEST_PASSWORD = "test1234";
@@ -287,6 +288,7 @@ async function main() {
       const imageUrl = pick(IMAGE_URLS);
       const reactions = pick(REACTION_SETS);
       await db.insert(posts).values({
+        linkCode: await mintUniquePostLinkCode(),
         authorId,
         text,
         imageUrl,

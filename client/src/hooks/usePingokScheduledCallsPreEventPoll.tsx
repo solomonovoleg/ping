@@ -22,8 +22,10 @@ export function usePingokScheduledCallsPreEventPoll(enabled: boolean): void {
     }
 
     let cancelled = false;
+    const isVisible = () => typeof document === "undefined" || document.visibilityState === "visible";
 
     const tick = async () => {
+      if (!isVisible()) return;
       try {
         const res = await apiFetch(`${API}/pingok-micro/v1/scheduled-calls-pre-window`, {
           suppressSessionExpireOn401: true,
@@ -54,7 +56,7 @@ export function usePingokScheduledCallsPreEventPoll(enabled: boolean): void {
             ? when.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" })
             : "";
           toast({
-            title: "Скоро звонок",
+            title: "Запланированный звонок",
             description: `${c.title}${whenLabel ? ` · ${whenLabel}` : ""}`,
             duration: 14_000,
           });
@@ -64,11 +66,20 @@ export function usePingokScheduledCallsPreEventPoll(enabled: boolean): void {
       }
     };
 
+    const onVisibilityChange = () => {
+      if (isVisible()) void tick();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
     void tick();
     const id = window.setInterval(() => void tick(), POLL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
     };
   }, [enabled]);
 }

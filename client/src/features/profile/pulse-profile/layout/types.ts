@@ -33,10 +33,14 @@ export type PulseProfileLayoutProps = {
   onBack: () => void;
   onMore: () => void;
   usernamePill: string;
+  /** Тап по пилюле @… над обложкой (например копирование ссылки на профиль). */
+  onUsernamePillPress?: () => void;
 
   displayName: string;
   showVerified: boolean;
+  isBusinessApproved?: boolean;
   idChip: string;
+  businessChip?: string | null;
   genderChip: string | null;
   birthChip: string | null;
   /** Город в строке мета под именем (необязательно) */
@@ -45,6 +49,8 @@ export type PulseProfileLayoutProps = {
   bio: string | null;
   linkDisplay: string | null;
   linkHref: string | null;
+  businessContactPhone?: string | null;
+  businessAddress?: string | null;
 
   postsCount: number;
   followersCount: number;

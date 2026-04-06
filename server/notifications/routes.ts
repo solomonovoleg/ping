@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { and, desc, eq } from "drizzle-orm";
-import { getDb } from "../db";
+import { getDb, ensureStoryCaptionNotificationSchema } from "../db";
 import { notifications, posts, users } from "@shared/schema";
 import { requireAuth, getUserId } from "../auth/session";
 import { storage } from "../storage";
@@ -12,6 +12,7 @@ export function registerNotificationsRoutes(app: Express): void {
     const limit = Math.min(Number(req.query.limit) || 50, 100);
     const offset = Math.max(0, Number(req.query.offset) || 0);
     try {
+      await ensureStoryCaptionNotificationSchema();
       const db = getDb();
       const rows = await db
         .select({
@@ -21,6 +22,7 @@ export function registerNotificationsRoutes(app: Express): void {
           actorPublicId: users.publicId,
           postId: notifications.postId,
           commentId: notifications.commentId,
+          storyId: notifications.storyId,
           excerpt: notifications.excerpt,
           readAt: notifications.readAt,
           createdAt: notifications.createdAt,
@@ -28,6 +30,7 @@ export function registerNotificationsRoutes(app: Express): void {
           actorSurname: users.surname,
           actorAvatarUrl: users.avatarUrl,
           postAuthorId: posts.authorId,
+          postLinkCode: posts.linkCode,
         })
         .from(notifications)
         .leftJoin(users, eq(notifications.actorId, users.id))
@@ -55,8 +58,10 @@ export function registerNotificationsRoutes(app: Express): void {
         actorAvatarUrl: r.actorAvatarUrl ?? null,
         postId: r.postId ?? null,
         postAuthorId: r.postAuthorId ?? null,
+        postLinkCode: r.postLinkCode ?? null,
         postAuthorPublicId: r.postAuthorId ? (postAuthorPublicIdById.get(r.postAuthorId) ?? null) : null,
         commentId: r.commentId ?? null,
+        storyId: r.storyId ?? null,
         excerpt: r.excerpt ?? null,
         readAt: r.readAt?.toISOString?.() ?? null,
         createdAt: r.createdAt?.toISOString?.() ?? null,

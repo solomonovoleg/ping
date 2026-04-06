@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import {
   Table,
   TableBody,
@@ -14,18 +17,24 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale";
-import { Flag } from "lucide-react";
+import { Copy, Flag } from "lucide-react";
 import { fetchMe } from "@/lib/auth";
 import { adminOpsUi } from "./i18n.ru";
 import { fetchOpsReports, patchOpsReport } from "./api";
+import { OpsReportTargetCell } from "./OpsReportTargetCell";
+import { OpsReportRowModeration } from "./OpsReportRowModeration";
+import { formatOpsReportReasonCode, formatOpsReportStatus } from "./ops-report-display-labels";
 
 const QK = ["admin", "ops", "reports"] as const;
 
 export function OpsReportsSection() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const qc = useQueryClient();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const canResolve = me?.platformRole === "admin" || me?.platformRole === "super_admin";
+  const canRemoveContent =
+    me?.platformRole === "moderator" || me?.platformRole === "admin" || me?.platformRole === "super_admin";
   const [filter, setFilter] = useState<"open" | "all">("open");
   const [notes, setNotes] = useState<Record<string, string>>({});
 
@@ -39,20 +48,30 @@ export function OpsReportsSection() {
       patchOpsReport(id, { status, adminNote: notes[id]?.trim() || undefined }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK });
-      toast({ title: "Обновлено" });
+      toast({ title: adminOpsUi.reportsUpdated });
     },
-    onError: (e) => toast({ title: e instanceof Error ? e.message : "Ошибка", variant: "destructive" }),
+    onError: (e) =>
+      toast({
+        title: e instanceof Error ? e.message : adminOpsUi.reportsPatchError,
+        variant: "destructive",
+      }),
   });
 
   const rows = data?.reports ?? [];
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Flag className="w-4 h-4" />
-          {adminOpsUi.reportsCard}
-        </CardTitle>
+    <AdminPanelCard className="p-5 sm:p-6">
+      <div className="mb-4">
+        <h2 className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base font-semibold text-[hsl(210_20%_98%)]">
+          <Flag className="h-4 w-4 shrink-0" aria-hidden />
+          <span>{adminOpsUi.reportsCard}</span>
+          {!isLoading && !error && data != null ? (
+            <span className="text-xs font-normal text-muted-foreground">· {adminOpsUi.totalReports}: {data.total}</span>
+          ) : null}
+        </h2>
+        <p className="mt-1 max-w-3xl text-[11px] leading-snug text-muted-foreground/90">
+          {adminOpsUi.reportsCardReviewHint}
+        </p>
         <div className="flex gap-2 pt-2">
           <Button size="sm" variant={filter === "open" ? "default" : "outline"} onClick={() => setFilter("open")}>
             {adminOpsUi.statusOpen}
@@ -61,29 +80,50 @@ export function OpsReportsSection() {
             {adminOpsUi.statusAll}
           </Button>
         </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
-        {error && (
-          <div className="space-y-2">
-            <p className="text-destructive text-sm">{adminOpsUi.reportsLoadError}</p>
-            <Button size="sm" variant="outline" onClick={() => refetch()}>
-              Повторить
-            </Button>
+      </div>
+      <div>
+        {isLoading && (
+          <div className="space-y-2 py-1" aria-busy="true">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full rounded-md" />
+            ))}
           </div>
         )}
+        {error && (
+          <ErrorWithRetry
+            title="Не удалось загрузить список жалоб"
+            description={error instanceof Error ? error.message : adminOpsUi.reportsLoadError}
+            onRetry={() => void refetch()}
+            className="min-h-[180px]"
+          />
+        )}
         {!isLoading && !error && rows.length === 0 && (
-          <p className="text-sm text-muted-foreground">{adminOpsUi.reportsEmpty}</p>
+          <div className="space-y-3">
+            <ListEmptyState
+              icon={Flag}
+              title={filter === "open" ? adminOpsUi.reportsEmptyOpen : adminOpsUi.reportsEmptyAll}
+              description={adminOpsUi.reportsEmptySlaHint}
+              secondaryActionLabel={adminOpsUi.reportsCheatsheetApple}
+              onSecondaryAction={() => setLocation("/admin/store-review")}
+              actionLabel={adminOpsUi.reportsCheatsheetPlay}
+              onAction={() => setLocation("/admin/store-review-play")}
+              className="min-h-[180px]"
+            />
+          </div>
         )}
         {!isLoading && !error && rows.length > 0 && (
-          <Table>
+          <div className="w-full overflow-x-auto rounded-md border border-[hsl(var(--admin-border)/0.35)]">
+          <Table className="min-w-[920px]">
             <TableHeader>
               <TableRow>
                 <TableHead>{adminOpsUi.date}</TableHead>
+                <TableHead>{adminOpsUi.reporter}</TableHead>
                 <TableHead>{adminOpsUi.target}</TableHead>
+                <TableHead>{adminOpsUi.category}</TableHead>
                 <TableHead>{adminOpsUi.reason}</TableHead>
-                <TableHead>Статус</TableHead>
-                <TableHead className="text-right">Действия</TableHead>
+                <TableHead>{adminOpsUi.statusColumn}</TableHead>
+                <TableHead className="text-right">{adminOpsUi.moderation}</TableHead>
+                <TableHead className="text-right">{adminOpsUi.actionsColumn}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -92,14 +132,45 @@ export function OpsReportsSection() {
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {formatDistanceToNow(new Date(r.createdAt), { addSuffix: true, locale: ru })}
                   </TableCell>
-                  <TableCell className="text-sm font-mono">
-                    {r.targetType} · {r.targetId.slice(0, 24)}
-                    {r.targetId.length > 24 ? "…" : ""}
+                  <TableCell className="align-top text-xs">
+                    <div className="font-mono text-[11px] max-w-[120px] truncate" title={r.reporterUserId}>
+                      {r.reporterUserId.slice(0, 12)}
+                      {r.reporterUserId.length > 12 ? "…" : ""}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="mt-1 h-6 gap-1 px-1.5 text-[10px]"
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(r.reporterUserId).then(
+                          () => toast({ title: adminOpsUi.reporterIdCopied }),
+                          () => toast({ title: adminOpsUi.reporterIdCopyFailed, variant: "destructive" }),
+                        )
+                      }
+                    >
+                      <Copy className="h-3 w-3 opacity-80" aria-hidden />
+                      ID
+                    </Button>
+                  </TableCell>
+                  <TableCell className="align-top">
+                    <OpsReportTargetCell
+                      targetType={r.targetType}
+                      targetId={r.targetId}
+                      contextPostId={r.contextPostId}
+                      contextChatId={r.contextChatId}
+                    />
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap max-w-[140px]">
+                    {formatOpsReportReasonCode(r.reasonCode)}
                   </TableCell>
                   <TableCell className="text-sm max-w-[200px] truncate" title={r.reason}>
                     {r.reason}
                   </TableCell>
-                  <TableCell className="text-sm">{r.status}</TableCell>
+                  <TableCell className="text-sm">{formatOpsReportStatus(r.status)}</TableCell>
+                  <TableCell className="text-right align-top">
+                    <OpsReportRowModeration row={r} canRemoveContent={canRemoveContent} />
+                  </TableCell>
                   <TableCell className="text-right space-y-2">
                     {r.status === "open" && canResolve ? (
                       <>
@@ -129,7 +200,7 @@ export function OpsReportsSection() {
                         </div>
                       </>
                     ) : r.status === "open" && !canResolve ? (
-                      <span className="text-xs text-muted-foreground">Только админ</span>
+                      <span className="text-xs text-muted-foreground">{adminOpsUi.reportsAdminOnlyResolve}</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">{r.adminNote ?? "—"}</span>
                     )}
@@ -138,8 +209,9 @@ export function OpsReportsSection() {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </AdminPanelCard>
   );
 }

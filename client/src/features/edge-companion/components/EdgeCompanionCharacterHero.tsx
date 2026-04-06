@@ -12,8 +12,8 @@ import { TapScaleButton } from "@/components/ui/tap-scale";
 import { useToast } from "@/hooks/use-toast";
 import { DURATION_FAST_S, DURATION_NORMAL_S, EASING_OUT_BEZIER } from "@/lib/motion";
 import {
+  edgeVitalityLabel,
   getHungerLevel,
-  moodDotsFilled,
   speechLine,
   xpProgressWithinLevel,
 } from "@/features/edge-companion/edge-pet-display-helpers";
@@ -34,14 +34,6 @@ function giftTitle(t: unknown): string {
   return "Приз";
 }
 
-function giftDescription(t: unknown): string | null {
-  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
-  const o = t as Record<string, unknown>;
-  if (typeof o.description === "string" && o.description.trim()) return o.description.trim();
-  if (typeof o.text === "string" && o.text.trim()) return o.text.trim();
-  return null;
-}
-
 function giftQuantity(t: unknown): number | null {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   const o = t as Record<string, unknown>;
@@ -50,17 +42,16 @@ function giftQuantity(t: unknown): number | null {
   return null;
 }
 
-/** «Герою уже Nч Mм с вами» */
 function formatJoinedShort(iso: string): string | null {
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return null;
   const ms = Math.max(0, Date.now() - t);
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
-  if (h <= 0 && m <= 0) return "только что с вами";
+  if (h <= 0 && m <= 0) return "только что";
   if (h < 48) return `${h}ч ${m}м`;
   const d = Math.floor(h / 24);
-  return `${d} дн. с вами`;
+  return `${d} дн.`;
 }
 
 type Props = {
@@ -70,13 +61,12 @@ type Props = {
   stats: EdgeParticipantState;
   locked: boolean;
   reducedMotion: boolean;
-  /** Подмена текста в «пузыре» (например призыв «Начать игру» для новичка). */
   speechBubbleOverride?: string | null;
 };
 
 /**
- * Полноэкранный «студийный» макет персонажа: без тяжёлых карточек у метрик,
- * облако — одна фраза настроения (как в референсе), тап по кругу.
+ * Один «холст» без колонок-карточек: типографика и отступы на фоне страницы,
+ * как в референсе — без перегородок и слоёв-card.
  */
 export function EdgeCompanionCharacterHero({
   edgeId,
@@ -89,7 +79,8 @@ export function EdgeCompanionCharacterHero({
 }: Props) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const previewGifts = useMemo(() => templates.slice(0, 4), [templates]);
+  const firstGift = templates[0];
+  const extraGifts = Math.max(0, templates.length - 1);
   const [tapBurstKey, setTapBurstKey] = useState(0);
 
   const tapMutation = useMutation({
@@ -121,7 +112,7 @@ export function EdgeCompanionCharacterHero({
       : bubbleFromMood;
   const moodLabel = MOOD_RU[stats.mood] ?? stats.mood;
   const xp = xpProgressWithinLevel(stats.xp, stats.level);
-  const dots = moodDotsFilled(stats.happyScore);
+  const vitality = edgeVitalityLabel(stats.mood, stats.happyScore);
   const joinedHint = formatJoinedShort(stats.joinedAt);
 
   const handleTap = () => {
@@ -132,84 +123,118 @@ export function EdgeCompanionCharacterHero({
     tapMutation.mutate();
   };
 
+  const prizePrimary = useMemo(() => {
+    if (!firstGift) return { line: "Призы в кампании", sub: null as string | null };
+    const q = giftQuantity(firstGift);
+    const title = giftTitle(firstGift);
+    const line = q != null ? `${title} · ${q} шт.` : title;
+    const sub = extraGifts > 0 ? `ещё ${extraGifts}` : null;
+    return { line, sub };
+  }, [firstGift, extraGifts]);
+
   return (
-    <div className="box-border w-full px-0 pb-1 pt-1">
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-12 md:items-start md:gap-4">
-        {/* Призы — без подложки */}
-        <aside className="md:col-span-3">
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
-            <Trophy className="h-3.5 w-3.5 text-primary" aria-hidden />
+    <div className="box-border w-full px-0 pb-2 pt-1">
+      <div
+        className="relative mx-auto aspect-square w-full max-w-[min(100%,400px)]"
+        aria-label="Персонаж и прогресс"
+      >
+        {/* Верх слева: приз — только текст, без плашек */}
+        <div className="pointer-events-none absolute left-1 top-2 z-10 max-w-[46%] pl-0.5 text-left sm:left-2 sm:top-3">
+          <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+            <Trophy className="h-3 w-3 text-primary/90" aria-hidden />
             Призы
           </p>
-          {previewGifts.length === 0 ? (
-            <p className="text-[12px] leading-snug text-muted-foreground">Настроены в кампании.</p>
-          ) : (
-            <ul className="space-y-2">
-              {previewGifts.map((t, i) => {
-                const q = giftQuantity(t);
-                return (
-                  <li key={i} className="text-[12px] leading-snug">
-                    <span className="font-medium text-foreground">{giftTitle(t)}</span>
-                    {q != null ? (
-                      <span className="text-muted-foreground"> · {q} шт.</span>
-                    ) : null}
-                    {giftDescription(t) ? (
-                      <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2">
-                        {giftDescription(t)}
-                      </p>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
+          <p className="mt-1 line-clamp-2 text-[12px] font-medium leading-snug text-foreground/95">
+            {prizePrimary.line}
+          </p>
+          {prizePrimary.sub ? (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">{prizePrimary.sub}</p>
+          ) : null}
+        </div>
 
-        {/* Центр: облако + персонаж */}
-        <div className="flex flex-col items-center md:col-span-6">
-          <div className="relative flex w-full max-w-[280px] flex-col items-center">
-            {/* Облако: классический хвост по центру вниз */}
-            <div className="relative z-10 w-full max-w-[min(100%,280px)]">
-              <div
-                className="relative rounded-2xl border border-border/45 bg-card px-4 py-3 text-center shadow-sm"
-                role="status"
-              >
-                <p className="text-[15px] font-medium leading-snug text-foreground">{bubbleText}</p>
-              </div>
-              <div
-                className="absolute left-1/2 top-full z-10 -mt-px h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-border/45 bg-card"
-                aria-hidden
-              />
-            </div>
+        {/* Справа: метрики — без рамок, только ритм строк */}
+        <div className="absolute right-1 top-1/2 z-10 w-[36%] max-w-[124px] -translate-y-1/2 space-y-2 text-right text-[10px] text-muted-foreground sm:right-2 sm:text-[11px]">
+          {joinedHint ? (
+            <p className="leading-snug">
+              С вами <span className="font-medium text-foreground/90">{joinedHint}</span>
+            </p>
+          ) : null}
+          <div className="flex flex-col items-end gap-0.5">
+            <span className="tabular-nums text-foreground">
+              Ур. <span className="font-semibold">{stats.level}</span>
+            </span>
+            <span className="tabular-nums">{xp.toNext} XP до след.</span>
+          </div>
+          <div className="ml-auto h-[3px] w-10 overflow-hidden rounded-full bg-muted/50 sm:w-11">
+            <div
+              className="h-full rounded-full bg-primary/90 transition-[width]"
+              style={{ width: `${xp.pct}%` }}
+            />
+          </div>
+          <p
+            className={cn(
+              "pt-1 text-[9px] font-semibold leading-tight tracking-wide sm:text-[10px]",
+              vitality.tone === "sleep" && "uppercase text-sky-400/95",
+              vitality.tone === "awake" && "text-primary",
+              vitality.tone === "calm" && "text-muted-foreground",
+            )}
+          >
+            {vitality.tone === "sleep" ? "СПИТ" : vitality.label}
+          </p>
+          <p className="text-[9px] text-foreground/60 sm:text-[10px]">{moodLabel}</p>
+        </div>
 
-            <TapScaleButton
-              type="button"
-              haptic
-              subtle
-              disabled={tapMutation.isPending}
-              onClick={handleTap}
-              className="relative mt-5 flex flex-col items-center rounded-2xl border border-transparent bg-transparent p-0 shadow-none focus-visible:ring-2 focus-visible:ring-primary"
-              aria-label={`Тап по ${displayName}`}
+        {/* Центр */}
+        <div className="absolute inset-x-0 top-9 bottom-6 flex flex-col items-center justify-center px-[8%] sm:top-10 sm:bottom-8 sm:px-[10%]">
+          <div
+            className="relative z-10 max-w-[min(100%,260px)] rounded-2xl bg-foreground/[0.05] px-3 py-2.5 text-center backdrop-blur-[2px]"
+            role="status"
+          >
+            <p
+              className="text-[14px] font-medium leading-snug text-foreground sm:text-[15px]"
+              style={{ fontFamily: "var(--font-edge-pet), ui-serif, Georgia, serif" }}
             >
-              <AnimatePresence>
-                {tapBurstKey > 0 ? (
-                  <motion.span
-                    key={tapBurstKey}
-                    initial={{ opacity: 0, y: 8, scale: 0.9 }}
-                    animate={{ opacity: 1, y: -28, scale: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: DURATION_FAST_S * 1.2, ease: EASING_OUT_BEZIER }}
-                    className="pointer-events-none absolute left-1/2 top-[12%] z-20 -translate-x-1/2 text-sm font-semibold text-primary [text-shadow:0_1px_2px_hsl(var(--background)/0.9)]"
-                  >
-                    +тап
-                  </motion.span>
-                ) : null}
-              </AnimatePresence>
+              {bubbleText}
+            </p>
+          </div>
+
+          <TapScaleButton
+            type="button"
+            haptic
+            subtle
+            disabled={tapMutation.isPending}
+            onClick={handleTap}
+            className="relative mt-4 flex w-full max-w-[min(92vw,19rem)] flex-col items-center bg-transparent p-0 shadow-none ring-0 focus-visible:ring-2 focus-visible:ring-primary sm:max-w-[20rem]"
+            aria-label={`Тап по ${displayName}`}
+          >
+            <AnimatePresence>
+              {tapBurstKey > 0 ? (
+                <motion.span
+                  key={tapBurstKey}
+                  initial={{ opacity: 0, y: 8, scale: 0.9 }}
+                  animate={{ opacity: 1, y: -28, scale: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: DURATION_FAST_S * 1.2, ease: EASING_OUT_BEZIER }}
+                  className="pointer-events-none absolute left-1/2 top-[6%] z-20 -translate-x-1/2 text-sm font-semibold text-primary [text-shadow:0_1px_2px_hsl(var(--background)/0.9)]"
+                >
+                  +тап
+                </motion.span>
+              ) : null}
+            </AnimatePresence>
+            <div className="relative flex w-full items-end justify-center">
               <motion.div
-                className={cn(
-                  "relative flex h-[11rem] w-[11rem] items-center justify-center rounded-[42%] border border-border/40 bg-[repeating-conic-gradient(hsl(var(--muted)/0.28)_0%_25%,transparent_0%_50%)_50%_/_14px_14px] shadow-inner sm:h-[13rem] sm:w-[13rem]",
-                )}
-                animate={reducedMotion ? undefined : { y: [0, -6, 0] }}
+                aria-hidden
+                className="pointer-events-none absolute bottom-[-6%] left-1/2 z-0 h-[min(40vw,8.5rem)] w-[min(90%,16.5rem)] -translate-x-1/2 rounded-full bg-primary/[0.24] blur-[48px] sm:h-[8.5rem] sm:w-[17rem]"
+                animate={
+                  reducedMotion
+                    ? undefined
+                    : { opacity: [0.36, 0.58, 0.36], scale: [0.97, 1.03, 0.97] }
+                }
+                transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
+              />
+              <motion.div
+                className="relative z-10 flex items-center justify-center"
+                animate={reducedMotion ? undefined : { y: [0, -5, 0] }}
                 transition={
                   reducedMotion
                     ? undefined
@@ -224,71 +249,33 @@ export function EdgeCompanionCharacterHero({
                   <img
                     src={imgSrc}
                     alt={displayName}
-                    className="max-h-[92%] max-w-[92%] object-contain pointer-events-none"
+                    className="max-h-[min(70vw,16rem)] max-w-[min(88vw,16rem)] object-contain pointer-events-none sm:max-h-[17rem] sm:max-w-[17rem]"
                     draggable={false}
                   />
                 ) : (
-                  <Bird className="h-20 w-20 text-primary sm:h-24 sm:w-24 pointer-events-none" strokeWidth={1.25} />
+                  <Bird
+                    className="h-[7.5rem] w-[7.5rem] text-primary pointer-events-none sm:h-[9rem] sm:w-[9rem]"
+                    strokeWidth={1.15}
+                  />
                 )}
-                <span className="pointer-events-none absolute -right-1 -top-1 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md">
-                  <Gift className="h-4 w-4" aria-hidden />
+                <span className="pointer-events-none absolute -right-0.5 top-[2%] flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm shadow-primary/25">
+                  <Gift className="h-[18px] w-[18px]" aria-hidden />
                 </span>
                 {tapMutation.isPending ? (
-                  <span className="absolute inset-0 flex items-center justify-center rounded-[42%] bg-background/45">
-                    <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden />
+                  <span className="absolute inset-0 flex items-center justify-center rounded-3xl bg-background/40 backdrop-blur-[1px]">
+                    <Loader2 className="h-9 w-9 animate-spin text-primary" aria-hidden />
                   </span>
                 ) : null}
               </motion.div>
-            </TapScaleButton>
-            <p
-              className="mt-2 text-center font-semibold text-foreground"
-              style={{ fontFamily: "var(--font-edge-pet), ui-serif, Georgia, serif" }}
-            >
-              {displayName}
-            </p>
-          </div>
+            </div>
+          </TapScaleButton>
+          <p
+            className="mt-2 text-center text-sm font-semibold text-foreground sm:text-base"
+            style={{ fontFamily: "var(--font-edge-pet), ui-serif, Georgia, serif" }}
+          >
+            {displayName}
+          </p>
         </div>
-
-        {/* Метрики — на фоне страницы, без карточек */}
-        <aside className="md:col-span-3">
-          <p className="mb-2 text-xs font-semibold text-foreground">Твой герой</p>
-          {joinedHint ? (
-            <p className="mb-3 text-[11px] leading-snug text-muted-foreground">
-              С вами уже <span className="font-medium text-primary">{joinedHint}</span>
-            </p>
-          ) : null}
-          <div className="space-y-3 text-[12px]">
-            <div className="flex justify-between gap-2 text-muted-foreground">
-              <span>Уровень</span>
-              <span className="font-semibold tabular-nums text-foreground">{stats.level}</span>
-            </div>
-            <div>
-              <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
-                <span>XP</span>
-                <span className="tabular-nums">{xp.toNext} до след.</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted/80">
-                <div
-                  className="h-full rounded-full bg-primary transition-[width]"
-                  style={{ width: `${xp.pct}%` }}
-                />
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-1" aria-label={moodLabel}>
-              {Array.from({ length: 5 }, (_, i) => (
-                <span
-                  key={i}
-                  className={cn(
-                    "h-2 w-2 rounded-full",
-                    i < dots ? "bg-primary" : "bg-muted-foreground/20",
-                  )}
-                />
-              ))}
-              <span className="ml-1 text-foreground">{moodLabel}</span>
-            </div>
-            <p className="text-[11px] text-muted-foreground">Настроение: {stats.happyScore}%</p>
-          </div>
-        </aside>
       </div>
     </div>
   );

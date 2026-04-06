@@ -1,8 +1,9 @@
 import "dotenv/config";
-import { closeDb, getDb } from "../db/client";
+import { closeDb, ensurePostsFeedSchema, getDb } from "../db/client";
 import { getFeedAlgoConfig } from "../feed/config";
 import { computeGlobalPublicFeedOrderedIds } from "../feed/rank-global-public-feed";
 import { saveFeedGlobalSnapshot } from "../feed/snapshot-store";
+import { processRunningMediaStudioCampaigns } from "../admin/media-studio/campaign-service";
 
 function intervalSec(): number {
   const raw = process.env.FEED_WORKER_INTERVAL_SEC?.trim();
@@ -25,10 +26,20 @@ async function tick(): Promise<void> {
     candidates: candidateCount,
     mode: algo.mode,
   });
+
+  try {
+    const ms = await processRunningMediaStudioCampaigns();
+    if (ms.published > 0 || ms.failed > 0) {
+      console.log(new Date().toISOString(), "[feed-worker] media-studio campaigns", ms);
+    }
+  } catch (e) {
+    console.error("[feed-worker] media-studio campaigns", e);
+  }
 }
 
 async function main(): Promise<void> {
   const once = process.env.FEED_WORKER_ONCE?.trim() === "1";
+  await ensurePostsFeedSchema();
   await tick();
   if (once) {
     await closeDb();

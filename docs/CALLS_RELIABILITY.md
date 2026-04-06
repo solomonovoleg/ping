@@ -37,6 +37,9 @@
   - `callStateTransition.total|toConnected|toEnded|toMissed|toFailed`
   - `wsReconnectReason.normal|abnormal_or_network|superseded|policy_or_auth|other`
 - Клиент transport: `[realtime] /calls ws closed` + `reconnect circuit breaker enabled` — ранний сигнал reconnect-штормов.
+- Setup funnel (клиент/сервер): `invite_sent -> accepted -> offer_answer_done -> connected`; для каждого срыва фиксируется стадия и причина.
+- Серверные агрегаты (`callsReliability.setupFunnel` / `callsReliability.setupLatencyMs`): позволяет отличать проблемы signaling от ICE/TURN.
+- Дополнительно: `callsReliability.setupFailureReason` (timeout/rejected/canceled/hungup/disconnect_timeout) и `callsReliability.recentCallEvents` (последние N событий для пост-мортема).
 
 ---
 
@@ -72,6 +75,26 @@
   - деградация сценария `hangup -> redial`.
 - Быстрый rollback: вернуть флаг/конфиг и перезапустить процесс, код трогать не нужно.
 
+### SLO для продакшена (рекомендуемый baseline)
+
+- `callSetupSuccessRate` (1:1): целевой минимум **98.5%** за 24ч.
+- `inviteToConnected.p95`: целевой максимум **<= 8s** (межрегион LTE допускает выше, но отслеживать тренд).
+- `reconnectRecoverySuccessRate`: целевой минимум **90%** (в течение окна `RESUME_REJOIN_TIMEOUT_MS`).
+- `unexpectedDropRate` (не hangup/reject): целевой максимум **<= 1.5%**.
+
+Если 2+ метрики выходят за порог одновременно — останавливать rollout и включать rollback конфигом.
+
+### Synthetic probes (обязательны после крупных правок звонков)
+
+- Запускать регулярные тестовые звонки ботами между регионами:
+  - `wifi_like -> wifi_like`
+  - `lte_like -> wifi_like`
+  - `lte_like -> lte_like`
+  - `vpn_like -> wifi_like`
+- Частота: каждые 10-15 минут, отдельный дашборд по success/latency/failure stage.
+- При деградации synthetic до появления жалоб пользователей — считать инцидентом P1/P2 в зависимости от масштаба.
+- Для базового автоматического контроля порогов можно использовать `scripts/check-calls-slo.cjs` в cron/CI.
+
 ---
 
 ## 6. Видеозвонки (тот же сигналинг, другие треки)
@@ -106,3 +129,9 @@
 ## 8. Примечание: «никогда» в продакшене
 
 Гарантировать отсутствие сбоев **невозможно** (сети, ОС, баги браузеров). Цель этого документа — **убрать известные логические гонки**, зафиксировать политику сокетов и дать **повторяемый чеклист** при следующих изменениях.
+
+## 9. Прод-операции
+
+- Практичный runbook и готовые команды: `docs/CALLS_PROD_OPERATIONS.md`.
+- Post-deploy smoke: `scripts/calls-post-deploy-smoke.sh`.
+- Плановый SLO мониторинг: `.github/workflows/calls-slo-monitor.yml` + `scripts/check-calls-slo.cjs`.

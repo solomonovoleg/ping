@@ -1,4 +1,4 @@
-import { getCallToken, getRealtimeWebSocketHttpBase } from "@/lib/calls";
+import { getCallToken, getRealtimeWebSocketHttpBase, httpOriginToWsOrigin } from "@/lib/calls";
 import { CALL_WS_SUBPROTOCOL } from "@shared/ws-call-handshake";
 
 /** Ждём открытия сокета: иначе пользователь «висит» в connecting при ошибке nginx/токена. */
@@ -8,8 +8,7 @@ const GROUP_CALL_WS_OPEN_MS = 25_000;
 export function buildGroupCallWsUrl(): string {
   const wsBase = getRealtimeWebSocketHttpBase();
   if (wsBase) {
-    const wsOrigin = wsBase.replace(/^https:\/\//i, "wss://");
-    return `${wsOrigin}/group-calls`;
+    return `${httpOriginToWsOrigin(wsBase)}/group-calls`;
   }
   const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = typeof window !== "undefined" ? window.location.host : "localhost:3080";

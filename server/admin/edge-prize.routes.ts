@@ -1,8 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { noStorePrivateJson } from "../middleware/no-store-private-json";
 import { fetchUpstreamEdgeServicePath, getEdgeUpstreamBase } from "../edge/upstream-client";
-import { sendChatMessage, MessagesServiceError } from "../messages/service";
-import { storage } from "../storage";
+import { notifyPrizeDrawWinners, resolvePrizeDmSenderId } from "../edge/prize-draw-notify";
 
 type DrawPayload = {
   edgeId: string;
@@ -15,18 +14,12 @@ type DrawPayload = {
   requestedCount: number;
   drawnCount: number;
   winners: { platformUserId: string; giftKey: string; giftLabel: string }[];
+  winnerDm?: { text: string; mediaUrl: string | null } | null;
 };
 
-function notifySenderId(creatorId: string | null | undefined): string | null {
-  const c = typeof creatorId === "string" ? creatorId.trim() : "";
-  if (c) return c;
-  const fb = process.env.EDGE_PRIZE_NOTIFY_USER_ID?.trim();
-  return fb && fb.length > 0 ? fb : null;
-}
-
 /**
- * Розыгрыш приза EDGE: прокси на микросервис + опционально ЛС победителям от создателя кампании
- * (creator_platform_user_id в EDGE) или EDGE_PRIZE_NOTIFY_USER_ID.
+ * Розыгрыш приза EDGE: прокси на микросервис + опционально ЛС **только** строкам из `winners` в ответе
+ * (никакой рассылки мимо списка победителей). Отправитель: создатель кампании или EDGE_PRIZE_NOTIFY_USER_ID.
  */
 export function registerAdminEdgePrizeRoutes(app: Express): void {
   app.post("/api/admin/edge/draw-prize", noStorePrivateJson, async (req: Request, res: Response) => {
@@ -40,15 +33,27 @@ export function registerAdminEdgePrizeRoutes(app: Express): void {
         res.status(503).json({ message: "EDGE_UPSTREAM_URL не настроен" });
         return;
       }
-      const giftKey = req.body?.giftKey !== undefined && req.body?.giftKey !== null
-        ? String(req.body.giftKey)
-        : undefined;
-      const count = req.body?.count !== undefined && req.body?.count !== null ? Number(req.body.count) : undefined;
-      const notify = req.body?.notify !== false;
+      const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+      const giftKey = b.giftKey !== undefined && b.giftKey !== null ? String(b.giftKey) : undefined;
+      const count = b.count !== undefined && b.count !== null ? Number(b.count) : undefined;
+      const notify = b.notify !== false;
 
       const up = await fetchUpstreamEdgeServicePath("/v1/campaign/draw", {
         method: "POST",
-        body: JSON.stringify({ edgeId, giftKey, count }),
+        body: JSON.stringify({
+          edgeId,
+          giftKey,
+          count,
+          ...(b.pool === "top" || b.pool === "all" ? { pool: b.pool } : {}),
+          ...(b.method === "first" || b.method === "random" ? { method: b.method } : {}),
+          ...(b.topN !== undefined && b.topN !== null ? { topN: Number(b.topN) } : {}),
+          ...(b.rankingKind === "primary" || b.rankingKind === "secondary"
+            ? { rankingKind: b.rankingKind }
+            : {}),
+          ...(b.rankingScope === "primary" || b.rankingScope === "secondary"
+            ? { rankingScope: b.rankingScope }
+            : {}),
+        }),
       });
       if (!up.ok) {
         res.status(503).json({ message: "Не удалось связаться с EDGE" });
@@ -67,31 +72,20 @@ export function registerAdminEdgePrizeRoutes(app: Express): void {
         return;
       }
 
-      const dmResults: { platformUserId: string; ok: boolean; error?: string }[] = [];
-      const senderId = notify ? notifySenderId(payload.creatorPlatformUserId) : null;
+      let dmResults: { platformUserId: string; ok: boolean; error?: string }[] = [];
+      const senderId = notify ? resolvePrizeDmSenderId(payload.creatorPlatformUserId) : null;
 
       if (notify && senderId && payload.winners?.length) {
-        for (const w of payload.winners) {
-          const text = [
-            "🎉 Поздравляем!",
-            `Вы выиграли приз в кампании «${payload.campaignTitle}»: ${w.giftLabel}.`,
-            "Свяжитесь с организатором для получения награды.",
-          ].join("\n");
-          try {
-            const chat = await storage.getOrCreateDmChat(senderId, w.platformUserId);
-            await sendChatMessage({
-              userId: senderId,
-              chatId: chat.id,
-              content: text,
-              type: "text",
-            });
-            dmResults.push({ platformUserId: w.platformUserId, ok: true });
-          } catch (e) {
-            const msg = e instanceof MessagesServiceError ? e.message : "send_failed";
-            console.error("[admin/edge/draw-prize] dm", w.platformUserId, e);
-            dmResults.push({ platformUserId: w.platformUserId, ok: false, error: msg });
-          }
-        }
+        dmResults = await notifyPrizeDrawWinners({
+          senderId,
+          payload: {
+            campaignTitle: payload.campaignTitle,
+            giftLabel: payload.giftLabel,
+            winners: payload.winners,
+            winnerDm: payload.winnerDm,
+            drawnCount: payload.drawnCount,
+          },
+        });
       }
 
       const attempted = Boolean(notify && payload.winners?.length);

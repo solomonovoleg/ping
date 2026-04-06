@@ -1,4 +1,4 @@
-/** Строки API модуля ops (русский) */
+/** User-facing API messages (ops module, RU). */
 export const opsStrings = {
   platformSaved: "Настройки платформы сохранены",
   platformLoadError: "Не удалось загрузить настройки платформы",
@@ -6,9 +6,16 @@ export const opsStrings = {
   forbiddenSettings: "Изменять может только администратор",
   reportsLoadError: "Ошибка загрузки жалоб",
   reportCreated: "Жалоба отправлена",
+  reportDuplicateAck: "Эта жалоба уже учтена и находится в очереди рассмотрения",
   reportCreateError: "Не удалось отправить жалобу",
+  reportRateLimited: "Слишком много обращений за короткое время. Повторите позже.",
   reportBadTarget: "Некорректный тип или объект жалобы",
+  reportBadReasonCode: "Неизвестная категория жалобы",
+  reportOtherNeedsDetails: "Для категории «Другое» нужно краткое описание (от 3 символов)",
+  reportLegacyReasonTooShort: "Опишите проблему (не короче 3 символов) или выберите категорию",
   reportResolveError: "Не удалось обновить жалобу",
   reportNotFound: "Жалоба не найдена",
   auditLoadError: "Ошибка загрузки аудита",
+  contentRemoveNotFound: "Контент не найден",
+  contentRemoveError: "Не удалось удалить контент",
 } as const;

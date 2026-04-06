@@ -21,17 +21,17 @@ export function applyTheme(themeId: ThemeId): void {
 }
 
 /**
- * Возвращает сохранённую тему или "light".
+ * Возвращает сохранённую тему или "dark" (дефолт для новых пользователей).
  */
 export function getSavedTheme(): ThemeId {
-  if (typeof window === "undefined") return "light";
+  if (typeof window === "undefined") return "dark";
   try {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
     if (saved && isValidTheme(saved)) return saved;
   } catch {
     // ignore
   }
-  return "light";
+  return "dark";
 }
 
 /**

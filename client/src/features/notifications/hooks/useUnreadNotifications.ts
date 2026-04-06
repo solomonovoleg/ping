@@ -35,6 +35,7 @@ export function useUnreadNotifications(): UnreadNotificationsState {
     queryFn: () => fetchNotifications(MAX_LIST_FOR_COUNT, 0),
     refetchOnWindowFocus: true,
     refetchInterval: (q) => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
       const list = Array.isArray(q.state.data) ? q.state.data : [];
       const unread = list.reduce((sum, n) => sum + (n.readAt ? 0 : 1), 0);
       return unread > 0 ? FAST_REFETCH_MS : BASE_REFETCH_MS;

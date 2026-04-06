@@ -1,8 +1,14 @@
 import { useState, useEffect } from "react";
 import { isNative } from "@/lib/capacitor-native";
 
-/** Нативно (Android/iOS): ниже этой ширины — колонка ~480px; планшет / fold развёрнутый / ландшафт — на всю ширину. */
-export const NATIVE_WIDE_LAYOUT_MIN_PX = 640;
+/**
+ * Нативно (Capacitor): порог «узкий телефон» vs «широкое окно».
+ * Совпадает с Material Design 3 / Android **window width size class**:
+ * Compact width below 600dp, Medium/Expanded from 600dp (планшеты, fold внутренний экран, ландшафт, split-screen).
+ * В WebView ширина в CSS px обычно совпадает с dp при `width=device-width`; см.
+ * https://developer.android.com/develop/ui/views/layout/use-window-size-classes
+ */
+export const NATIVE_WIDE_LAYOUT_MIN_PX = 600;
 
 /**
  * «Телефонная» оболочка (колонка ~480px): узкий экран в приложении или мобильный браузер.
@@ -14,6 +20,10 @@ export function getPreferPhoneChrome(): boolean {
     const w = window.innerWidth || document.documentElement?.clientWidth || 0;
     return w < NATIVE_WIDE_LAYOUT_MIN_PX;
   }
+  const platform = navigator.platform || "";
+  // Desktop OS in browser should always use desktop chrome,
+  // even if UA is temporarily spoofed for device emulation.
+  if (/(Mac|Win|Linux)/i.test(platform)) return false;
   const ua = navigator.userAgent || "";
   if (/Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)) return true;
   if (/\biPad\b/i.test(ua)) return true;

@@ -13,8 +13,11 @@ export const messageTypeEnum = [
   "image",
   "video",
   "video_note",
+  "sticker",
+  "file",
   "missed_call",
   "post_share",
+  "comment_share",
   "story_reply",
 ] as const;
 export type MessageType = (typeof messageTypeEnum)[number];

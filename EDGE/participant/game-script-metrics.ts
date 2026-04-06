@@ -15,6 +15,8 @@ const KEYS = {
   dailyToiletCount: "dailyToiletCount",
   dailyCalmCount: "dailyCalmCount",
   dailyPetCount: "dailyPetCount",
+  /** Сквозной счётчик тапов по персонажу (онбординг «25 тапов» + подсказки). Не сбрасывается при смене UTC-дня. */
+  edgeIntroTapCount: "edgeIntroTapCount",
 } as const;
 
 export type GameScriptMetricsPublic = {
@@ -106,6 +108,18 @@ export function bumpDailyAfterInteract(
 /** Только открытие состояния (без действий) — rollover + серия заходов. */
 export function touchCompanionOpen(extra: Record<string, unknown>, now: Date): Record<string, unknown> {
   return stampGameVisit(extra, now);
+}
+
+/** Увеличить счётчик тапов для подсказок первого знакомства с EDGE (после rollover дня). */
+export function bumpIntroTapCount(extra: Record<string, unknown>, now: Date): Record<string, unknown> {
+  const e = rolloverGameDayIfNeeded(extra, now);
+  const n = num(e, KEYS.edgeIntroTapCount);
+  return { ...e, [KEYS.edgeIntroTapCount]: n + 1 };
+}
+
+export function readIntroTapCount(extra: Record<string, unknown>, now: Date): number {
+  const e = rolloverGameDayIfNeeded(extra, now);
+  return num(e, KEYS.edgeIntroTapCount);
 }
 
 export function readGameScriptMetrics(extra: Record<string, unknown>, now: Date): GameScriptMetricsPublic {

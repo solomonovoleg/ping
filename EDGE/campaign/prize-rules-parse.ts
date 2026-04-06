@@ -2,6 +2,8 @@ export type ParsedPrizeRules = {
   pool: "all" | "top";
   method: "random" | "first";
   topN: number;
+  /** По какому рейтингу строить топ для пула «топ N». */
+  rankingKind: "primary" | "secondary";
 };
 
 export function parsePrizeRulesFromConfig(configJson: unknown): ParsedPrizeRules {
@@ -16,5 +18,8 @@ export function parsePrizeRulesFromConfig(configJson: unknown): ParsedPrizeRules
   const rawN = o.topN;
   const topN =
     typeof rawN === "number" && Number.isFinite(rawN) ? Math.min(5000, Math.max(1, Math.floor(rawN))) : 50;
-  return { pool, method, topN };
+  const rkRaw = o.rankingKind ?? o.rankingScope;
+  const rankingKind =
+    rkRaw === "secondary" || rkRaw === "Secondary" ? "secondary" : "primary";
+  return { pool, method, topN, rankingKind };
 }

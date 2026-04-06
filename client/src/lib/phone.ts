@@ -28,6 +28,37 @@ export function formatPhoneWithPrefix(digits: string): string {
   return formatted ? `+7 ${formatted}` : "+7 ";
 }
 
+/**
+ * Номер для набора от New-Tel (часто приходит как 7495… без +).
+ * Показ: +7 (495) 640-97-98; tel: — e.164 +7XXXXXXXXXX.
+ */
+export function formatServiceDialNumberForDisplay(raw: string | null | undefined): string {
+  if (raw == null || !String(raw).trim()) return "";
+  const d = digitsOnly(raw);
+  if (d.length === 11 && d.startsWith("7")) {
+    return formatPhoneWithPrefix(d.slice(1));
+  }
+  if (d.length === 11 && d.startsWith("8")) {
+    return formatPhoneWithPrefix(d.slice(1));
+  }
+  if (d.length === 10) {
+    return formatPhoneWithPrefix(d);
+  }
+  if (d.length > 0) {
+    return `+${d}`;
+  }
+  return String(raw).trim();
+}
+
+export function serviceDialNumberToTelHref(raw: string | null | undefined): string | undefined {
+  if (raw == null || !String(raw).trim()) return undefined;
+  const d = digitsOnly(raw);
+  if (d.length === 11 && d.startsWith("7")) return `tel:+${d}`;
+  if (d.length === 11 && d.startsWith("8")) return `tel:+7${d.slice(1)}`;
+  if (d.length === 10) return `tel:+7${d}`;
+  return undefined;
+}
+
 /** Из строки ввода (цифры с возможными 8/7 в начале) вытащить до 10 цифр номера после 7. */
 export function parseInputToDigits(input: string): string {
   let d = digitsOnly(input);

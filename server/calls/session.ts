@@ -157,6 +157,22 @@ export function endSession(
 
   // Garbage-collect session after 60 seconds
   setTimeout(() => { sessions.delete(callId); }, 60_000);
+
+  const connectedAt = session.connectedAt;
+  const endedAtMs = session.endedAt;
+  // EDGE MONEY: только сессии 1:1 из этого модуля; групповые звонки — отдельный pipeline, без этого хука.
+  if (connectedAt !== undefined && endedAtMs !== undefined && endedAtMs > connectedAt) {
+    void import("../edge-money-call-minutes/handle-call-ended-for-edge-money").then((m) =>
+      m.handleCallEndedForEdgeMoney({
+        chatId: session.chatId,
+        callerId: session.callerId,
+        calleeId: session.calleeId,
+        connectedAt,
+        endedAt: endedAtMs,
+      }),
+    ).catch((e) => console.error("[edge-money-call-minutes]", e));
+  }
+
   return { changed: true, session };
 }
 
@@ -179,7 +195,8 @@ export function markParticipantConnected(
   if (bothConnected) {
     session.state = "connected";
     if (!session.connectedAt) session.connectedAt = Date.now();
-  } else if (session.state === "accepted" || session.state === "ringing") {
+  } else if (session.state === "accepted") {
+    /** Не трогаем `ringing`: иначе один `call.connected` от звонящего до ответа сбивает состояние → resume-check отдаёт «connecting» и клиент теряет UI входящего. */
     session.state = "connecting";
   }
   return { changed: !wasKnown, bothConnected, session };

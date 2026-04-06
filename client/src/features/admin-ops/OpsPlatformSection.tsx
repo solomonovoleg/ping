@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { ErrorWithRetry } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { fetchMe } from "@/lib/auth";
 import { Megaphone } from "lucide-react";
@@ -32,6 +34,7 @@ export function OpsPlatformSection() {
         bannerVariant: r.bannerVariant,
         maintenanceMode: r.maintenanceMode,
         strictApiShield: r.strictApiShield,
+        registrationPhoneCallVerificationEnabled: r.registrationPhoneCallVerificationEnabled,
       });
       qc.invalidateQueries({ queryKey: ["admin", "ops", "traffic-shield"] });
       qc.invalidateQueries({ queryKey: ["platform", "announcement"] });
@@ -44,28 +47,37 @@ export function OpsPlatformSection() {
     qc.setQueryData<PlatformOpsDto>(QK, (prev) => (prev ? { ...prev, ...partial } : prev));
   };
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">Загрузка…</p>;
+  if (isLoading) {
+    return (
+      <AdminPanelCard className="space-y-3 p-5 sm:p-6">
+        <Skeleton className="h-5 w-56" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-10 w-44" />
+      </AdminPanelCard>
+    );
+  }
   if (error || !data) {
     return (
-      <div className="text-sm space-y-2">
-        <p className="text-destructive">{adminOpsUi.loadError}</p>
-        <Button size="sm" variant="outline" onClick={() => refetch()}>
-          Повторить
-        </Button>
-      </div>
+      <ErrorWithRetry
+        title="Не удалось загрузить настройки платформы"
+        description={error instanceof Error ? error.message : adminOpsUi.loadError}
+        onRetry={() => void refetch()}
+        className="min-h-[180px]"
+      />
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Megaphone className="w-4 h-4" />
+    <AdminPanelCard className="space-y-4 p-5 sm:p-6">
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+          <Megaphone className="h-4 w-4" />
           {adminOpsUi.platformCard}
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">{adminOpsUi.platformHint}</p>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </h2>
+        <p className="mt-1 text-sm admin-text-muted">{adminOpsUi.platformHint}</p>
+      </div>
+      <div className="space-y-4">
         {!canEditPlatform ? (
           <p className="text-sm text-muted-foreground rounded-md border border-border bg-muted/30 px-3 py-2">
             Изменение баннера и режима обслуживания доступно только ролям администратор и супер-админ.
@@ -118,6 +130,18 @@ export function OpsPlatformSection() {
         <div className="rounded-md border border-border bg-muted/20 px-3 py-2 space-y-2">
           <div className="flex items-center gap-2 min-h-[var(--uix-touch-min)]">
             <Switch
+              id="ops-reg-phone-call"
+              checked={data.registrationPhoneCallVerificationEnabled ?? true}
+              onCheckedChange={(v) => setDraft({ registrationPhoneCallVerificationEnabled: v })}
+              disabled={mutation.isPending || !canEditPlatform}
+            />
+            <Label htmlFor="ops-reg-phone-call">{adminOpsUi.registrationPhoneCallOn}</Label>
+          </div>
+          <p className="text-xs text-muted-foreground pl-1">{adminOpsUi.registrationPhoneCallHint}</p>
+        </div>
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 space-y-2">
+          <div className="flex items-center gap-2 min-h-[var(--uix-touch-min)]">
+            <Switch
               id="ops-strict-shield"
               checked={data.strictApiShield ?? false}
               onCheckedChange={(v) => setDraft({ strictApiShield: v })}
@@ -130,7 +154,7 @@ export function OpsPlatformSection() {
         <Button disabled={mutation.isPending || !canEditPlatform} onClick={() => mutation.mutate(data)}>
           {mutation.isPending ? adminOpsUi.saving : adminOpsUi.save}
         </Button>
-      </CardContent>
-    </Card>
+      </div>
+    </AdminPanelCard>
   );
 }

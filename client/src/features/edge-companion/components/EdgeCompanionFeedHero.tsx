@@ -2,13 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 import { fetchEdgeCompanionCampaignConfig } from "@/lib/edge-gamification";
 import { fetchEdgeParticipantState, type EdgeParticipantState } from "@/lib/edge-participant";
-import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorWithRetry } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
-import { EDGE_ACTION_PRIMARY, EDGE_EYEBROW } from "@/features/edge-companion/edge-uix";
+import { EDGE_EYEBROW } from "@/features/edge-companion/edge-uix";
 import { hasStartedEdgePlay } from "@/features/edge-companion/edge-feed-play-state";
 import { EdgeFeedCardEntrance } from "@/features/edge-companion/feed-delight";
+import { EdgeMoneyFeedCard } from "@/features/edge-money-template/EdgeMoneyFeedCard";
 import { EdgeFeedSurfacePager } from "./EdgeFeedSurfacePager";
 
 type Props = {
@@ -40,7 +40,7 @@ export function EdgeCompanionFeedHero({ edgeId, userId, onOpen, className, varia
 
   const stats = stateQ.data as EdgeParticipantState | undefined;
   const locked = Boolean(configQ.data?.interactLocked);
-  const title = configQ.data?.title?.trim() || "Кампания EDGE";
+  const title = configQ.data?.title?.trim() || "Интерактивная кампания";
 
   const started = Boolean(stats && hasStartedEdgePlay(stats));
   const ctaLabel = locked ? "Недоступно" : isGuest ? "Начать игру" : started ? "Вернуться в игру" : "Начать игру";
@@ -54,10 +54,10 @@ export function EdgeCompanionFeedHero({ edgeId, userId, onOpen, className, varia
         className={cn(variant === "feed" ? "w-full" : "uix-content-x-tight py-2", className)}
         data-edge-id={edgeId}
       >
-        <div className="overflow-hidden rounded-2xl border border-border/50 bg-card p-4">
-          <Skeleton className="h-4 w-48 rounded-md" />
-          <Skeleton className="mt-4 h-[280px] w-full rounded-xl" />
-          <Skeleton className="mt-4 h-12 w-full rounded-2xl" />
+        <div className="edge-feed-shell overflow-hidden rounded-2xl border border-border/55 bg-card/[0.34] p-3">
+          <Skeleton className="h-4 w-40 rounded-md bg-foreground/15" />
+          <Skeleton className="mt-3.5 h-[320px] w-full rounded-xl bg-foreground/10" />
+          <Skeleton className="mt-3 h-12 w-full rounded-2xl bg-foreground/16" />
         </div>
       </div>
     );
@@ -67,12 +67,12 @@ export function EdgeCompanionFeedHero({ edgeId, userId, onOpen, className, varia
     return (
       <div className={cn(variant === "feed" ? "w-full" : "uix-content-x-tight py-2", className)}>
         <ErrorWithRetry
-          title="EDGE"
+          title="Не загрузилось"
           description={
-            configQ.error instanceof Error ? configQ.error.message : "Не удалось загрузить кампанию."
+            configQ.error instanceof Error ? configQ.error.message : "Кампанию сейчас не удалось открыть."
           }
           onRetry={() => void configQ.refetch()}
-          className="min-h-[140px] rounded-2xl border border-border/60"
+          className="edge-feed-shell min-h-[160px] rounded-2xl border border-border/60 bg-card/[0.32]"
         />
       </div>
     );
@@ -80,28 +80,46 @@ export function EdgeCompanionFeedHero({ edgeId, userId, onOpen, className, varia
 
   const campaign = configQ.data;
 
-  const card = (
-    <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-b from-primary/12 via-card to-card shadow-md">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,hsl(var(--primary)/0.18),transparent)]" />
+  if (campaign.edgeType === "money") {
+    return (
+      <div
+        className={cn(variant === "feed" ? "w-full" : "uix-content-x-tight py-2", className)}
+        data-user-id={String(userId)}
+        data-edge-id={edgeId}
+      >
+        {variant === "feed" ? (
+          <EdgeFeedCardEntrance className="w-full">
+            <EdgeMoneyFeedCard edgeId={edgeId} userId={userId} onOpen={onOpen} variant={variant} />
+          </EdgeFeedCardEntrance>
+        ) : (
+          <EdgeMoneyFeedCard edgeId={edgeId} userId={userId} onOpen={onOpen} variant={variant} />
+        )}
+      </div>
+    );
+  }
 
-      <div className="relative px-3 pb-3 pt-3 sm:px-4 sm:pb-4 sm:pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary">
-              <Sparkles className="h-4 w-4" aria-hidden />
-            </span>
+  const eyebrow = "Интерактив";
+
+  const card = (
+    <div className="edge-feed-shell relative w-full overflow-hidden rounded-2xl border border-border/55 bg-card/[0.34]">
+      <span className="edge-feed-shell__glow pointer-events-none absolute inset-0" aria-hidden />
+      <div className="relative px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
+        <div className="flex flex-wrap items-start justify-between gap-2 px-0.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary/70" aria-hidden />
             <div className="min-w-0">
-              <p className={EDGE_EYEBROW}>EDGE · интерактив</p>
-              <p className="truncate text-sm font-semibold text-foreground">{title}</p>
+              <p className={EDGE_EYEBROW}>{eyebrow}</p>
+              <span className="sr-only">{title}</span>
             </div>
           </div>
           {locked ? (
-            <span className="rounded-full border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-900 dark:text-amber-100">
-              Пауза / завершено
+            <span className="text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
+              Пауза
             </span>
           ) : null}
         </div>
 
+        <div className="mt-[5px] min-w-0">
         <EdgeFeedSurfacePager
           edgeId={edgeId}
           campaign={campaign}
@@ -110,19 +128,11 @@ export function EdgeCompanionFeedHero({ edgeId, userId, onOpen, className, varia
           stateLoading={stateQ.isLoading}
           stateError={stateQ.isError}
           locked={locked}
+          onOpenGame={onOpen}
+          openGameLabel={ctaLabel}
+          openGameDisabled={ctaDisabled}
+          ctaAccent={ctaAccent}
         />
-
-        <div className={cn("mt-4 w-full", ctaAccent && "edge-feed-cta-accent-wrap")}>
-          <TapScaleButton
-            type="button"
-            haptic
-            disabled={ctaDisabled}
-            onClick={onOpen}
-            className={`${EDGE_ACTION_PRIMARY} relative z-[1] w-full`}
-            aria-label={ctaLabel}
-          >
-            {ctaLabel}
-          </TapScaleButton>
         </div>
       </div>
     </div>

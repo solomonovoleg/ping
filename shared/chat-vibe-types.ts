@@ -63,3 +63,11 @@ export type VibeUserSettings = {
   vibeEnabled: boolean;
   vibeShareWithPartner: boolean;
 };
+
+/** Realtime: быстрая серия сообщений в DM при включённой атмосфере у обоих — волна + тихий звук на клиентах. */
+export type ChatVibeTensionPulsePayload = {
+  type: "chat-vibe-tension-pulse";
+  chatId: string;
+  senderId: string;
+  at: number;
+};

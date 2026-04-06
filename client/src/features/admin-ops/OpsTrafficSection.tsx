@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, AlertTriangle } from "lucide-react";
@@ -23,32 +23,24 @@ export function OpsTrafficSection() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="h-4 w-full max-w-xl mt-2" />
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-32 w-full" />
-        </CardContent>
-      </Card>
+      <AdminPanelCard className="space-y-2 p-5 sm:p-6">
+        <Skeleton className="h-5 w-48 bg-[hsl(var(--admin-elevated-strong))]" />
+        <Skeleton className="mt-2 h-4 w-full max-w-xl bg-[hsl(var(--admin-elevated-strong))]" />
+        <Skeleton className="h-16 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+        <Skeleton className="h-32 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+      </AdminPanelCard>
     );
   }
 
   if (error || !data) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{adminOpsUi.trafficCard}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-sm text-destructive">{adminOpsUi.trafficLoadError}</p>
-          <Button size="sm" variant="outline" onClick={() => refetch()}>
-            Повторить
-          </Button>
-        </CardContent>
-      </Card>
+      <AdminPanelCard className="space-y-2 p-5 sm:p-6">
+        <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">{adminOpsUi.trafficCard}</h2>
+        <p className="text-sm text-[hsl(0_72%_62%)]">{adminOpsUi.trafficLoadError}</p>
+        <Button size="sm" variant="outline" onClick={() => refetch()}>
+          Повторить
+        </Button>
+      </AdminPanelCard>
     );
   }
 
@@ -68,18 +60,19 @@ export function OpsTrafficSection() {
     data.strictApiShield ? data.limits.mutation.authenticatedStrict : data.limits.mutation.authenticatedNormal;
 
   return (
-    <Card
+    <AdminPanelCard
       className={cn(
-        floodHint && "border-amber-500/50 bg-amber-500/[0.04]",
+        "space-y-4 p-5 sm:p-6",
+        floodHint && "border-amber-500/50 bg-amber-500/[0.06]",
       )}
     >
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Activity className="w-4 h-4" />
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+          <Activity className="h-4 w-4" />
           {adminOpsUi.trafficCard}
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">{adminOpsUi.trafficHint}</p>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        </h2>
+        <p className="mt-1 text-sm admin-text-muted">{adminOpsUi.trafficHint}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs admin-text-muted">
           <span>
             {adminOpsUi.trafficRefresh}:{" "}
             {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString("ru-RU") : "—"}
@@ -89,8 +82,8 @@ export function OpsTrafficSection() {
             Обновить
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </div>
+      <div className="space-y-4">
         {floodHint ? (
           <div
             className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100"
@@ -179,11 +172,11 @@ export function OpsTrafficSection() {
           )}
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{adminOpsUi.trafficNoteLabel}:</span> {data.note} Uptime процесса:{" "}
-          {Math.floor(data.uptimeSec / 60)} мин.
+        <p className="text-xs admin-text-muted">
+          <span className="font-medium text-[hsl(210_20%_92%)]">{adminOpsUi.trafficNoteLabel}:</span> {data.note} Uptime
+          процесса: {Math.floor(data.uptimeSec / 60)} мин.
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </AdminPanelCard>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import {
   PhoneOff,
   Phone,
@@ -24,6 +25,7 @@ import {
   FlipHorizontal2,
   List,
   ExternalLink,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -31,12 +33,15 @@ import type {
   CallDirection,
   IncomingCallInfo,
   CallNetworkQualityLevel,
+  CallVideoQualityMode,
   CallFeatureSupport,
   CallReactionEvent,
   CallCaptionEvent,
   CallMessageListContext,
 } from "@/features/call/call-types";
 import { TapScaleButton } from "@/components/ui/tap-scale";
+import { triggerTapFeedback } from "@/lib/micro-feedback";
+import { MotionBottomSheetPanel, MotionBottomSheetScrollArea } from "@/components/ui/motion-bottom-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -97,6 +102,7 @@ type Props = {
   remoteStream: MediaStream | null;
   connectionState: RTCPeerConnectionState | null;
   networkQuality: CallNetworkQualityLevel;
+  videoQualityMode: CallVideoQualityMode;
   supports: CallFeatureSupport;
   isScreenShareActive: boolean;
   /** Собеседник ведёт демонстрацию экрана — удалённое видео без зеркала. */
@@ -114,6 +120,7 @@ type Props = {
   onToggleRecording: () => Promise<void>;
   onToggleRecordingPause: () => Promise<void>;
   onToggleCaptions: () => void;
+  onToggleVideoHd: () => void;
   onRetry?: () => void;
   otherDisplayName: string;
   otherAvatarUrl: string | null;
@@ -161,6 +168,7 @@ const PULSE_MOBILE_SECONDARY_BASE = [
 const PULSE_SECONDARY_CORE = [
   { icon: RefreshCcw, label: "Поворот" },
   { icon: PictureInPicture2, label: "PiP" },
+  { icon: Sparkles, label: "HD" },
   { icon: MonitorUp, label: "Экран" },
   { icon: Circle, label: "Запись" },
   { icon: MessageSquare, label: "Чат" },
@@ -212,6 +220,7 @@ export function CallModal({
   remoteStream,
   connectionState,
   networkQuality,
+  videoQualityMode,
   supports,
   isScreenShareActive,
   remoteScreenShareActive,
@@ -228,6 +237,7 @@ export function CallModal({
   onToggleRecording,
   onToggleRecordingPause,
   onToggleCaptions,
+  onToggleVideoHd,
   onRetry,
   otherDisplayName,
   otherAvatarUrl,
@@ -278,13 +288,17 @@ export function CallModal({
   userIdRef.current = user?.id;
   const callMessageContextRef = useRef(callMessageContext);
   callMessageContextRef.current = callMessageContext;
-  const [videoHd, setVideoHd] = useState(false);
+  const [remoteHdIndicator, setRemoteHdIndicator] = useState(false);
   const [floatEmojis, setFloatEmojis] = useState<{ id: string; emoji: string; x: number }[]>([]);
 
   const pulseSecondaryRows = useMemo(() => {
     if (isMobile) {
-      type MobileRow = (typeof PULSE_MOBILE_SECONDARY_BASE)[number] | { icon: typeof Circle; label: "Запись" };
+      type MobileRow =
+        | (typeof PULSE_MOBILE_SECONDARY_BASE)[number]
+        | { icon: typeof Sparkles; label: "HD" }
+        | { icon: typeof Circle; label: "Запись" };
       const rows: MobileRow[] = [...PULSE_MOBILE_SECONDARY_BASE];
+      rows.push({ icon: Sparkles, label: "HD" });
       rows.push({ icon: Circle, label: "Запись" });
       return rows;
     }
@@ -420,13 +434,13 @@ export function CallModal({
     const active = isVideo && state === "connected";
     if (!active) {
       hdOkStreakRef.current = 0;
-      setVideoHd(false);
+      setRemoteHdIndicator(false);
       return;
     }
     const track = remoteStream?.getVideoTracks()[0] ?? localStream?.getVideoTracks()[0];
     if (!track) {
       hdOkStreakRef.current = 0;
-      setVideoHd(false);
+      setRemoteHdIndicator(false);
       return;
     }
     hdOkStreakRef.current = 0;
@@ -446,10 +460,10 @@ export function CallModal({
         const ok = w >= 1280 || h >= 720;
         if (ok) hdOkStreakRef.current = Math.min(3, hdOkStreakRef.current + 1);
         else hdOkStreakRef.current = 0;
-        setVideoHd(hdOkStreakRef.current >= 2);
+        setRemoteHdIndicator(hdOkStreakRef.current >= 2);
       } catch {
         hdOkStreakRef.current = 0;
-        setVideoHd(false);
+        setRemoteHdIndicator(false);
       }
     };
     tick();
@@ -555,6 +569,8 @@ export function CallModal({
   const showIncomingAnswerUi =
     incoming != null && (state === "incoming_ringing" || state === "reconnecting");
   const showVideo = isVideo && state === "connected";
+  /** iOS WKWebView: полноэкранная стадия не перехватывает тапы по «Принять»/«Отклонить». */
+  const stagePointerMutedForIncoming = showIncomingAnswerUi && !showVideo;
   /** Короткая очередь: старые строки уходят с exit-анимацией. */
   const captionsForStrip = captions.slice(-5);
   const showCaptionStrip =
@@ -585,6 +601,7 @@ export function CallModal({
     if (lb === "Экран") return !supports.screenShare;
     if (lb === "Запись") return !supports.localRecording;
     if (lb === "Чат") return false;
+    if (lb === "HD") return !isVideo;
     return false;
   };
 
@@ -592,6 +609,7 @@ export function CallModal({
     if (lb === "Титры") {
       return captionsEnabled;
     }
+    if (lb === "HD") return videoQualityMode === "hd";
     if (lb === "Экран") return isScreenShareActive;
     if (lb === "Чат") return callChatOpen;
     if (lb === "Запись") return localRecordingState !== "idle";
@@ -642,7 +660,7 @@ export function CallModal({
   /** Сообщения, реакции и ввод — общий блок для нижнего листа (моб.) и боковой панели (десктоп). */
   const renderCallChatBody = () => (
     <>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 sm:gap-4 sm:p-4">
+      <MotionBottomSheetScrollArea className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain p-3 sm:gap-4 sm:p-4">
         {callChatMessages.length === 0 ? (
           <p className="text-center text-[11px] leading-relaxed text-white/35">
             {linkedChat
@@ -689,7 +707,7 @@ export function CallModal({
             )}
           </>
         )}
-      </div>
+      </MotionBottomSheetScrollArea>
 
       <div className="flex shrink-0 items-center gap-2 border-t border-white/[0.05] bg-black/20 px-2 py-1.5 sm:p-3">
         {["❤️", "👍", "🎉", "😂", "🔥"].map((emoji) => (
@@ -826,6 +844,10 @@ export function CallModal({
       void onToggleRecording();
       return;
     }
+    if (lb === "HD") {
+      onToggleVideoHd();
+      return;
+    }
     if (lb === "Чат") {
       setCallChatOpen((v) => !v);
       return;
@@ -833,8 +855,13 @@ export function CallModal({
     setPulseSecondaryActive((p) => (p === lb ? null : lb));
   };
 
-  return (
-    <div className={cn("fixed inset-0 z-[200] flex flex-row overflow-hidden text-white", PULSE_CALL_BACKDROP_CLASS)}>
+  const shell = (
+    <div
+      className={cn(
+        "fixed inset-0 z-[10050] flex min-h-[100dvh] w-screen max-w-none flex-row overflow-hidden text-white",
+        PULSE_CALL_BACKDROP_CLASS,
+      )}
+    >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col select-none">
       {/* Тот же знак, что в нижней навигации (`AppLayout`), плюс словесная метка */}
       <div
@@ -892,7 +919,7 @@ export function CallModal({
             <span className="h-1 w-1 shrink-0 animate-pulse rounded-full bg-emerald-400/55" aria-hidden />
             <span>
               {state === "connected" || state === "reconnecting" ? "Зашифровано" : "Соединение…"}
-              {isVideo && showVideo && videoHd ? " · HD" : ""}
+              {isVideo && showVideo && remoteHdIndicator ? " · HD" : ""}
             </span>
           </span>
         </div>
@@ -905,7 +932,7 @@ export function CallModal({
           <span className="shrink-0 font-mono text-[12px] tabular-nums text-white/55">
             {state === "connected" || state === "reconnecting" ? formatDuration(callDuration) : label || "—"}
           </span>
-          {isVideo && showVideo && videoHd ? (
+          {isVideo && showVideo && remoteHdIndicator ? (
             <>
               <div className="h-5 w-px shrink-0 bg-white/10" aria-hidden />
               <Badge className="shrink-0 border-sky-500/35 bg-sky-500/18 px-2 text-[9px] font-bold uppercase tracking-wider text-sky-300">
@@ -941,7 +968,10 @@ export function CallModal({
       {/* Main content area */}
       <div
         ref={callStageRef}
-        className="absolute inset-0 z-[1] flex min-h-0 min-w-0 items-center justify-center overflow-hidden"
+        className={cn(
+          "absolute inset-0 z-[1] flex min-h-0 min-w-0 items-center justify-center overflow-hidden",
+          stagePointerMutedForIncoming && "pointer-events-none",
+        )}
         onPointerDown={(e) => {
           if (!showVideo) return;
           if ((e.target as HTMLElement).closest("button,input,textarea,[role='button']")) return;
@@ -1351,8 +1381,8 @@ export function CallModal({
         </>
       )}
 
-      {/* Controls — оверлей, видео тянется под низ окна */}
-      <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-50 px-4 pb-[max(28px,calc(env(safe-area-inset-bottom,0px)+16px))] pt-2">
+      {/* Controls — оверлей, видео тянется под низ окна (z выше стадии; на iOS важен порядок с pointer-events) */}
+      <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-[60] px-4 pb-[max(28px,calc(env(safe-area-inset-bottom,0px)+16px))] pt-2">
         <div
           className={cn(
             "pointer-events-auto mx-auto flex w-full max-w-[100vw] flex-col items-center",
@@ -1430,31 +1460,36 @@ export function CallModal({
 
         <div className={cn("flex flex-col items-center", isMobile ? "gap-1" : "gap-4")}>
           {showIncomingAnswerUi && (
-            <div className="flex flex-col items-center gap-2">
+            <div className="relative isolate z-[1] flex flex-col items-center gap-2">
               {state === "reconnecting" && (
                 <p className="max-w-[min(100%,20rem)] text-center text-[12px] leading-snug text-white/60">
                   Связь восстанавливается — можете ответить или отклонить.
                 </p>
               )}
               <div className="flex items-end justify-center gap-7 sm:gap-9">
-                <TapScaleButton
+                {/* Обычные button + touch-manipulation: на части iOS motion.button даёт «мёртвые» тапы */}
+                <button
                   type="button"
-                  onClick={onReject}
-                  className="min-h-[var(--uix-touch-min)] rounded-full bg-red-600 p-4 transition-colors hover:bg-red-500"
+                  onClick={() => {
+                    triggerTapFeedback({ haptic: true, sound: true });
+                    onReject();
+                  }}
+                  className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] touch-manipulation items-center justify-center rounded-full bg-red-600 p-4 transition-colors hover:bg-red-500 active:scale-[0.96]"
                   aria-label="Отклонить"
-                  haptic
                 >
-                  <PhoneOff className="h-8 w-8" />
-                </TapScaleButton>
-                <TapScaleButton
+                  <PhoneOff className="pointer-events-none h-8 w-8 shrink-0" />
+                </button>
+                <button
                   type="button"
-                  onClick={onAccept}
-                  className="min-h-[var(--uix-touch-min)] rounded-full bg-green-600 p-4 transition-colors hover:bg-green-500"
+                  onClick={() => {
+                    triggerTapFeedback({ haptic: true, sound: true });
+                    onAccept();
+                  }}
+                  className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] touch-manipulation items-center justify-center rounded-full bg-green-600 p-4 transition-colors hover:bg-green-500 active:scale-[0.96]"
                   aria-label="Принять"
-                  haptic
                 >
-                  <Phone className="h-8 w-8" />
-                </TapScaleButton>
+                  <Phone className="pointer-events-none h-8 w-8 shrink-0" />
+                </button>
               </div>
             </div>
           )}
@@ -1813,20 +1848,27 @@ export function CallModal({
               transition={{ duration: reducedMotion ? 0 : DURATION_FAST_MS / 1000, ease: EASING_OUT_BEZIER }}
               onClick={() => setCallChatOpen(false)}
             />
-            <motion.aside
+            <MotionBottomSheetPanel
               key="call-chat-bottom-sheet"
               role="dialog"
               aria-modal
               aria-label="Чат во время звонка"
-              className="fixed inset-x-0 bottom-0 z-[210] flex h-[30vh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-white/[0.08] bg-[#0e0e18] shadow-[0_-16px_48px_rgba(0,0,0,0.55)] select-text"
+              className="fixed inset-x-0 bottom-0 z-[210] flex h-[30vh] min-h-0 flex-col overflow-hidden rounded-t-2xl border border-b-0 border-white/[0.08] bg-[#0e0e18] shadow-[0_-16px_48px_rgba(0,0,0,0.55)] select-text"
               initial={reducedMotion ? false : { y: "100%" }}
               animate={{ y: 0 }}
               exit={reducedMotion ? { opacity: 0 } : { y: "100%" }}
               transition={{ duration: reducedMotion ? 0 : DURATION_NORMAL_MS / 1000, ease: EASING_OUT_BEZIER }}
+              disableSwipeDismiss={reducedMotion}
+              onDismiss={() => setCallChatOpen(false)}
+              dragHandle={
+                <div className="flex w-full shrink-0 justify-center pt-2 pb-1" aria-hidden>
+                  <div className="h-1 w-10 rounded-full bg-white/22" />
+                </div>
+              }
             >
               {callChatNavHeader(true)}
               {renderCallChatBody()}
-            </motion.aside>
+            </MotionBottomSheetPanel>
           </>
         ) : null}
       </AnimatePresence>
@@ -1842,4 +1884,9 @@ export function CallModal({
       ) : null}
     </div>
   );
+
+  if (typeof document !== "undefined") {
+    return createPortal(shell, document.body);
+  }
+  return shell;
 }

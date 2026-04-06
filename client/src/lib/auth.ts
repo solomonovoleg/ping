@@ -3,11 +3,15 @@ import {
   apiFetch,
   getAuthToken,
   hydrateNativeAuthToken,
+  messageForFetchFailure,
+  postFormDataWithUploadProgress,
+  humanizeUploadOrNetworkError,
   setAuthToken,
   syncAuthTokenFromStorage,
 } from "@/lib/api-base";
 import { isNative } from "@/lib/capacitor-native";
 import { CHAT_VIBE_PREFS_CHANGED } from "@/lib/chat-vibe-prefs";
+import { collectClientSignalsForSignup, ensureDeviceIdCookie } from "@/lib/device-id";
 
 export type AuthUser = {
   id: string;
@@ -34,10 +38,20 @@ export type AuthUser = {
   vibeShareWithPartner?: boolean;
   /** Город (необязательно) */
   city?: string | null;
+  /** ISO: дата регистрации (онбординг первых 24 ч) */
+  createdAt?: string | null;
   /** Кто может писать в ЛС: all | followers | mutual */
   dmPolicy?: "all" | "followers" | "mutual";
   /** Кто может добавлять в группы: all | followers | mutual */
   groupAddMePolicy?: "all" | "followers" | "mutual";
+  /** Доступ к разделу API HUB на Борде (PRIME CODE назначен в админке) */
+  boardApiHubAccess?: boolean;
+  /** Бизнес-статус аккаунта (модерация через заявки). */
+  businessStatus?: "none" | "pending" | "approved" | "rejected" | "revision_required";
+  /** Публичный бизнес-контакт (только для approved). */
+  businessContactPhone?: string | null;
+  /** Публичный бизнес-адрес (только для approved). */
+  businessAddress?: string | null;
 };
 
 /** Как на сервере: en/ru и короткие коды → male|female|other; иначе null. */
@@ -126,6 +140,15 @@ function userFromMePayload(data: unknown): AuthUser | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
   if (typeof d.id !== "string") return null;
+  const businessStatusRaw = d.businessStatus;
+  const businessStatus =
+    businessStatusRaw === "none" ||
+    businessStatusRaw === "pending" ||
+    businessStatusRaw === "approved" ||
+    businessStatusRaw === "rejected" ||
+    businessStatusRaw === "revision_required"
+      ? businessStatusRaw
+      : "none";
   return {
     id: d.id,
     publicId: typeof d.publicId === "number" ? d.publicId : 100,
@@ -146,6 +169,11 @@ function userFromMePayload(data: unknown): AuthUser | null {
     vibeEnabled: d.vibeEnabled === true,
     vibeShareWithPartner: d.vibeShareWithPartner === true,
     city: (d.city as string | null | undefined) ?? null,
+    createdAt: typeof d.createdAt === "string" && d.createdAt.trim() ? d.createdAt.trim() : null,
+    boardApiHubAccess: d.boardApiHubAccess === true,
+    businessStatus,
+    businessContactPhone: (d.businessContactPhone as string | null | undefined) ?? null,
+    businessAddress: (d.businessAddress as string | null | undefined) ?? null,
   };
 }
 
@@ -223,19 +251,27 @@ export async function fetchMe(): Promise<AuthUser | null> {
 }
 
 export async function login(phone: string, password: string): Promise<AuthUser & { token?: string }> {
-  const res = await apiFetch(`${API}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ phone, password }),
-    suppressSessionExpireOn401: true,
-  });
+  let res: Response;
+  try {
+    res = await apiFetch(`${API}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ phone, password }),
+      suppressSessionExpireOn401: true,
+    });
+  } catch (e) {
+    throw new Error(messageForFetchFailure(e));
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(
-      (data && typeof data.message === "string" ? data.message : null) ||
-        (res.status === 401 ? "Неверный номер или пароль" : "Ошибка входа")
-    );
+    const msg =
+      (data && typeof data.message === "string" && data.message.trim()) ||
+      (res.status === 401 ? "Неверный номер или пароль" : null) ||
+      (res.status === 503
+        ? "Сервер временно недоступен. Попробуйте позже."
+        : "Не удалось войти. Попробуйте снова.");
+    throw new Error(msg);
   }
   const rawTok = (data as { token?: unknown })?.token;
   const tokenStr =
@@ -252,20 +288,41 @@ export async function login(phone: string, password: string): Promise<AuthUser &
 export async function register(
   phone: string,
   password: string,
-  referralCode?: string
+  referralCode?: string,
+  phoneVerificationTicket?: string,
 ): Promise<AuthUser> {
-  const body: { phone: string; password: string; referralCode?: string } = { phone, password };
+  const deviceId = ensureDeviceIdCookie();
+  const clientSignals = collectClientSignalsForSignup();
+  const body: {
+    phone: string;
+    password: string;
+    referralCode?: string;
+    deviceId: string;
+    clientSignals: Record<string, unknown>;
+  } = { phone, password, deviceId, clientSignals };
   if (referralCode?.trim()) body.referralCode = referralCode.trim();
-  const res = await apiFetch(`${API}/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-    suppressSessionExpireOn401: true,
-  });
+  if (phoneVerificationTicket?.trim()) {
+    (body as { phoneVerificationTicket?: string }).phoneVerificationTicket = phoneVerificationTicket.trim();
+  }
+  let res: Response;
+  try {
+    res = await apiFetch(`${API}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+      suppressSessionExpireOn401: true,
+    });
+  } catch (e) {
+    throw new Error(messageForFetchFailure(e));
+  }
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error((data && data.message) || "Ошибка регистрации");
+    const errBody = await res.json().catch(() => ({}));
+    const m =
+      errBody && typeof (errBody as { message?: unknown }).message === "string"
+        ? String((errBody as { message: string }).message).trim()
+        : "";
+    throw new Error(m || "Не удалось зарегистрироваться. Попробуйте снова.");
   }
   const data = await res.json().catch(() => null);
   if (!data || typeof data !== "object") {
@@ -293,9 +350,134 @@ export async function register(
     avatarUrl: typeof user?.avatarUrl === "string" ? user.avatarUrl : null,
     gender: normalizeGenderFromApi((user as { gender?: unknown }).gender),
     birthDate: typeof user?.birthDate === "string" ? user.birthDate : null,
+    createdAt:
+      typeof (user as { createdAt?: unknown }).createdAt === "string"
+        ? String((user as { createdAt: string }).createdAt).trim() || null
+        : null,
   };
   if (token) out.token = token;
   return out;
+}
+
+export type PhoneVerificationConfig = {
+  phoneCallVerificationRequired: boolean;
+  /** Флаг из админки (без учёта New-Tel). */
+  registrationPhoneCallVerificationEnabled?: boolean;
+  /** Зарезервировано; всегда false (раньше использовалось для legacy env). */
+  forcedByEnv?: boolean;
+};
+
+function coercePhoneVerificationBool(v: unknown): boolean {
+  return v === true || v === "true" || v === 1 || v === "1";
+}
+
+/** Нужен ли шаг подтверждения звонком при регистрации (совпадает с логикой сервера /register). */
+export async function fetchPhoneVerificationConfig(): Promise<PhoneVerificationConfig> {
+  const res = await apiFetch(`${API}/auth/phone-verification/config`, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+    suppressSessionExpireOn401: true,
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    phoneCallVerificationRequired?: unknown;
+    registrationPhoneCallVerificationEnabled?: unknown;
+    forcedByEnv?: unknown;
+    message?: unknown;
+  };
+  if (!res.ok) {
+    throw new Error(
+      typeof data.message === "string" ? data.message : "Не удалось получить настройки регистрации",
+    );
+  }
+  return {
+    phoneCallVerificationRequired: coercePhoneVerificationBool(data.phoneCallVerificationRequired),
+    registrationPhoneCallVerificationEnabled: coercePhoneVerificationBool(data.registrationPhoneCallVerificationEnabled),
+    forcedByEnv: coercePhoneVerificationBool(data.forcedByEnv),
+  };
+}
+
+export type StartPhoneVerificationSuccess = {
+  challengeId: string;
+  expiresAt: string;
+  confirmationNumber: string;
+  qrCodeUri: string | null;
+};
+
+export async function startPhoneVerification(phone: string): Promise<StartPhoneVerificationSuccess> {
+  const res = await apiFetch(`${API}/auth/phone-verification/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ phone }),
+    suppressSessionExpireOn401: true,
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: unknown;
+    message?: unknown;
+    challengeId?: unknown;
+    expiresAt?: unknown;
+    confirmationNumber?: unknown;
+    qrCodeUri?: unknown;
+  };
+  if (!res.ok) {
+    throw new Error(
+      (typeof data.message === "string" ? data.message : null) || "Не удалось начать подтверждение номера",
+    );
+  }
+  if (
+    data.ok === true &&
+    (typeof data.challengeId !== "string" || !String(data.challengeId).trim())
+  ) {
+    throw new Error(
+      typeof data.message === "string" && data.message.trim()
+        ? data.message.trim()
+        : "Не удалось начать подтверждение номера",
+    );
+  }
+  const challengeId = typeof data.challengeId === "string" ? data.challengeId.trim() : "";
+  const expiresAt = typeof data.expiresAt === "string" ? data.expiresAt.trim() : "";
+  const confirmationNumber =
+    typeof data.confirmationNumber === "string" ? data.confirmationNumber.trim() : "";
+  if (!challengeId || !expiresAt || !confirmationNumber) {
+    throw new Error("Сервер вернул неполные данные подтверждения");
+  }
+  const qrRaw = typeof data.qrCodeUri === "string" ? data.qrCodeUri.trim() : "";
+  return {
+    challengeId,
+    expiresAt,
+    confirmationNumber,
+    qrCodeUri: qrRaw || null,
+  };
+}
+
+export async function confirmPhoneVerification(
+  challengeId: string,
+  phone: string,
+  pin = "",
+): Promise<{ verificationTicket: string }> {
+  const res = await apiFetch(`${API}/auth/phone-verification/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ challengeId, phone, pin }),
+    suppressSessionExpireOn401: true,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data && typeof data.message === "string" ? data.message : null) ||
+        "Не удалось подтвердить номер",
+    );
+  }
+  const verificationTicket =
+    typeof (data as { verificationTicket?: unknown }).verificationTicket === "string"
+      ? String((data as { verificationTicket: string }).verificationTicket).trim()
+      : "";
+  if (!verificationTicket) {
+    throw new Error("Сервер вернул пустой токен подтверждения");
+  }
+  return { verificationTicket };
 }
 
 export async function logout(): Promise<void> {
@@ -305,6 +487,18 @@ export async function logout(): Promise<void> {
   });
   setAuthToken(null);
   await clearAuthMeCache();
+  try {
+    const { queryClient } = await import("@/lib/queryClient");
+    queryClient.clear();
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { clearSessionOfflineCaches } = await import("@/lib/offline-session-cache");
+    await clearSessionOfflineCaches();
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Удаление своего аккаунта (требование App Store). После успеха нужно вызвать logout и перенаправить на вход. */
@@ -321,71 +515,81 @@ export async function deleteAccount(): Promise<void> {
   }
   setAuthToken(null);
   await clearAuthMeCache();
+  try {
+    const { queryClient } = await import("@/lib/queryClient");
+    queryClient.clear();
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { clearSessionOfflineCaches } = await import("@/lib/offline-session-cache");
+    await clearSessionOfflineCaches();
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Загружает аватар (data URL или Blob), возвращает URL картинки с сервера */
-export async function uploadAvatar(dataUrlOrBlob: string | Blob): Promise<string> {
-  let file: Blob;
-  if (typeof dataUrlOrBlob === "string") {
-    const res = await fetch(dataUrlOrBlob);
-    file = await res.blob();
-  } else {
-    file = dataUrlOrBlob;
-  }
-  const type = file.type && file.type.startsWith("image/") ? file.type : "image/jpeg";
-  const form = new FormData();
-  form.append("file", file instanceof File ? file : new File([file], "avatar.jpg", { type }), "avatar.jpg");
-  const res = await apiFetch(`${API}/upload/avatar`, {
-    method: "POST",
-    credentials: "include",
-    body: form,
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    let message = "Ошибка загрузки аватара";
-    try {
-      const err = JSON.parse(text) as { message?: string };
-      if (err?.message) message = err.message;
-    } catch {
-      if (text) message = text.slice(0, 200);
-    }
-    throw new Error(message);
-  }
+export async function uploadAvatar(
+  dataUrlOrBlob: string | Blob,
+  options?: { onProgress?: (percent: number) => void },
+): Promise<string> {
   try {
-    const data = JSON.parse(text) as { url?: string };
+    let file: Blob;
+    if (typeof dataUrlOrBlob === "string") {
+      const res = await fetch(dataUrlOrBlob);
+      file = await res.blob();
+    } else {
+      file = dataUrlOrBlob;
+    }
+    const type = file.type && file.type.startsWith("image/") ? file.type : "image/jpeg";
+    const form = new FormData();
+    const bodyFile = file instanceof File ? file : new File([file], "avatar.jpg", { type });
+    form.append("file", bodyFile);
+    const { ok, bodyText } = await postFormDataWithUploadProgress(`${API}/upload/avatar`, form, {
+      onProgress: options?.onProgress,
+    });
+    if (!ok) {
+      let message = "Ошибка загрузки аватара";
+      try {
+        const err = JSON.parse(bodyText) as { message?: string };
+        if (err?.message) message = err.message;
+      } catch {
+        if (bodyText) message = bodyText.slice(0, 200);
+      }
+      throw new Error(message);
+    }
+    const data = JSON.parse(bodyText) as { url?: string };
     if (typeof data?.url !== "string") throw new Error("Сервер не вернул URL аватара");
     return data.url;
-  } catch {
-    throw new Error("Неверный ответ сервера при загрузке аватара");
+  } catch (e) {
+    throw new Error(humanizeUploadOrNetworkError(e, "Не удалось загрузить аватар"));
   }
 }
 
 /** Загрузить шапку профиля (баннер). Возвращает URL для сохранения в coverUrl. */
-export async function uploadCover(file: File): Promise<string> {
-  const form = new FormData();
-  form.append("file", file, file.name || "cover.jpg");
-  const res = await apiFetch(`${API}/upload/cover`, {
-    method: "POST",
-    credentials: "include",
-    body: form,
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    let message = "Ошибка загрузки шапки";
-    try {
-      const err = JSON.parse(text) as { message?: string };
-      if (err?.message) message = err.message;
-    } catch {
-      if (text) message = text.slice(0, 200);
-    }
-    throw new Error(message);
-  }
+export async function uploadCover(file: File, options?: { onProgress?: (percent: number) => void }): Promise<string> {
   try {
-    const data = JSON.parse(text) as { url?: string };
+    const form = new FormData();
+    form.append("file", file, file.name || "cover.jpg");
+    const { ok, bodyText } = await postFormDataWithUploadProgress(`${API}/upload/cover`, form, {
+      onProgress: options?.onProgress,
+    });
+    if (!ok) {
+      let message = "Ошибка загрузки шапки";
+      try {
+        const err = JSON.parse(bodyText) as { message?: string };
+        if (err?.message) message = err.message;
+      } catch {
+        if (bodyText) message = bodyText.slice(0, 200);
+      }
+      throw new Error(message);
+    }
+    const data = JSON.parse(bodyText) as { url?: string };
     if (typeof data?.url !== "string") throw new Error("Сервер не вернул URL шапки");
     return data.url;
-  } catch {
-    throw new Error("Неверный ответ сервера при загрузке шапки");
+  } catch (e) {
+    throw new Error(humanizeUploadOrNetworkError(e, "Не удалось загрузить шапку профиля"));
   }
 }
 
@@ -439,6 +643,8 @@ export async function updateProfile(data: {
   pushEnabled?: boolean;
   dmPolicy?: "all" | "followers" | "mutual";
   groupAddMePolicy?: "all" | "followers" | "mutual";
+  businessContactPhone?: string | null;
+  businessAddress?: string | null;
 }): Promise<AuthUser> {
   const res = await apiFetch(`${API}/users/me`, {
     method: "PATCH",

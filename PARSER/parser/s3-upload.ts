@@ -1,11 +1,14 @@
 import { S3Client, PutObjectCommand, ObjectCannedACL } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
+import { normalizeS3AccessKeyId } from "../../shared/s3-access-key";
 
 const endpoint = process.env.S3_ENDPOINT?.trim();
 const bucket = process.env.S3_BUCKET?.trim();
-const accessKey = process.env.S3_ACCESS_KEY?.trim();
+const accessKey = normalizeS3AccessKeyId(process.env.S3_ACCESS_KEY);
 const secretKey = process.env.S3_SECRET_KEY?.trim();
-const region = process.env.S3_REGION?.trim() || "ru-central-1";
+const region =
+  process.env.S3_REGION?.trim() ||
+  (endpoint && /s3\.timeweb\.(com|cloud)|\.s3\.msk\.timeweb\.ru/i.test(endpoint) ? "ru-1" : "ru-central-1");
 
 export const s3Configured = Boolean(endpoint && bucket && accessKey && secretKey);
 
@@ -18,6 +21,10 @@ function getClient(): S3Client {
     region,
     credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
     forcePathStyle: true,
+    maxAttempts: 4,
+    /** Как на платформе: иначе часть S3-совместимых API (Timeweb и др.) отвечает 400 на checksum-заголовки SDK. */
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 

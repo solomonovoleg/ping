@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { useSeamlessVideoLoop } from "@/lib/reels-video";
+import { avatarVideoPosterUrl } from "@/lib/avatar-video-poster";
 
 /** Палитра в стиле логотипа PING: синие и нейтральные тона */
 const AVATAR_COLORS = [
@@ -34,14 +35,14 @@ function isVideoAvatarUrl(url: string): boolean {
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url);
 }
 
-/**
- * Раньше подставляли poster = тот же путь с .jpg (ожидали кадр на CDN) — на проде такого файла часто нет → 404 в консоли.
- * Пока API не отдаёт отдельный thumbnailUrl для видео-аватара, poster не задаём: первый кадр подтянет сам <video>.
- */
-
 export type UserAvatarProps = {
   /** URL картинки аватара; если нет — показывается векторный аватар по умолчанию */
   avatarUrl?: string | null;
+  /**
+   * Явный URL постера для видео-аватара (JPEG). Если не задан — берётся тот же путь, что у видео, с расширением .jpg
+   * (так сервер кладёт кадр после транскода).
+   */
+  videoPosterUrl?: string | null;
   /** Имя для буквы (имя, фамилия или ID) */
   displayName?: string | null;
   /** Уникальный id для стабильного цвета (например userId или publicId) */
@@ -54,6 +55,16 @@ export type UserAvatarProps = {
   showOnlineIndicator?: boolean;
   /** ISO дата последней активности; используется только при showOnlineIndicator */
   lastSeenAt?: string | null;
+  /**
+   * По умолчанию видео-аватар не прелоадит и не играет вне экрана (меньше нагрузка в длинных списках).
+   * В превью/редакторе, где элемент гарантированно виден, можно выключить.
+   */
+  videoAlwaysActive?: boolean;
+  /**
+   * Когда аватар внутри кликабельной строки/кнопки: `<video>`/`<img>` на iOS часто перехватывают касание.
+   * Включает `pointer-events-none`, событие получает родитель.
+   */
+  pointerEventsNone?: boolean;
 };
 
 /**
@@ -64,6 +75,7 @@ const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
 
 export function UserAvatar({
   avatarUrl,
+  videoPosterUrl,
   displayName,
   seed,
   size = 40,
@@ -71,6 +83,8 @@ export function UserAvatar({
   cornerRadius,
   showOnlineIndicator = false,
   lastSeenAt,
+  videoAlwaysActive = false,
+  pointerEventsNone = false,
 }: UserAvatarProps) {
   const initial = displayName
     ? String(displayName).trim().slice(0, 1).toUpperCase() || "?"
@@ -84,9 +98,56 @@ export function UserAvatar({
   const isVideo = resolvedUrl ? isVideoAvatarUrl(resolvedUrl) : false;
   const reducedMotion = usePrefersReducedMotion();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoInView, setVideoInView] = useState(videoAlwaysActive);
+
+  const showImage = resolvedUrl && !isVideo && !imageError;
+  const showVideo = Boolean(resolvedUrl && isVideo && !videoError);
 
   useEffect(() => setImageError(false), [resolvedUrl]);
   useEffect(() => setVideoError(false), [resolvedUrl]);
+
+  useEffect(() => {
+    if (videoAlwaysActive) {
+      setVideoInView(true);
+      return;
+    }
+    const v = videoRef.current;
+    if (!v || !showVideo) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0];
+        if (!e) {
+          setVideoInView(false);
+          return;
+        }
+        const area = e.intersectionRect.width * e.intersectionRect.height;
+        setVideoInView(e.isIntersecting && (e.intersectionRatio >= 0.15 || area >= 400));
+      },
+      // См. FeedInlineVideo: на iOS/WKWebView root = overflow-scroll ломает обновления при скролле.
+      { root: null, rootMargin: "60px", threshold: [0, 0.15, 0.35, 0.6, 1] },
+    );
+    observer.observe(v);
+    return () => observer.disconnect();
+  }, [resolvedUrl, videoAlwaysActive, showVideo]);
+
+  const derivedPoster =
+    showVideo && resolvedUrl
+      ? (videoPosterUrl?.trim() ? resolveUrl(videoPosterUrl.trim()) : avatarVideoPosterUrl(resolvedUrl))
+      : undefined;
+  const videoPoster = derivedPoster || undefined;
+
+  const videoPreload =
+    !showVideo || reducedMotion
+      ? "metadata"
+      : videoAlwaysActive
+        ? size >= 48
+          ? "auto"
+          : "metadata"
+        : videoInView
+          ? size >= 48
+            ? "auto"
+            : "metadata"
+          : "none";
 
   useEffect(() => {
     const v = videoRef.current;
@@ -100,16 +161,20 @@ export function UserAvatar({
       }
       return;
     }
+    if (!videoAlwaysActive && !videoInView) {
+      try {
+        v.pause();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     v.muted = true;
     v.defaultMuted = true;
     void v.play().catch(() => {});
-  }, [resolvedUrl, isVideo, reducedMotion, imageError, videoError]);
+  }, [resolvedUrl, isVideo, reducedMotion, imageError, videoError, videoInView, videoAlwaysActive]);
 
-  const showImage = resolvedUrl && !isVideo && !imageError;
-  const showVideo = Boolean(resolvedUrl && isVideo && !videoError);
-  const videoPreload = size >= 48 ? "auto" : "metadata";
-
-  const useSeamlessAvatarLoop = !reducedMotion && showVideo;
+  const useSeamlessAvatarLoop = !reducedMotion && showVideo && (videoAlwaysActive || videoInView);
   useSeamlessVideoLoop(videoRef, { enabled: useSeamlessAvatarLoop, srcKey: resolvedUrl });
 
   const isOnline =
@@ -118,9 +183,13 @@ export function UserAvatar({
     Date.now() - new Date(lastSeenAt).getTime() < ONLINE_THRESHOLD_MS;
 
   const dotSize = Math.max(6, size * 0.22);
+  const peNone = pointerEventsNone ? "pointer-events-none" : "";
   const wrapper = (child: React.ReactNode) =>
     showOnlineIndicator ? (
-      <div className={cn("relative inline-flex flex-shrink-0", className)} style={{ width: size, height: size }}>
+      <div
+        className={cn("relative inline-flex flex-shrink-0", peNone, className)}
+        style={{ width: size, height: size }}
+      >
         {child}
         {isOnline && (
           <span
@@ -144,12 +213,13 @@ export function UserAvatar({
       <video
         ref={videoRef}
         src={resolvedUrl}
-        className={cn(shapeClass, !showOnlineIndicator && className)}
+        poster={videoPoster}
+        className={cn(shapeClass, peNone, !showOnlineIndicator && className)}
         style={{ width: size, height: size, ...radiusStyle }}
-        autoPlay={!reducedMotion}
+        autoPlay={!reducedMotion && (videoAlwaysActive || videoInView)}
         muted
         playsInline
-        loop={!reducedMotion && !useSeamlessAvatarLoop}
+        loop={!reducedMotion}
         preload={videoPreload}
         aria-label={ariaLabel}
         onError={() => setVideoError(true)}
@@ -162,7 +232,7 @@ export function UserAvatar({
       <img
         src={resolvedUrl}
         alt=""
-        className={cn(shapeClass, !showOnlineIndicator && className)}
+        className={cn(shapeClass, peNone, !showOnlineIndicator && className)}
         style={{ width: size, height: size, ...radiusStyle }}
         onError={() => setImageError(true)}
       />
@@ -175,6 +245,7 @@ export function UserAvatar({
         cornerRadius != null
           ? "flex items-center justify-center flex-shrink-0 font-semibold"
           : "rounded-full flex items-center justify-center flex-shrink-0 font-semibold",
+        peNone,
         !showOnlineIndicator && className
       )}
       style={{

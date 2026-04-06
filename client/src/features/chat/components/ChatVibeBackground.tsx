@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   usePrefersReducedMotion,
@@ -35,15 +36,53 @@ const NOISE_TILE = encodeURIComponent(
 export function ChatVibeBackground({ theme, tokens, isActive, isDarkSurface }: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const scale = getIntensityScale();
-
-  if (!isActive || tokens.backgroundTint === "transparent") return null;
+  const [isIdle, setIsIdle] = useState(false);
 
   const opacity = scale <= 0.4 ? INTENSITY_OPACITY.low : scale <= 0.7 ? INTENSITY_OPACITY.medium : INTENSITY_OPACITY.high;
   const grainOpacity = Math.min(0.055 + scale * 0.025, 0.11);
   const crossfadeSec = reducedMotion ? DURATION_FAST_MS / 1000 : DURATION_CHAT_VIBE_CROSSFADE_MS / 1000;
+  /** Паттерн кроссфейдится тем же темпом, что и градиент (раньше был ~0.32× — смена выглядела рывком). */
+  const patternSwitchSec = crossfadeSec;
   const grainDriftSec = reducedMotion ? 0 : 14;
-  const patternOpacity = Math.min(0.55 + scale * 0.2, 0.92);
-  const accent = PULSE_THEME_ACCENTS[theme] ?? PULSE_THEME_ACCENTS.casual;
+  const patternTheme = resolvePatternTheme(theme, tokens.overlayType);
+  const overlayStrength =
+    tokens.overlayType === "none"
+      ? 0.56
+      : Math.min(1.12, 0.7 + Math.max(tokens.overlayOpacity, 0) * 4.8);
+  const patternOpacity = Math.min((0.55 + scale * 0.2) * overlayStrength, 0.92);
+  const accent = PULSE_THEME_ACCENTS[patternTheme] ?? PULSE_THEME_ACCENTS.casual;
+  const idleLoopSec = Math.max(8, (DURATION_CHAT_VIBE_CROSSFADE_MS * 2) / 1000);
+
+  useEffect(() => {
+    if (reducedMotion || typeof window === "undefined") {
+      setIsIdle(false);
+      return;
+    }
+
+    let timer: number | undefined;
+    const IDLE_AFTER_MS = 3800;
+    const bump = () => {
+      setIsIdle(false);
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => setIsIdle(true), IDLE_AFTER_MS);
+    };
+    bump();
+
+    window.addEventListener("pointerdown", bump, { passive: true });
+    window.addEventListener("touchstart", bump, { passive: true });
+    window.addEventListener("wheel", bump, { passive: true });
+    window.addEventListener("keydown", bump);
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", bump);
+      window.removeEventListener("touchstart", bump);
+      window.removeEventListener("wheel", bump);
+      window.removeEventListener("keydown", bump);
+    };
+  }, [reducedMotion, patternTheme]);
+
+  if (!isActive || tokens.backgroundTint === "transparent") return null;
 
   return (
     <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden>
@@ -68,7 +107,7 @@ export function ChatVibeBackground({ theme, tokens, isActive, isDarkSurface }: P
 
       <AnimatePresence mode="sync" initial={false}>
         <motion.div
-          key={`pat-${theme}`}
+          key={`pat-${patternTheme}-${tokens.overlayType}`}
           className="absolute inset-0"
           initial={{ opacity: 0 }}
           animate={{ opacity: patternOpacity }}
@@ -76,15 +115,33 @@ export function ChatVibeBackground({ theme, tokens, isActive, isDarkSurface }: P
           transition={
             reducedMotion
               ? { duration: 0 }
-              : { duration: crossfadeSec, ease: EASING_CHAT_VIBE_BEZIER }
+              : { duration: patternSwitchSec, ease: EASING_CHAT_VIBE_BEZIER }
           }
         >
-          <ChatPulseMoodPattern
-            theme={theme}
-            accentColor={accent}
-            isDarkSurface={isDarkSurface}
-            reducedMotion={reducedMotion}
-          />
+          <motion.div
+            className="absolute inset-0"
+            animate={
+              reducedMotion || !isIdle
+                ? { x: 0, y: 0, scale: 1 }
+                : {
+                    x: [0, 1.5, -1, 0],
+                    y: [0, -1, 1, 0],
+                    scale: [1, 1.004, 1],
+                  }
+            }
+            transition={
+              reducedMotion || !isIdle
+                ? { duration: 0 }
+                : { duration: idleLoopSec, repeat: Infinity, ease: "easeInOut" }
+            }
+          >
+            <ChatPulseMoodPattern
+              theme={patternTheme}
+              accentColor={accent}
+              isDarkSurface={isDarkSurface}
+              reducedMotion={reducedMotion}
+            />
+          </motion.div>
         </motion.div>
       </AnimatePresence>
 
@@ -120,4 +177,12 @@ export function ChatVibeBackground({ theme, tokens, isActive, isDarkSurface }: P
       />
     </div>
   );
+}
+
+function resolvePatternTheme(theme: VibeThemeCode, overlayType: VibeThemeTokens["overlayType"]): VibeThemeCode {
+  if (overlayType === "hearts") return "romantic";
+  if (overlayType === "grid") return theme === "gaming" ? "gaming" : "business";
+  if (overlayType === "waves") return theme === "support" ? "support" : "relax";
+  if (overlayType === "dust") return "fun";
+  return theme;
 }

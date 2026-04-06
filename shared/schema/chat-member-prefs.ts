@@ -17,7 +17,7 @@ export const chatMemberPrefs = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     pinnedAt: timestamp("pinned_at", { withTimezone: true, mode: "date" }),
     hiddenAt: timestamp("hidden_at", { withTimezone: true, mode: "date" }),
-    listSection: varchar("list_section", { length: 32 }).notNull().default("general"),
+    listSection: varchar("list_section", { length: 64 }).notNull().default("general"),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.chatId, t.userId] })]

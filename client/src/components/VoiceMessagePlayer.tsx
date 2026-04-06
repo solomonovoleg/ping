@@ -1,19 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Play, Pause } from "lucide-react";
+import { Play, Pause, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-base";
 import { TapScaleButton } from "@/components/ui/tap-scale";
+import { MediaLoadError } from "@/features/chat/components/MediaLoadError";
 import { useOfflineResolvedMediaUrl } from "@/hooks/useOfflineResolvedMediaUrl";
+import { scheduleRevokeObjectURL } from "@/lib/blob-url";
+import { registerChatMessageMediaPlaybackPauser } from "@/features/chat/chat-message-media-playback-interrupt";
 
 const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
-const SPEED_STORAGE_KEY = "ping:voice-speed";
-
-function getStoredSpeed(): number {
-  if (typeof window === "undefined") return 1;
-  const v = localStorage.getItem(SPEED_STORAGE_KEY);
-  const n = parseFloat(v ?? "1");
-  return PLAYBACK_SPEEDS.includes(n as (typeof PLAYBACK_SPEEDS)[number]) ? n : 1;
-}
+const SPEED_CONTROL_AUTOHIDE_MS = 1800;
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -66,6 +62,7 @@ type Props = {
   src: string;
   isMe?: boolean;
   bubbleColorPreset?: BubbleColorPreset;
+  chatVibeActive?: boolean;
   transcript?: string | null;
   /** Перевод расшифровки (при включённом переводе чата) */
   translatedTranscript?: string | null;
@@ -74,17 +71,21 @@ type Props = {
   onEnded?: () => void;
   /** Автозапуск воспроизведения (например, при переходе с предыдущего голосового) */
   autoPlay?: boolean;
+  /** 0–100: исходящая загрузка — тонкая полоска сверху пузыря */
+  uploadProgress?: number | null;
 };
 
 export function VoiceMessagePlayer({
   src,
   isMe = true,
   bubbleColorPreset = "primary",
+  chatVibeActive = false,
   transcript,
   translatedTranscript,
   className,
   onEnded: onEndedProp,
   autoPlay,
+  uploadProgress,
 }: Props) {
   const mediaSrc = useOfflineResolvedMediaUrl(src, { autoCache: true });
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -92,15 +93,38 @@ export function VoiceMessagePlayer({
   const hasSetSrcRef = useRef(false);
   const blobFallbackTriedRef = useRef(false);
   const blobFallbackLoadingRef = useRef(false);
+  const audioErrorHandlingRef = useRef(false);
+  const speedHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [speed, setSpeed] = useState(getStoredSpeed);
+  const [speed, setSpeed] = useState<(typeof PLAYBACK_SPEEDS)[number]>(1);
+  const [speedControlVisible, setSpeedControlVisible] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [retryGeneration, setRetryGeneration] = useState(0);
   const onEndedPropRef = useRef(onEndedProp);
   onEndedPropRef.current = onEndedProp;
+
+  const clearSpeedHideTimer = useCallback(() => {
+    if (!speedHideTimerRef.current) return;
+    clearTimeout(speedHideTimerRef.current);
+    speedHideTimerRef.current = null;
+  }, []);
+
+  const showSpeedControl = useCallback(
+    (autoHideMs?: number) => {
+      setSpeedControlVisible(true);
+      clearSpeedHideTimer();
+      if (!autoHideMs || autoHideMs <= 0) return;
+      speedHideTimerRef.current = setTimeout(() => {
+        setSpeedControlVisible(false);
+        speedHideTimerRef.current = null;
+      }, autoHideMs);
+    },
+    [clearSpeedHideTimer],
+  );
 
   useEffect(() => {
     setLoadError(false);
@@ -108,9 +132,12 @@ export function VoiceMessagePlayer({
     setDuration(0);
     setCurrentTime(0);
     setPlaying(false);
+    setSpeedControlVisible(false);
+    clearSpeedHideTimer();
     hasSetSrcRef.current = false;
     blobFallbackTriedRef.current = false;
     blobFallbackLoadingRef.current = false;
+    audioErrorHandlingRef.current = false;
     const el = audioRef.current;
     if (!el) return;
     el.removeAttribute("src");
@@ -138,6 +165,7 @@ export function VoiceMessagePlayer({
     const onEnded = () => {
       setPlaying(false);
       setCurrentTime(0);
+      showSpeedControl(SPEED_CONTROL_AUTOHIDE_MS);
       onEndedPropRef.current?.();
     };
     const tryBlobFallback = async () => {
@@ -150,11 +178,16 @@ export function VoiceMessagePlayer({
       blobFallbackLoadingRef.current = true;
       try {
         const res = await apiFetch(src);
+        if (res.status === 404) {
+          setLoadError(true);
+          setPlaying(false);
+          return;
+        }
         if (!res.ok) throw new Error("audio fetch failed");
         const blob = await res.blob();
         if (!blob || blob.size <= 0) throw new Error("empty audio blob");
         if (blobUrlRef.current) {
-          URL.revokeObjectURL(blobUrlRef.current);
+          scheduleRevokeObjectURL(blobUrlRef.current);
           blobUrlRef.current = null;
         }
         const objectUrl = URL.createObjectURL(blob);
@@ -170,7 +203,11 @@ export function VoiceMessagePlayer({
       }
     };
     const onError = () => {
-      void tryBlobFallback();
+      if (audioErrorHandlingRef.current || blobFallbackLoadingRef.current) return;
+      audioErrorHandlingRef.current = true;
+      void tryBlobFallback().finally(() => {
+        audioErrorHandlingRef.current = false;
+      });
     };
     el.addEventListener("loadedmetadata", onLoadedMetadata);
     el.addEventListener("durationchange", onDurationChange);
@@ -183,12 +220,26 @@ export function VoiceMessagePlayer({
       el.removeEventListener("timeupdate", onTimeUpdate);
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("error", onError);
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
+      const blobUrl = blobUrlRef.current;
+      blobUrlRef.current = null;
+      if (blobUrl) {
+        try {
+          el.pause();
+          el.removeAttribute("src");
+          el.load();
+        } catch {
+          /* ignore */
+        }
+        scheduleRevokeObjectURL(blobUrl);
       }
     };
-  }, [mediaSrc, src]);
+  }, [clearSpeedHideTimer, mediaSrc, showSpeedControl, src, retryGeneration]);
+
+  useEffect(() => {
+    return () => {
+      clearSpeedHideTimer();
+    };
+  }, [clearSpeedHideTimer]);
 
   const setAudioSrc = useCallback(async (): Promise<boolean> => {
     const el = audioRef.current;
@@ -211,6 +262,7 @@ export function VoiceMessagePlayer({
     if (playing) {
       el.pause();
       setPlaying(false);
+      showSpeedControl(SPEED_CONTROL_AUTOHIDE_MS);
       return;
     }
     const ok = await setAudioSrc();
@@ -218,12 +270,25 @@ export function VoiceMessagePlayer({
     el.playbackRate = speed;
     el.play().catch(() => setLoadError(true));
     setPlaying(true);
-  }, [playing, setAudioSrc, speed]);
+    showSpeedControl();
+  }, [playing, setAudioSrc, showSpeedControl, speed]);
 
   useEffect(() => {
     const el = audioRef.current;
     if (el) el.playbackRate = speed;
   }, [speed]);
+
+  useEffect(() => {
+    return registerChatMessageMediaPlaybackPauser(() => {
+      try {
+        audioRef.current?.pause();
+      } catch {
+        /* ignore */
+      }
+      setPlaying(false);
+      showSpeedControl(SPEED_CONTROL_AUTOHIDE_MS);
+    });
+  }, [showSpeedControl]);
 
   /** Автозапуск при переходе с предыдущего голосового («слушать следующее») */
   useEffect(() => {
@@ -236,21 +301,38 @@ export function VoiceMessagePlayer({
       el.playbackRate = speed;
       el.play().catch(() => setLoadError(true));
       setPlaying(true);
+      showSpeedControl();
     };
     void start();
-  }, [autoPlay, playing, setAudioSrc, speed]);
+  }, [autoPlay, playing, setAudioSrc, showSpeedControl, speed]);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const vibeContainerStyle: React.CSSProperties | undefined = chatVibeActive
+    ? {
+        backgroundColor: isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)",
+        transition:
+          "background-color var(--chat-vibe-token-transition) var(--uix-easing-out), box-shadow var(--chat-vibe-token-transition) var(--uix-easing-out), border-color var(--chat-vibe-token-transition) var(--uix-easing-out)",
+      }
+    : undefined;
+  const vibeButtonStyle: React.CSSProperties | undefined = chatVibeActive
+    ? {
+        backgroundColor: "var(--chat-vibe-accent)",
+        transition:
+          "background-color var(--chat-vibe-token-transition) var(--uix-easing-out), box-shadow var(--chat-vibe-token-transition) var(--uix-easing-out), border-color var(--chat-vibe-token-transition) var(--uix-easing-out)",
+      }
+    : undefined;
 
   const cycleSpeed = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    const idx = PLAYBACK_SPEEDS.indexOf(speed as (typeof PLAYBACK_SPEEDS)[number]);
+    const idx = PLAYBACK_SPEEDS.indexOf(speed);
     const next = PLAYBACK_SPEEDS[(idx + 1) % PLAYBACK_SPEEDS.length];
     setSpeed(next);
-    try {
-      localStorage.setItem(SPEED_STORAGE_KEY, String(next));
-    } catch {}
-  }, [speed]);
+    if (playing || next !== 1) {
+      showSpeedControl();
+      return;
+    }
+    showSpeedControl(SPEED_CONTROL_AUTOHIDE_MS);
+  }, [playing, showSpeedControl, speed]);
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = audioRef.current;
@@ -263,20 +345,33 @@ export function VoiceMessagePlayer({
   };
 
   const meColors = isMe ? VOICE_ME_COLORS[bubbleColorPreset] : null;
+  const up =
+    uploadProgress != null && Number.isFinite(uploadProgress)
+      ? Math.max(0, Math.min(100, uploadProgress))
+      : null;
 
   if (loadError) {
     return (
-      <div
+      <MediaLoadError
+        message="Не удалось загрузить голосовое."
         className={cn(
-          "rounded-xl px-3 py-2 min-h-[40px] flex items-center gap-2 text-muted-foreground text-[12px]",
+          "rounded-xl px-3 py-2 min-h-[40px] text-[12px]",
           isMe && meColors ? meColors.container : !isMe ? "bg-muted/70 border border-border/50" : "bg-white/15",
-          className
+          className,
         )}
-      >
-        <span>Не удалось загрузить голосовое.</span>
-      </div>
+        onRetry={() => {
+          setRetryGeneration((g) => g + 1);
+          setLoadError(false);
+          setLoaded(false);
+          setPlaying(false);
+          setDuration(0);
+          setCurrentTime(0);
+        }}
+      />
     );
   }
+
+  const isBuffering = Boolean(mediaSrc) && !loaded && !loadError;
 
   return (
     <div
@@ -289,21 +384,41 @@ export function VoiceMessagePlayer({
       <audio ref={audioRef} preload="metadata" playsInline />
       <div
         className={cn(
-          "flex items-center gap-2 rounded-xl px-2.5 py-2 min-h-[42px]",
-          isMe && meColors ? meColors.container : !isMe ? "bg-muted/70 border border-border/50 shadow-sm" : ""
+          "relative flex items-center gap-2 rounded-xl px-2.5 py-2 min-h-[42px]",
+          !chatVibeActive && isMe && meColors ? meColors.container : "",
+          !chatVibeActive && !isMe ? "bg-muted/70 border border-border/50 shadow-sm" : "",
+          chatVibeActive && !isMe ? "border border-black/[0.08] dark:border-white/10 shadow-[0_1px_1px_rgba(0,0,0,0.06)]" : ""
         )}
+        style={vibeContainerStyle}
       >
+        {up != null ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-[3px] overflow-hidden rounded-t-xl bg-black/12 dark:bg-white/12"
+            aria-hidden
+          >
+            <div
+              className={cn(
+                "h-full rounded-t-xl transition-[width] duration-150 ease-out",
+                isMe && meColors ? meColors.bar : "bg-primary",
+              )}
+              style={{ width: `${up}%` }}
+            />
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={togglePlay}
           className={cn(
             "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-transform active:scale-95",
-            isMe && meColors ? meColors.button : "bg-primary text-primary-foreground hover:bg-primary/90"
+              !chatVibeActive && isMe && meColors ? meColors.button : "bg-primary text-primary-foreground hover:bg-primary/90"
           )}
-          aria-label={playing ? "Пауза" : "Воспроизвести"}
+          style={vibeButtonStyle}
+          aria-label={playing ? "Пауза" : isBuffering ? "Загрузка" : "Воспроизвести"}
         >
           {playing ? (
             <Pause className="w-4 h-4 fill-current" />
+          ) : isBuffering ? (
+            <Loader2 className="w-4 h-4 animate-spin opacity-90" aria-hidden />
           ) : (
             <Play className="w-4 h-4 fill-current ml-0.5" />
           )}
@@ -347,19 +462,33 @@ export function VoiceMessagePlayer({
                 style={{ left: `${progress}%` }}
               />
             </div>
-            <TapScaleButton
-              type="button"
-              onClick={cycleSpeed}
+            <span
               className={cn(
                 "text-[12px] font-medium tabular-nums flex-shrink-0 text-right min-w-[2.25rem]",
                 isMe && meColors ? meColors.time : "text-muted-foreground"
               )}
-              title={`Скорость: ${speed}x. Тап — смена`}
-              aria-label={`Скорость воспроизведения ${speed}x`}
             >
               {Number.isFinite(duration) && duration > 0 ? formatTime(duration) : "0:00"}
-              {speed !== 1 && <span className="ml-0.5 opacity-70 text-[10px]">·{speed}x</span>}
-            </TapScaleButton>
+            </span>
+            <div className="ml-1 w-[44px] flex-shrink-0">
+              <TapScaleButton
+                type="button"
+                onClick={cycleSpeed}
+                className={cn(
+                  "inline-flex min-h-[22px] min-w-[38px] items-center justify-center rounded-full px-2 text-[11px] font-semibold tabular-nums transition-all duration-150",
+                  isMe && meColors
+                    ? "bg-black/10 text-current hover:bg-black/15 dark:bg-white/10 dark:hover:bg-white/15"
+                    : "bg-muted/70 text-muted-foreground hover:bg-muted",
+                  speedControlVisible ? "opacity-100 scale-100" : "pointer-events-none opacity-0 scale-95"
+                )}
+                title={`Скорость: ${speed}x. Тап — смена`}
+                aria-label={`Скорость воспроизведения ${speed}x`}
+                aria-hidden={!speedControlVisible}
+                tabIndex={speedControlVisible ? 0 : -1}
+              >
+                {speed}x
+              </TapScaleButton>
+            </div>
           </div>
         </div>
       </div>

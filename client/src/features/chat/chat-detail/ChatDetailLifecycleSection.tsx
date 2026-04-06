@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 
 type Props = {
   chatId: string;
-  chatType: "dm" | "group";
+  chatType: "dm" | "group" | "business";
   isGroupAdmin: boolean;
   targetUserId?: string | null;
   targetDisplayName?: string | null;
@@ -117,7 +117,7 @@ export function ChatDetailLifecycleSection({
         >
           <Trash2 className="h-5 w-5 shrink-0" />
           <span className="flex-1 font-medium">
-            {chatType === "group" ? "Удалить группу у всех" : "Удалить чат у обоих"}
+            {chatType === "group" ? "Удалить группу у всех" : chatType === "business" ? "Удалить BUSINESS чат" : "Удалить чат у обоих"}
           </span>
         </button>
         {chatType === "group" && !isGroupAdmin ? (
@@ -156,7 +156,9 @@ export function ChatDetailLifecycleSection({
             <AlertDialogDescription>
               {chatType === "group"
                 ? "Группа и переписка будут удалены для всех участников. Действие необратимо."
-                : "Чат и сообщения удалятся у вас и у собеседника. Действие необратимо."}
+                : chatType === "business"
+                  ? "BUSINESS чат и его переписка будут удалены. Действие необратимо."
+                  : "Чат и сообщения удалятся у вас и у собеседника. Действие необратимо."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -4,6 +4,7 @@
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { flushSync } from "react-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { getMessages, listChatFolders } from "@/lib/chat";
 import {
@@ -21,25 +22,16 @@ import {
 } from "@/lib/chat-offline-store";
 import { isUuid } from "../utils/format";
 import { parseMessageDate } from "../utils/format";
+import { mergeChatPreservingNewerOtherLastRead } from "../utils/chat-metadata-merge";
 import { MESSAGES_PAGE, CHAT_LOAD_TIMEOUT_MS } from "../constants";
 import type { ApiChat, ApiMessage } from "../types";
 import { useChatVisibilityRefresh } from "./useChatVisibilityRefresh";
 import { useChatRealtime } from "./useChatRealtime";
-
-async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
-  try {
-    const text = await res.text();
-    if (!text.trim()) return fallback;
-    const j = JSON.parse(text) as { message?: string; error?: string };
-    const m =
-      (typeof j?.message === "string" && j.message.trim()) ? j.message.trim()
-      : (typeof j?.error === "string" && j.error.trim()) ? j.error.trim()
-      : "";
-    return m || fallback;
-  } catch {
-    return fallback;
-  }
-}
+import { useToast } from "@/hooks/use-toast";
+import { CHAT_BOOTSTRAP_API_ENABLED } from "@/lib/chat-bootstrap-flag";
+import { chatQueryKeys } from "@/features/chat/chat-query-keys";
+import { readApiErrorMessage } from "./chat-messages/read-api-error-message";
+import { mergeLatestServerTail } from "./chat-messages/merge-latest-server-tail";
 
 /** Не чаще одного "typing" в 2.5 с; индикатор сбрасывается, если нет ввода 3 с */
 const TYPING_THROTTLE_MS = 2500;
@@ -52,6 +44,8 @@ export type UseChatMessagesParams = {
 
 export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessagesParams) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const {
     subscribeChat,
     subscribeMessageDeleted,
@@ -59,10 +53,14 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     subscribeTyping,
     sendVoiceRecording,
     subscribeVoiceRecording,
+    sendMarkChatRead,
+    sendSubscribeChatThread,
+    sendUnsubscribeChatThread,
     notifyChatListUpdate,
     onChatRead,
     onMessageReaction,
     onMessageEdited,
+    onRealtimeSocketConnected,
   } = useChatRealtime();
   const onDraftRestoreRef = useRef(onDraftRestore);
   onDraftRestoreRef.current = onDraftRestore;
@@ -73,6 +71,17 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const chatId = resolvedChatId ?? "";
   const currentChatIdRef = useRef(chatId);
   currentChatIdRef.current = resolvedChatId ?? chatIdParam ?? "";
+  const metadataQueryChatId = isUuid(chatId) ? chatId : "";
+  const chatMetadataQuery = useQuery({
+    queryKey: metadataQueryChatId ? chatQueryKeys.detail(metadataQueryChatId) : chatQueryKeys.all,
+    enabled: Boolean(metadataQueryChatId),
+    staleTime: 30_000,
+    queryFn: async () => {
+      const res = await apiFetch(`${API}/chats/${encodeURIComponent(metadataQueryChatId)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("Не удалось загрузить чат");
+      return (await res.json()) as ApiChat;
+    },
+  });
 
   const [chat, setChat] = useState<ApiChat | null>(null);
   const [messages, setMessages] = useState<ApiMessage[]>([]);
@@ -87,6 +96,8 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     { id: string; name: string; isMain: boolean; orderIndex: number; unreadCount?: number; messageCount?: number }[]
   >([]);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const currentFolderIdRef = useRef<string | null>(null);
+  currentFolderIdRef.current = currentFolderId;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -97,6 +108,13 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
   const lastTypingActivityRef = useRef<number>(0);
   const lastTypingSentRef = useRef<number>(0);
   const typingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const serverChat = chatMetadataQuery.data;
+    if (!serverChat || !metadataQueryChatId) return;
+    if (currentChatIdRef.current !== metadataQueryChatId) return;
+    setChat((prev) => mergeChatPreservingNewerOtherLastRead(prev, serverChat));
+  }, [chatMetadataQuery.data, metadataQueryChatId]);
 
   useEffect(() => {
     if (isUuid(chatIdParam)) setResolvedChatId(chatIdParam);
@@ -151,8 +169,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         ),
       ]);
 
-    if (/^\d+$/.test(id)) {
-      const url = `${API}/chats/dm-by-public-id/${encodeURIComponent(id)}?limit=${MESSAGES_PAGE}`;
+    const loadResolvedChatViaSingleRequest = (url: string, statusFallback404: string) => {
       const safetyTimeout = setTimeout(() => {
         if (currentChatIdRef.current === id) {
           if (offlineSnapshotApplied) return;
@@ -170,7 +187,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
               setMessages([]);
               const statusFallback =
                 res.status === 401 ? "Сессия истекла. Войдите снова."
-                : res.status === 404 ? "Пользователь не найден"
+                : res.status === 404 ? statusFallback404
                 : res.status === 429
                   ? "Слишком много открытий чатов за короткое время. Подождите минуту."
                 : "Не удалось загрузить чат";
@@ -201,11 +218,10 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           }
           setResolvedChatId(cId);
           setChat(chatData);
+          queryClient.setQueryData(chatQueryKeys.detail(cId), chatData);
           const list: ApiMessage[] = "messages" in data && Array.isArray(data.messages) ? data.messages : [];
-          const unreadNn = chatData.unreadCount ?? 0;
-          const hasUnDm = chatData.hasUnread === true || unreadNn > 0;
-          const dmLimit = hasUnDm ? Math.min(200, Math.max(MESSAGES_PAGE, unreadNn + 40)) : MESSAGES_PAGE;
-          setHasMoreMessages(list.length >= dmLimit);
+          // Стартовый батч всегда фиксированный: лёгкое открытие + предсказуемая догрузка по скроллу.
+          setHasMoreMessages(list.length >= MESSAGES_PAGE);
           // Показываем серверный список сразу, merge outbox выполняем поверх.
           setMessages(list);
           if (user?.id) {
@@ -232,10 +248,24 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           clearTimeout(safetyTimeout);
           if (currentChatIdRef.current === id && !offlineSnapshotApplied) setLoading(false);
         });
+    };
+
+    if (/^\d+$/.test(id)) {
+      const url = `${API}/chats/dm-by-public-id/${encodeURIComponent(id)}?limit=${MESSAGES_PAGE}`;
+      loadResolvedChatViaSingleRequest(url, "Пользователь не найден");
+      return;
+    }
+
+    if (!isUuid(id)) {
+      const url = `${API}/chats/by-code/${encodeURIComponent(id)}?limit=${MESSAGES_PAGE}`;
+      loadResolvedChatViaSingleRequest(url, "Чат не найден");
       return;
     }
 
     const base = `${API}/chats/${encodeURIComponent(id)}`;
+    if (CHAT_BOOTSTRAP_API_ENABLED) {
+      void 0; /* GET …/bootstrap заменит fan-out ниже, когда сервер готов (chat-bootstrap-flag). */
+    }
     Promise.all([
       apiFetch(`${base}`, { cache: "no-store" }),
       apiFetch(`${base}/folders`, { cache: "no-store" }),
@@ -259,50 +289,60 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
         if (currentChatIdRef.current !== id) return;
         setResolvedChatId(id);
         setChat(chatData);
-        const foldersResData = foldersRes.ok ? await foldersRes.json() : [];
-        const foldersList = Array.isArray(foldersResData)
-          ? (foldersResData as {
-              id: string;
-              name: string;
-              isMain: boolean;
-              orderIndex: number;
-              unreadCount?: number;
-              messageCount?: number;
-            }[])
-          : [];
-        setFolders(foldersList);
-        const mainFolder = foldersList.find((f) => f.isMain) ?? foldersList[0];
-        const folderId = mainFolder?.id ?? null;
-        setCurrentFolderId(folderId);
+        queryClient.setQueryData(chatQueryKeys.detail(id), chatData);
+        const sortFolderTabs = (
+          list: {
+            id: string;
+            name: string;
+            isMain: boolean;
+            orderIndex: number;
+            unreadCount?: number;
+            messageCount?: number;
+          }[],
+        ) => list.slice().sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, "ru"));
+        type FolderRow = {
+          id: string;
+          name: string;
+          isMain: boolean;
+          orderIndex: number;
+          unreadCount?: number;
+          messageCount?: number;
+        };
+        const parseFolders = (raw: unknown): FolderRow[] =>
+          Array.isArray(raw)
+            ? (raw as FolderRow[])
+            : [];
+        const foldersJsonPromise: Promise<unknown> = foldersRes.ok ? foldersRes.json() : Promise.resolve([]);
+        const msgParamsBase = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+        let messagesRes: Response;
+        let foldersList: FolderRow[];
+        let folderId: string | null = null;
         if (chatData.type === "group") {
-          apiFetch(`${base}/folders`, { cache: "no-store" })
-            .then(async (foldersRes2) => {
-              if (foldersRes2.ok && currentChatIdRef.current === id) {
-                const list2 = await foldersRes2.json();
-                const foldersList2 = Array.isArray(list2)
-                  ? (list2 as {
-                      id: string;
-                      name: string;
-                      isMain: boolean;
-                      orderIndex: number;
-                      unreadCount?: number;
-                      messageCount?: number;
-                    }[])
-                  : [];
-                setFolders(foldersList2);
-              }
-            })
-            .catch(() => {});
+          const [foldersRaw, msgRes] = await Promise.all([
+            foldersJsonPromise,
+            apiFetch(`${base}/messages?${msgParamsBase}`, { cache: "no-store" }),
+          ]);
+          messagesRes = msgRes;
+          foldersList = parseFolders(foldersRaw);
+          const mainFolder =
+            foldersList.find((f) => Boolean(f.isMain)) ?? (sortFolderTabs(foldersList)[0] ?? null);
+          folderId = mainFolder?.id ?? null;
+          setCurrentFolderId(folderId);
+        } else {
+          const foldersRaw = await foldersJsonPromise;
+          foldersList = parseFolders(foldersRaw);
+          const mainFolder =
+            foldersList.find((f) => Boolean(f.isMain)) ?? (sortFolderTabs(foldersList)[0] ?? null);
+          folderId = mainFolder?.id ?? null;
+          setCurrentFolderId(folderId);
+          const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+          if (folderId) msgParams.set("folderId", folderId);
+          messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
         }
-        const unreadN = chatData.unreadCount ?? 0;
-        const hasUn = chatData.hasUnread === true || unreadN > 0;
-        const msgLimit = hasUn ? Math.min(200, Math.max(MESSAGES_PAGE, unreadN + 40)) : MESSAGES_PAGE;
-        const msgParams = new URLSearchParams({ limit: String(msgLimit) });
-        if (folderId) msgParams.set("folderId", folderId);
-        const messagesRes = await apiFetch(`${base}/messages?${msgParams}`, { cache: "no-store" });
+        setFolders(foldersList);
         const list: ApiMessage[] = messagesRes.ok ? await messagesRes.json() : [];
         if (currentChatIdRef.current === id) {
-          setHasMoreMessages(list.length >= msgLimit);
+          setHasMoreMessages(list.length >= MESSAGES_PAGE);
           const arr = Array.isArray(list) ? list : [];
           // Показываем историю сразу, чтобы не рендерить пустое состояние между кадрами.
           setMessages(arr);
@@ -422,6 +462,43 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     [chatId, chat, user?.id]
   );
 
+  /** После фона / реконнекта WS события chat-message теряются — подтягиваем хвост с API. */
+  const refetchLatestMessagesTail = useCallback(async () => {
+    const id = chat?.id ?? chatId;
+    if (!id || !isUuid(id)) return;
+    if (!chat || chat.id !== id) return;
+    const folderId = currentFolderIdRef.current;
+    try {
+      const msgParams = new URLSearchParams({ limit: String(MESSAGES_PAGE) });
+      if (folderId) msgParams.set("folderId", folderId);
+      const res = await apiFetch(`${API}/chats/${encodeURIComponent(id)}/messages?${msgParams}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const raw = await res.json();
+      const arr: ApiMessage[] = Array.isArray(raw) ? raw : [];
+      if (currentChatIdRef.current !== id) return;
+      setMessages((prev) => {
+        if (currentChatIdRef.current !== id) return prev;
+        const { next, olderCount, tailLen } = mergeLatestServerTail(prev, arr);
+        queueMicrotask(() => {
+          if (currentChatIdRef.current !== id) return;
+          setHasMoreMessages(olderCount > 0 || tailLen >= MESSAGES_PAGE);
+          void saveOfflineMessages(id, folderId, next);
+          const uid = user?.id;
+          if (uid) {
+            void mergeOutboxIntoServerList(id, uid, next, folderId).then((merged) => {
+              if (currentChatIdRef.current === id) setMessages(merged);
+            });
+          }
+        });
+        return next;
+      });
+    } catch {
+      toast({ title: "Не удалось обновить сообщения", variant: "destructive" });
+    }
+  }, [chat?.id, chatId, chat, user?.id, toast]);
+
   useEffect(() => {
     const onFlushed = (ev: Event) => {
       const d = (ev as CustomEvent<ChatOutboxFlushedDetail>).detail;
@@ -435,7 +512,7 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
                 type: d.message.type,
                 content: d.message.content,
                 createdAt: d.message.createdAt,
-                sendStatus: undefined as ApiMessage["sendStatus"],
+                sendStatus: "sent",
               }
             : m
         )
@@ -557,12 +634,10 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     }
   }, [messages, chatId, loading, chat, user?.id]);
 
-  const currentFolderIdRef = useRef(currentFolderId);
-  currentFolderIdRef.current = currentFolderId;
-
   useEffect(() => {
     if (!chatId || !chat) return;
     const unsub = subscribeChat(chatId, (message) => {
+      const fromOther = Boolean(message.senderId && message.senderId !== user?.id);
       const msgFolderId = (message as ApiMessage & { folderId?: string | null }).folderId ?? null;
       const folderId = currentFolderIdRef.current;
       const msgInOtherFolder = chat.type === "group" && ((folderId != null && msgFolderId !== folderId) || (folderId == null && msgFolderId != null));
@@ -588,7 +663,8 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           const byId = new Map(prev.map((m) => [m.id, m]));
           if (message.senderId === user?.id) {
             for (const [id, m] of Array.from(byId.entries())) {
-              if (id.startsWith("temp-") && m.senderId === message.senderId) {
+              const isLocalPendingId = id.startsWith("temp-") || id.startsWith("obq-");
+              if (isLocalPendingId && m.senderId === message.senderId && m.type === message.type) {
                 byId.delete(id);
                 break;
               }
@@ -607,6 +683,18 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
           );
         });
       });
+      if (fromOther) {
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = null;
+        }
+        flushSync(() => setTypingDisplay(null));
+        if (voiceRecordingTimeoutRef.current) {
+          clearTimeout(voiceRecordingTimeoutRef.current);
+          voiceRecordingTimeoutRef.current = null;
+        }
+        flushSync(() => setVoiceRecordingDisplay(null));
+      }
       if (chat.type === "group") {
         listChatFolders(chatId).then((list) => {
           if (Array.isArray(list) && currentChatIdRef.current === chatId) {
@@ -625,7 +713,13 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
       }
     });
     return unsub;
-  }, [chatId, chat?.type, subscribeChat, user?.id]);
+  }, [chatId, chat?.id, chat?.type, subscribeChat, user?.id]);
+
+  useEffect(() => {
+    if (!chatId || !chat || chat.id !== chatId) return;
+    sendSubscribeChatThread(chatId);
+    return () => sendUnsubscribeChatThread(chatId);
+  }, [chatId, chat?.id, sendSubscribeChatThread, sendUnsubscribeChatThread]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -654,8 +748,16 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
 
   useEffect(() => {
     if (!chatId) return;
-    const unsub = subscribeTyping(chatId, (userId, displayName) => {
+    const unsub = subscribeTyping(chatId, (userId, displayName, active) => {
       if (userId === user?.id) return;
+      if (active === false) {
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = null;
+        }
+        flushSync(() => setTypingDisplay(null));
+        return;
+      }
       flushSync(() => setTypingDisplay(displayName?.trim() || "Кто-то"));
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => setTypingDisplay(null), 5000);
@@ -696,38 +798,64 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const now = Date.now();
     lastTypingActivityRef.current = now;
     if (now - lastTypingSentRef.current >= TYPING_THROTTLE_MS) {
-      sendTyping(chatId, name);
+      sendTyping(chatId, name, true);
       lastTypingSentRef.current = now;
     }
     if (!typingIntervalRef.current) {
       typingIntervalRef.current = setInterval(() => {
         const t = Date.now();
         if (t - lastTypingActivityRef.current > TYPING_IDLE_MS) {
+          sendTyping(chatId, name, false);
           if (typingIntervalRef.current) clearInterval(typingIntervalRef.current);
           typingIntervalRef.current = null;
           return;
         }
         if (t - lastTypingSentRef.current >= TYPING_THROTTLE_MS) {
-          sendTyping(chatId, name);
+          sendTyping(chatId, name, true);
           lastTypingSentRef.current = t;
         }
       }, TYPING_THROTTLE_MS);
     }
   }, [chatId, user, sendTyping]);
 
+  /** Уход с диалога / смена чата — сразу убрать «печатает» у собеседника. */
+  useEffect(() => {
+    return () => {
+      if (!chatId || !user) return;
+      const name = [user.displayName, user.surname].filter(Boolean).join(" ") || null;
+      sendTyping(chatId, name, false);
+    };
+  }, [chatId, user, sendTyping]);
+
   useEffect(() => () => { if (typingIntervalRef.current) clearInterval(typingIntervalRef.current); typingIntervalRef.current = null; }, [chatId]);
 
   /** Обновление lastReadAt по WebSocket (chat-read) — прочитанность в реальном времени.
-   * Refetch чата с сервера, чтобы гарантированно получить актуальный lastReadAt
-   * независимо от подписки/закрытия вкладки. */
+   * Сразу подмешиваем lastReadAt из события (не ждём refetch), затем подтягиваем чат с сервера. */
   useEffect(() => {
-    const off = onChatRead(({ chatId: evChatId }) => {
+    const off = onChatRead((detail) => {
+      const evChatId = detail.chatId;
       if (!evChatId || evChatId !== chatId) return;
+      const at = detail.lastReadAt;
+      const readerId = detail.readerId;
+      if (typeof at === "string" && at.length > 0 && typeof readerId === "string" && readerId.length > 0) {
+        setChat((prev) => {
+          if (!prev || prev.id !== chatId) return prev;
+          const other = prev.otherMember;
+          if (!other || other.id !== readerId) return prev;
+          const prevMs = other.lastReadAt ? parseMessageDate(other.lastReadAt).getTime() : 0;
+          const nextMs = parseMessageDate(at).getTime();
+          if (!Number.isFinite(nextMs)) return prev;
+          if (Number.isFinite(prevMs) && nextMs < prevMs) return prev;
+          return { ...prev, otherMember: { ...other, lastReadAt: at } };
+        });
+      }
       const base = `${API}/chats/${encodeURIComponent(chatId)}`;
       apiFetch(base)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: ApiChat | null) => {
-          if (data?.id === currentChatIdRef.current) setChat(data);
+          if (data?.id === currentChatIdRef.current) {
+            setChat((prev) => mergeChatPreservingNewerOtherLastRead(prev, data));
+          }
         })
         .catch(() => {});
     });
@@ -758,13 +886,44 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     const off = onMessageEdited((d) => {
       if (!d?.chatId || d.chatId !== chatId || !d.messageId) return;
       setMessages((prev) =>
-        prev.map((m) => (m.id === d.messageId && m.type === "text" ? { ...m, content: d.content } : m))
+        prev.map((m) =>
+          m.id === d.messageId && m.type === "text"
+            ? {
+                ...m,
+                content: d.content,
+                translatedText: undefined,
+                translateTargetLang: undefined,
+                detectedLang: undefined,
+              }
+            : m,
+        ),
       );
     });
     return off;
   }, [chatId]);
 
-  useChatVisibilityRefresh(chatId, currentChatIdRef, setChat);
+  useChatVisibilityRefresh(chatId, currentChatIdRef, setChat, refetchLatestMessagesTail);
+
+  /** После реконнекта /calls WS — метаданные чата + хвост сообщений (пока сокет был мёртв, пуши/сообщения не пришли по WS). */
+  useEffect(() => {
+    const off = onRealtimeSocketConnected(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (!chatId || currentChatIdRef.current !== chatId) return;
+      const base = `${API}/chats/${encodeURIComponent(chatId)}`;
+      void apiFetch(base, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: ApiChat | null) => {
+          if (data?.id === currentChatIdRef.current) {
+            setChat((prev) => mergeChatPreservingNewerOtherLastRead(prev, data));
+          }
+        })
+        .catch(() => {
+          toast({ title: "Не удалось обновить данные чата", variant: "destructive" });
+        });
+      void refetchLatestMessagesTail();
+    });
+    return off;
+  }, [chatId, refetchLatestMessagesTail, toast]);
 
   const refreshChatMetadata = useCallback(() => {
     const id = chatId;
@@ -772,7 +931,9 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     void apiFetch(`${API}/chats/${encodeURIComponent(id)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: ApiChat | null) => {
-        if (data && data.id === currentChatIdRef.current) setChat(data);
+        if (data && data.id === currentChatIdRef.current) {
+          setChat((prev) => mergeChatPreservingNewerOtherLastRead(prev, data));
+        }
       })
       .catch(() => {});
   }, [chatId]);
@@ -801,5 +962,6 @@ export function useChatMessages({ chatIdParam, onDraftRestore }: UseChatMessages
     typingDisplay,
     voiceRecordingDisplay,
     scheduleSendTyping,
+    sendMarkChatRead,
   };
 }

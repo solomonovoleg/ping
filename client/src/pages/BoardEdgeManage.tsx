@@ -50,7 +50,7 @@ function CampaignRow({ c }: { c: EdgeCreatorCampaignSummary }) {
         </span>
         <span className="inline-flex items-center gap-1">
           <Sparkles className="h-3.5 w-3.5" aria-hidden />
-          {c.edgeType}
+          {c.edgeType === "money" ? "MONEY" : c.edgeType === "character" ? "персонаж" : c.edgeType}
         </span>
       </div>
       <p className="mt-2 uix-text-caption text-muted-foreground">
@@ -62,7 +62,13 @@ function CampaignRow({ c }: { c: EdgeCreatorCampaignSummary }) {
           haptic
           subtle
           className="inline-flex min-h-[var(--uix-touch-min)] items-center gap-1.5 rounded-full border border-border bg-secondary/80 px-3 py-1.5 text-xs font-semibold"
-          onClick={() => setLocation(`/board/edge/new?edgeId=${encodeURIComponent(c.edgeId)}`)}
+          onClick={() =>
+            setLocation(
+              c.edgeType === "money"
+                ? `/board/edge/new-money?edgeId=${encodeURIComponent(c.edgeId)}`
+                : `/board/edge/new?edgeId=${encodeURIComponent(c.edgeId)}`,
+            )
+          }
         >
           <Pencil className="h-3.5 w-3.5" aria-hidden />
           Редактировать
@@ -77,9 +83,18 @@ function CampaignRow({ c }: { c: EdgeCreatorCampaignSummary }) {
           <PlusCircle className="h-3.5 w-3.5" aria-hidden />
           Пост с EDGE
         </TapScaleButton>
+        <TapScaleButton
+          type="button"
+          haptic
+          subtle
+          className="inline-flex min-h-[var(--uix-touch-min)] items-center gap-1.5 rounded-full border border-border bg-secondary/80 px-3 py-1.5 text-xs font-semibold"
+          onClick={() => setLocation(`/board/edge/draw?edgeId=${encodeURIComponent(c.edgeId)}`)}
+        >
+          Подвести итоги
+        </TapScaleButton>
       </div>
       <p className="mt-2 uix-text-caption text-muted-foreground">
-        Розыгрыш вручную: админ-панель → draw-prize (edgeId выше).
+        Розыгрыш и ЛС победителям — кнопка «Подвести итоги». Для админов остаётся draw-prize.
       </p>
     </div>
   );

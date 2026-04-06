@@ -11,6 +11,8 @@ import type {
   CallReactionKind,
   CallFeatureSupport,
   CallMessageListContext,
+  CallVideoQualityMode,
+  CallOutgoingVideoQuality,
 } from "./call-types";
 import {
   RING_TIMEOUT_MS,
@@ -20,7 +22,7 @@ import {
 } from "./call-types";
 import { tryTransition, forceTransition, isActiveCallState, isTerminalState } from "./call-state-machine";
 import { WebRtcCallPeer, isWebRtcSupported, mapMediaAccessError, tuneOutgoingVideoSenders } from "./webrtc-peer";
-import { getIceServers } from "./call-ice-config";
+import { getCallRtcConfiguration, getVideoTrackQualityConstraints } from "./call-ice-config";
 import { CallSignalingClient } from "./call-signaling";
 import { startIncomingCallAlert, startRingbackTone } from "@/lib/incoming-call-alert";
 import { getCallFeatureFlags } from "./call-feature-flags";
@@ -37,6 +39,9 @@ import { applyCallAudioOutputRoute } from "@/lib/call-audio-route";
 type StateChangeListener = (snapshot: CallControllerSnapshot) => void;
 const RESUME_REJOIN_TIMEOUT_MS = 45_000;
 const PEER_DISCONNECTED_GRACE_MS = 2_500;
+const ENABLE_AUDIO_ONLY_FALLBACK =
+  import.meta.env.VITE_CALLS_AUDIO_ONLY_FALLBACK !== "0" &&
+  import.meta.env.VITE_CALLS_AUDIO_ONLY_FALLBACK !== "false";
 
 export interface CallControllerSnapshot {
   state: CallState;
@@ -51,6 +56,7 @@ export interface CallControllerSnapshot {
   remoteStream: MediaStream | null;
   connectionState: RTCPeerConnectionState | null;
   networkQuality: CallNetworkQualityLevel;
+  videoQualityMode: CallVideoQualityMode;
   cameraFacingMode: CallCameraFacingMode;
   isScreenShareActive: boolean;
   /** Собеседник шарит экран — не зеркалить удалённое видео (читаемость текста). */
@@ -93,6 +99,8 @@ export class CallController {
   private _chatId: string | null = null;
   private _callMessageContext: CallMessageListContext = { kind: "unknown" };
   private _networkQuality: CallNetworkQualityLevel = "unknown";
+  private _videoQualityMode: CallVideoQualityMode = "auto";
+  private appliedVideoQuality: CallOutgoingVideoQuality | null = null;
   private _cameraFacingMode: CallCameraFacingMode = "user";
   private _isScreenShareActive = false;
   private _remoteScreenShareActive = false;
@@ -141,16 +149,31 @@ export class CallController {
   private resumeWorkChain: Promise<void> = Promise.resolve();
   /** Дебаунс call.resume-check при двойном onTransportConnected. */
   private resumeCheckDebounce: ReturnType<typeof setTimeout> | null = null;
+  /** Один раз за «жизнь» сокета: в idle запросить активную сессию (пуш / убитое приложение не получили call.incoming по WS). */
+  private idlePendingCallProbeSent = false;
   /** Не слать resume-check чаще (два открытия WS подряд → лишний peer-reconnected / reneg у собеседника). */
   private resumeCheckCooldownUntil = 0;
   /** Не слать второй offer сразу после первого при том же callId. */
   private lastRenegotiateOfferAtMs = 0;
   private lastRenegotiateOfferCallId: string | null = null;
+  /** Смена сети / ICE failed: один recovery за раз. */
+  private iceRecoveryRunning = false;
   /** Один за другим: resume и peer-reconnected не должны параллельно делать recreatePeer. */
   private renegotiateTail: Promise<void> = Promise.resolve();
   private destroyed = false;
   /** По умолчанию громкая связь для audio-only (на телефоне). */
   private _audioOutputSpeaker = true;
+  private attemptedAudioOnlyRecovery = false;
+  private setupTrace:
+    | {
+        callId: string;
+        startedAt: number;
+        inviteSentAt?: number;
+        acceptedAt?: number;
+        offerAnswerDoneAt?: number;
+        connectedAt?: number;
+      }
+    | null = null;
 
   private listeners = new Set<StateChangeListener>();
 
@@ -172,6 +195,87 @@ export class CallController {
       direction: this._direction,
       ...meta,
     });
+  }
+
+  private setupTraceStart(callId: string): void {
+    this.setupTrace = { callId, startedAt: Date.now() };
+    console.info("[call-setup] start", { callId });
+  }
+
+  private setupTraceMark(stage: "invite_sent" | "accepted" | "offer_answer_done" | "connected"): void {
+    if (!this.setupTrace || this.setupTrace.callId !== this._callId) return;
+    const now = Date.now();
+    if (stage === "invite_sent") this.setupTrace.inviteSentAt = now;
+    if (stage === "accepted") this.setupTrace.acceptedAt = now;
+    if (stage === "offer_answer_done") this.setupTrace.offerAnswerDoneAt = now;
+    if (stage === "connected") this.setupTrace.connectedAt = now;
+    console.info("[call-setup] stage", {
+      callId: this.setupTrace.callId,
+      stage,
+      elapsedMs: now - this.setupTrace.startedAt,
+    });
+  }
+
+  private setupTraceFail(reason: string): void {
+    if (!this.setupTrace) return;
+    const now = Date.now();
+    console.warn("[call-setup] failed", {
+      callId: this.setupTrace.callId,
+      reason,
+      elapsedMs: now - this.setupTrace.startedAt,
+      inviteToAcceptedMs:
+        this.setupTrace.inviteSentAt && this.setupTrace.acceptedAt
+          ? this.setupTrace.acceptedAt - this.setupTrace.inviteSentAt
+          : null,
+      inviteToConnectedMs:
+        this.setupTrace.inviteSentAt && this.setupTrace.connectedAt
+          ? this.setupTrace.connectedAt - this.setupTrace.inviteSentAt
+          : null,
+    });
+  }
+
+  private setupTraceComplete(): void {
+    if (!this.setupTrace) return;
+    const now = Date.now();
+    console.info("[call-setup] complete", {
+      callId: this.setupTrace.callId,
+      elapsedMs: now - this.setupTrace.startedAt,
+      inviteToAcceptedMs:
+        this.setupTrace.inviteSentAt && this.setupTrace.acceptedAt
+          ? this.setupTrace.acceptedAt - this.setupTrace.inviteSentAt
+          : null,
+      inviteToConnectedMs:
+        this.setupTrace.inviteSentAt && this.setupTrace.connectedAt
+          ? this.setupTrace.connectedAt - this.setupTrace.inviteSentAt
+          : null,
+    });
+  }
+
+  private async tryAudioOnlyRecovery(reason: string): Promise<boolean> {
+    if (!ENABLE_AUDIO_ONLY_FALLBACK) return false;
+    if (this._mediaType !== "video" || this.attemptedAudioOnlyRecovery || !this._callId) return false;
+    this.attemptedAudioOnlyRecovery = true;
+    this._statusText = "Сеть нестабильна, переключаемся на аудио для сохранения связи…";
+    this.notify();
+    try {
+      const callId = this._callId;
+      this._mediaType = "audio";
+      this._isCameraEnabled = false;
+      this._isScreenShareActive = false;
+      this._remoteScreenShareActive = false;
+      this.peer?.setCameraEnabled(false);
+      if (this._direction === "outgoing") {
+        await this.renegotiateAsCaller(callId);
+      } else {
+        this.signaling.send({ type: "call.resume-request", callId });
+      }
+      await this.runIceRecovery("audio-only-fallback");
+      console.info("[call-recovery] switched to audio-only fallback", { callId, reason });
+      return true;
+    } catch (e) {
+      console.warn("[call-recovery] audio-only fallback failed", { reason, err: String(e) });
+      return false;
+    }
   }
 
   // ── Public API ─────────────────────────────────────────────────
@@ -197,6 +301,8 @@ export class CallController {
 
     const callId = crypto.randomUUID();
     this._callId = callId;
+    this.setupTraceStart(callId);
+    this.attemptedAudioOnlyRecovery = false;
     this._otherUserId = otherUserId;
     this._otherDisplayName = otherName;
     this._otherAvatarUrl = otherAvatarUrl;
@@ -221,6 +327,7 @@ export class CallController {
         mediaType,
         fromDisplayName: callerDisplayName,
       });
+      this.setupTraceMark("invite_sent");
 
       const offer = await this.peer!.createOffer();
       this.signaling.send({ type: "call.offer", callId, sdp: offer });
@@ -244,6 +351,40 @@ export class CallController {
     }
   }
 
+  /**
+   * Входящий уже показан системой (CallKit) или восстановлен из пуша — подставляем метаданные до accept/reject.
+   */
+  applyIncomingRingingFromNativeVoip(info: IncomingCallInfo, opts?: { skipAlert?: boolean }): void {
+    if (this._state === "incoming_ringing" && this._incoming?.callId === info.callId) {
+      this._incoming = {
+        ...this._incoming,
+        fromDisplayName: info.fromDisplayName || this._incoming.fromDisplayName,
+        fromAvatarUrl: info.fromAvatarUrl ?? this._incoming.fromAvatarUrl ?? null,
+        mediaType: info.mediaType,
+      };
+      this.notify();
+      return;
+    }
+    if (isActiveCallState(this._state) && this._state !== "reconnecting") {
+      if (this._incoming?.callId === info.callId || this._callId === info.callId) return;
+    }
+    this.stopIncomingAlert?.();
+    this.stopIncomingAlert = null;
+    if (!opts?.skipAlert) {
+      this.stopIncomingAlert = startIncomingCallAlert(info.fromDisplayName);
+    }
+    this._incoming = {
+      callId: info.callId,
+      fromUserId: info.fromUserId,
+      fromDisplayName: info.fromDisplayName,
+      fromAvatarUrl: info.fromAvatarUrl ?? null,
+      chatId: info.chatId,
+      mediaType: info.mediaType,
+    };
+    this._direction = "incoming";
+    this.setState("incoming_ringing");
+  }
+
   async acceptCall(): Promise<void> {
     const info = this._incoming;
     if (!info || (this._state !== "incoming_ringing" && this._state !== "reconnecting")) return;
@@ -259,6 +400,8 @@ export class CallController {
     this.stopIncomingAlert = null;
 
     this._callId = info.callId;
+    this.setupTraceStart(info.callId);
+    this.attemptedAudioOnlyRecovery = false;
     this._otherUserId = info.fromUserId;
     this._otherDisplayName = info.fromDisplayName;
     this._otherAvatarUrl = info.fromAvatarUrl ?? null;
@@ -278,6 +421,7 @@ export class CallController {
     try {
       await this.ensurePeer(info.mediaType);
       this.signaling.send({ type: "call.accept", callId: info.callId });
+      this.setupTraceMark("accepted");
       serverNotifiedAccepted = true;
       this.setState("connecting");
 
@@ -366,7 +510,7 @@ export class CallController {
     if (!pc || !local) return;
     const result = await switchCameraTrack(pc, local, this._cameraFacingMode);
     this._cameraFacingMode = result.facingMode;
-    void tuneOutgoingVideoSenders(pc, { screenShare: this._isScreenShareActive });
+    await this.applyOutgoingVideoQuality({ force: true });
     this.notify();
   }
 
@@ -384,7 +528,7 @@ export class CallController {
         this.signaling.send({ type: "call.screen-share-state", callId: this._callId, active: false });
       }
       this.notify();
-      void tuneOutgoingVideoSenders(pc, { screenShare: false });
+      await this.applyOutgoingVideoQuality({ force: true });
       return;
     }
 
@@ -394,7 +538,7 @@ export class CallController {
       this.signaling.send({ type: "call.screen-share-state", callId: this._callId, active: true });
     }
     this.notify();
-    void tuneOutgoingVideoSenders(pc, { screenShare: true });
+    await this.applyOutgoingVideoQuality({ force: true });
   }
 
   async toggleRecording(): Promise<void> {
@@ -454,6 +598,15 @@ export class CallController {
     this.notify();
   }
 
+  toggleVideoHd(): void {
+    if (this._mediaType !== "video") return;
+    this._videoQualityMode = this._videoQualityMode === "hd" ? "auto" : "hd";
+    this.notify();
+    void this.applyOutgoingVideoQuality({ force: true }).then(() => {
+      if (!this.destroyed) this.notify();
+    });
+  }
+
   retryCall(): void {
     const userId = this._otherUserId;
     const name = this._otherDisplayName;
@@ -463,11 +616,14 @@ export class CallController {
     const messageContext = this._callMessageContext;
     if (!userId || !chatId) return;
     this.cleanupFull();
-    this.startCall(userId, name, avatar, chatId, mediaType, "", messageContext).catch(() => {});
+    void this.startCall(userId, name, avatar, chatId, mediaType, "", messageContext).catch((e) => {
+      console.warn("[call] retryCall startCall failed", e);
+    });
   }
 
   /** Call this when the WebSocket disconnects. */
   onTransportDisconnected(): void {
+    this.idlePendingCallProbeSent = false;
     if (!isActiveCallState(this._state)) return;
     // На стадии дозвона это не "восстановление разговора": при кратком переподключении WS
     // нельзя уводить UI в reconnecting, иначе следующий звонок выглядит как resume старого.
@@ -508,6 +664,13 @@ export class CallController {
     this.resumeCheckDebounce = setTimeout(() => {
       this.resumeCheckDebounce = null;
       if (this.destroyed) return;
+      /** Пока UI в idle, сервер всё ещё может держать ringing-сессию (клиент не был на сокете в момент invite). */
+      if (this._state === "idle" && !this.idlePendingCallProbeSent) {
+        this.idlePendingCallProbeSent = true;
+        console.info("[call-reconnect] ws open (idle) → resume-check (pending session on server)");
+        this.signaling.send({ type: "call.resume-check" });
+        return;
+      }
       /** Звонок уже завершён / не начат — не будить сервер resume-check (ложное «восстановление» в чате). */
       if (!isActiveCallState(this._state)) return;
       if (!this._callId && !this._incoming?.callId) return;
@@ -550,6 +713,7 @@ export class CallController {
       remoteStream: this.peer?.getRemoteStream() ?? null,
       connectionState: this.peer?.getConnectionState() ?? null,
       networkQuality: this._networkQuality,
+      videoQualityMode: this._videoQualityMode,
       cameraFacingMode: this._cameraFacingMode,
       isScreenShareActive: this._isScreenShareActive,
       remoteScreenShareActive: this._remoteScreenShareActive,
@@ -658,6 +822,16 @@ export class CallController {
   }
 
   private handleIncoming(event: Extract<ServerCallEvent, { type: "call.incoming" }>): void {
+    if (this._state === "incoming_ringing" && this._incoming?.callId === event.callId) {
+      this._incoming = {
+        ...this._incoming,
+        fromDisplayName: event.fromDisplayName || this._incoming.fromDisplayName,
+        fromAvatarUrl: event.fromAvatarUrl ?? this._incoming.fromAvatarUrl ?? null,
+      };
+      this.notify();
+      return;
+    }
+
     if (isActiveCallState(this._state)) {
       if (this._state === "outgoing_ringing" && event.fromUserId === this._otherUserId) {
         this.mergeOutgoingGlareToIncoming(event);
@@ -690,6 +864,7 @@ export class CallController {
     this.clearTimer("ringTimer");
 
     if (this._state === "outgoing_ringing") {
+      this.setupTraceMark("accepted");
       this.setState("connecting");
       this.connectTimer = setTimeout(() => {
         this.connectTimer = null;
@@ -716,12 +891,14 @@ export class CallController {
     try {
       const answer = await this.peer.handleRemoteOffer(event.sdp);
       this.signaling.send({ type: "call.answer", callId: event.callId, sdp: answer });
+      this.setupTraceMark("offer_answer_done");
     } catch (e) {
       console.warn("[call-ctrl] handleOffer first attempt failed, recreating peer", e);
       try {
         await this.recreatePeer(this._mediaType);
         const answer = await this.peer!.handleRemoteOffer(event.sdp);
         this.signaling.send({ type: "call.answer", callId: event.callId, sdp: answer });
+        this.setupTraceMark("offer_answer_done");
       } catch (e2) {
         console.error("[call-ctrl] handleOffer error:", e2);
         this._error = "Ошибка при установке соединения";
@@ -736,6 +913,7 @@ export class CallController {
 
     try {
       await this.peer.handleRemoteAnswer(event.sdp);
+      this.setupTraceMark("offer_answer_done");
     } catch (e) {
       console.error("[call-ctrl] handleAnswer error:", e);
       this._error = "Ошибка при установке соединения";
@@ -1111,6 +1289,65 @@ export class CallController {
     });
   }
 
+  /**
+   * Смена сети (Wi‑Fi ↔ LTE): без recreatePeer — новый ICE gather поверх тех же треков.
+   * Исходящий абонент шлёт offer с iceRestart; входящий — resume-request (сервер/партнёр поднимут re-offer).
+   */
+  private async runIceRecovery(source: string): Promise<void> {
+    if (this.iceRecoveryRunning) return;
+    if (this.destroyed || !this._callId || !this.peer) return;
+    if (isTerminalState(this._state)) return;
+    if (this.peer.getConnectionState() === "connected") {
+      this.syncCallUiWithPeerIfStable();
+      return;
+    }
+
+    this.iceRecoveryRunning = true;
+    const callId = this._callId;
+    const task = async (): Promise<void> => {
+      if (this.destroyed || this._callId !== callId || !this.peer) return;
+      if (this.peer.getConnectionState() === "connected") {
+        this.syncCallUiWithPeerIfStable();
+        return;
+      }
+
+      const now = Date.now();
+      if (
+        this.lastRenegotiateOfferCallId === callId &&
+        now - this.lastRenegotiateOfferAtMs < 2000
+      ) {
+        console.info("[call-reconnect] skip ice recovery burst", { callId, source });
+        return;
+      }
+      this.lastRenegotiateOfferCallId = callId;
+      this.lastRenegotiateOfferAtMs = now;
+
+      try {
+        if (this._direction === "outgoing") {
+          const offer = await this.peer.createOfferAfterIceRestart();
+          if (this.destroyed || this._callId !== callId) return;
+          this.signaling.send({ type: "call.offer", callId, sdp: offer });
+        } else {
+          this.signaling.send({ type: "call.resume-request", callId });
+        }
+      } catch (e) {
+        console.error("[call-reconnect] ICE recovery failed", source, e);
+        if (this.destroyed || this._callId !== callId) return;
+        this.signaling.send({ type: "call.resume-check" });
+      }
+    };
+
+    try {
+      const p = this.renegotiateTail.then(task);
+      this.renegotiateTail = p.catch((e) => {
+        console.error("[call-reconnect] renegotiateTail ice recovery", e);
+      });
+      await p;
+    } finally {
+      this.iceRecoveryRunning = false;
+    }
+  }
+
   // ── WebRTC connection state → call state ───────────────────────
 
   private onConnectionStateChange(pcState: RTCPeerConnectionState): void {
@@ -1136,6 +1373,8 @@ export class CallController {
         this.reportedConnectedCallId = this._callId;
         this.signaling.send({ type: "call.connected", callId: this._callId });
       }
+      this.setupTraceMark("connected");
+      this.setupTraceComplete();
       if (this._state === "outgoing_ringing") {
         const next = tryTransition(this._state, "connecting");
         this._state = next ?? forceTransition(this._state, "connecting");
@@ -1143,10 +1382,7 @@ export class CallController {
       if (this._state === "connecting" || this._state === "reconnecting") {
         this.setState("connected");
       }
-      const pc = this.peer?.getPeerConnection();
-      if (pc) {
-        void tuneOutgoingVideoSenders(pc, { screenShare: this._isScreenShareActive });
-      }
+      void this.applyOutgoingVideoQuality({ force: true });
     } else if (pcState === "disconnected" && this._state === "connected") {
       // Короткие network jitter'ы не должны мгновенно переводить звонок в reconnecting.
       this.clearTimer("reconnectTimer");
@@ -1156,18 +1392,54 @@ export class CallController {
         const still = this.peer?.getConnectionState() ?? null;
         if (still !== "disconnected") return;
 
+        this._statusText = "Восстанавливаем связь после обрыва…";
         this.setState("reconnecting");
+        void this.runIceRecovery("disconnected-persist");
         this.reconnectTimer = setTimeout(() => {
           this.reconnectTimer = null;
           if (this._state === "reconnecting") {
-            this._error = "Соединение потеряно";
-            this.endCallInternal("connection_lost");
+            void this.tryAudioOnlyRecovery("peer-disconnected-timeout").then((switched) => {
+              if (switched) return;
+              this._error = "Соединение потеряно";
+              this.endCallInternal("connection_lost");
+            });
           }
         }, Math.max(RECONNECT_TIMEOUT_MS, RESUME_REJOIN_TIMEOUT_MS));
       }, PEER_DISCONNECTED_GRACE_MS);
     } else if (pcState === "failed") {
-      this._error = "Не удалось установить связь. Проверьте интернет или попробуйте позвонить снова.";
-      this.endCallInternal("error");
+      /** Уже в разговоре: смена сети часто даёт failed — пробуем ICE restart, а не сразу сброс. */
+      const midCallRecoverable =
+        this._callId != null && (this._state === "connected" || this._state === "reconnecting");
+      if (midCallRecoverable) {
+        console.warn("[call-reconnect] connectionState failed — ICE restart / resume-request", {
+          direction: this._direction,
+          uiState: this._state,
+        });
+        this.clearTimer("reconnectTimer");
+        this._error = null;
+        this._statusText = "Смена сети, восстанавливаем связь…";
+        if (this._state === "connected") {
+          const prev = this._state;
+          const next = tryTransition(this._state, "reconnecting");
+          this._state = next ?? forceTransition(this._state, "reconnecting");
+          this.logStateTransition(prev, this._state, { reason: "ice-failed-recovery" });
+          this.notify();
+        }
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          if (this._state === "reconnecting" && this.peer?.getConnectionState() !== "connected") {
+            void this.tryAudioOnlyRecovery("ice-failed-timeout").then((switched) => {
+              if (switched) return;
+              this._error = "Не удалось восстановить связь после смены сети";
+              this.endCallInternal("connection_lost");
+            });
+          }
+        }, RESUME_REJOIN_TIMEOUT_MS);
+        void this.runIceRecovery("connection-failed");
+      } else {
+        this._error = "Не удалось установить связь. Проверьте интернет или попробуйте позвонить снова.";
+        this.endCallInternal("error");
+      }
     } else if (pcState === "closed") {
       this.networkMonitor?.stop();
       this._networkQuality = "unknown";
@@ -1188,6 +1460,7 @@ export class CallController {
       try {
         const answer = await this.peer.handleRemoteOffer(offer);
         this.signaling.send({ type: "call.answer", callId, sdp: answer });
+        this.setupTraceMark("offer_answer_done");
       } catch (e) {
         console.error("[call-ctrl] applyPendingOffer error:", e);
         this._error = "Ошибка при установке соединения";
@@ -1206,7 +1479,7 @@ export class CallController {
   private async ensurePeer(mediaType: CallMediaType): Promise<void> {
     if (this.peer) return;
 
-    this.peer = new WebRtcCallPeer(getIceServers(), {
+    const peer = new WebRtcCallPeer(getCallRtcConfiguration("1to1"), {
       onLocalCandidate: (candidate) => {
         if (this._callId) {
           this.signaling.send({ type: "call.ice-candidate", callId: this._callId, candidate });
@@ -1217,13 +1490,25 @@ export class CallController {
       onIceConnectionStateChange: () => this.notify(),
     });
 
-    await this.peer.initLocalMedia(mediaType);
-    this.peer.createPeerConnection();
-    const pc = this.peer.getPeerConnection();
+    const wantHighCapture =
+      mediaType === "video" &&
+      (this._videoQualityMode === "hd" ||
+        (this._videoQualityMode === "auto" && this._networkQuality === "good"));
+    try {
+      await peer.initLocalMedia(mediaType, { highQuality: wantHighCapture });
+    } catch (e) {
+      peer.destroy();
+      throw e;
+    }
+    this.peer = peer;
+    peer.createPeerConnection();
+    const pc = peer.getPeerConnection();
     if (pc && this.supports.networkQuality) {
       this.networkMonitor = new CallNetworkQualityMonitor(pc, (level) => {
         this._networkQuality = level;
-        this.notify();
+        void this.applyOutgoingVideoQuality().then(() => {
+          if (!this.destroyed) this.notify();
+        });
       });
     }
     this.notify();
@@ -1247,7 +1532,48 @@ export class CallController {
     this.networkMonitor = null;
     this.peer?.destroy();
     this.peer = null;
+    this.appliedVideoQuality = null;
     await this.ensurePeer(mediaType);
+  }
+
+  private resolveOutgoingVideoQuality(): CallOutgoingVideoQuality {
+    if (this._videoQualityMode === "hd") return "high";
+    if (!this.supports.networkQuality) return "medium";
+    switch (this._networkQuality) {
+      case "good":
+        return "high";
+      case "medium":
+        return "medium";
+      case "poor":
+        return "low";
+      default:
+        return "medium";
+    }
+  }
+
+  private async applyOutgoingVideoQuality(opts?: { force?: boolean }): Promise<void> {
+    if (this.destroyed) return;
+    if (this._mediaType !== "video") return;
+    const pc = this.peer?.getPeerConnection();
+    if (!pc || this.peer?.getConnectionState() !== "connected") return;
+
+    const next = this.resolveOutgoingVideoQuality();
+    if (!opts?.force && this.appliedVideoQuality === next) return;
+
+    if (!this._isScreenShareActive) {
+      const local = this.peer.getLocalStream();
+      const vTrack = local?.getVideoTracks().find((t) => t.readyState === "live" && t.kind === "video");
+      if (vTrack) {
+        try {
+          await vTrack.applyConstraints(getVideoTrackQualityConstraints(next));
+        } catch {
+          /* часть браузеров не применяет разрешение на лету */
+        }
+      }
+    }
+
+    await tuneOutgoingVideoSenders(pc, { screenShare: this._isScreenShareActive, quality: next });
+    this.appliedVideoQuality = next;
   }
 
   private async renegotiateAsCaller(callId: string): Promise<void> {
@@ -1287,6 +1613,7 @@ export class CallController {
   }
 
   private endCallInternal(reason: string, opts?: { immediateIdle?: boolean }): void {
+    const callKitEndId = this._callId ?? this._incoming?.callId ?? null;
     this.cancelPendingResumeCheck();
     this.stopRingback?.();
     this.stopRingback = null;
@@ -1310,6 +1637,8 @@ export class CallController {
     this._remoteScreenShareActive = false;
     this._isCameraEnabled = true;
     this._networkQuality = "unknown";
+    this._videoQualityMode = "auto";
+    this.appliedVideoQuality = null;
     this._cameraFacingMode = "user";
     this._captionsEnabled = false;
     this._localRecordingElapsedMs = 0;
@@ -1323,6 +1652,9 @@ export class CallController {
       case "canceled": targetState = "ended"; break;
       case "connection_lost": targetState = "failed"; break;
       default: targetState = "failed"; break;
+    }
+    if (targetState === "failed" || targetState === "missed" || targetState === "busy" || targetState === "rejected") {
+      this.setupTraceFail(reason);
     }
 
     const prev = this._state;
@@ -1341,6 +1673,12 @@ export class CallController {
     }
 
     this.notify();
+
+    if (callKitEndId) {
+      void import("@/lib/ios-callkit-bridge").then((m) =>
+        m.notifyIosCallKitCallEndedIfNeeded(callKitEndId),
+      );
+    }
 
     // Только локальный сброс (красная кнопка): сразу idle — WS не должен продолжать сценарий resume.
     if (targetState !== "failed" && opts?.immediateIdle === true) {
@@ -1391,6 +1729,8 @@ export class CallController {
     this._incoming = null;
     this._isMuted = false;
     this._networkQuality = "unknown";
+    this._videoQualityMode = "auto";
+    this.appliedVideoQuality = null;
     this._cameraFacingMode = "user";
     this._isScreenShareActive = false;
     this._remoteScreenShareActive = false;
@@ -1405,14 +1745,18 @@ export class CallController {
     this.resumeGeneration += 1;
     this.resumeWorkChain = Promise.resolve();
     this.renegotiateTail = Promise.resolve();
+    this.iceRecoveryRunning = false;
     this.lastRenegotiateOfferCallId = null;
     this.lastRenegotiateOfferAtMs = 0;
     this.reportedConnectedCallId = null;
+    this.idlePendingCallProbeSent = false;
     if (this.resumeCheckDebounce) {
       clearTimeout(this.resumeCheckDebounce);
       this.resumeCheckDebounce = null;
     }
     this.logStateTransition(prev, this._state, { reason: "cleanup" });
+    this.setupTrace = null;
+    this.attemptedAudioOnlyRecovery = false;
   }
 
   private setState(next: CallState): void {

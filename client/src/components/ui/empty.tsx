@@ -1,7 +1,10 @@
-import { AlertCircle } from "lucide-react";
-import { cva, type VariantProps } from "class-variance-authority"
+"use client";
 
-import { cn } from "@/lib/utils"
+import { AlertCircle } from "lucide-react";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/utils";
+import { TapScaleButton } from "@/components/ui/tap-scale";
 
 function Empty({ className, ...props }: React.ComponentProps<"div">) {
   return (
@@ -95,6 +98,9 @@ function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/** Поверхность для Reels / полноэкранного видео: чёрный фон, светлый текст (WCAG на чёрном). */
+type ListEmptySurface = "default" | "darkVideo";
+
 /** Готовый блок «пустой список» для Чатов, Ленты, профиля — единый UIX. */
 function ListEmptyState({
   icon: Icon,
@@ -102,38 +108,86 @@ function ListEmptyState({
   description,
   actionLabel,
   onAction,
+  secondaryActionLabel,
+  onSecondaryAction,
   className,
+  surface = "default",
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
   description: string;
   actionLabel?: string;
   onAction?: () => void;
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
   className?: string;
+  surface?: ListEmptySurface;
 }) {
+  const hasPrimary = Boolean(actionLabel && onAction);
+  const hasSecondary = Boolean(secondaryActionLabel && onSecondaryAction);
+  const onDark = surface === "darkVideo";
   return (
     <Empty
-      className={cn("min-h-[200px] gap-[var(--uix-space-5)] p-[var(--uix-space-6)]", className)}
+      className={cn(
+        "min-h-[200px] gap-[var(--uix-space-5)] p-[var(--uix-space-6)]",
+        onDark && "border border-dashed border-white/20 text-white",
+        className,
+      )}
     >
       <EmptyHeader className="gap-[var(--uix-space-2)]">
-        <EmptyMedia variant="icon">
-          <Icon className="size-8 text-muted-foreground/60" />
+        <EmptyMedia
+          variant="icon"
+          className={cn(onDark && "border-0 bg-white/15 text-white [&_svg]:text-white")}
+        >
+          <Icon
+            className={cn("size-8", onDark ? "text-white/85" : "text-muted-foreground/60")}
+          />
         </EmptyMedia>
-        <EmptyTitle className="text-[length:var(--uix-text-list-primary)] font-semibold text-foreground/90">
+        <EmptyTitle
+          className={cn(
+            "text-[length:var(--uix-text-list-primary)] font-semibold",
+            onDark ? "text-white" : "text-foreground/90",
+          )}
+        >
           {title}
         </EmptyTitle>
-        <EmptyDescription className="text-[length:var(--uix-text-caption)]">
+        <EmptyDescription
+          className={cn(
+            "text-[length:var(--uix-text-caption)]",
+            onDark && "text-white/80 [&>a:hover]:text-sky-200 [&>a]:text-sky-300",
+          )}
+        >
           {description}
         </EmptyDescription>
       </EmptyHeader>
-      {actionLabel && onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          className="min-h-[var(--uix-touch-min)] px-[var(--uix-space-4)] py-2.5 rounded-lg bg-primary text-primary-foreground text-[length:var(--uix-text-list-secondary)] font-medium hover:opacity-90 active:scale-[0.98] transition-transform inline-flex items-center justify-center gap-2"
-        >
-          {actionLabel}
-        </button>
+      {(hasPrimary || hasSecondary) && (
+        <div className="flex w-full max-w-sm flex-col items-stretch gap-2 sm:flex-row sm:justify-center">
+          {hasPrimary && (
+            <TapScaleButton
+              type="button"
+              haptic
+              onClick={onAction}
+              className="min-h-[var(--uix-touch-min)] px-[var(--uix-space-4)] py-2.5 rounded-lg bg-primary text-primary-foreground text-[length:var(--uix-text-list-secondary)] font-medium hover:opacity-90 inline-flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {actionLabel}
+            </TapScaleButton>
+          )}
+          {hasSecondary && (
+            <TapScaleButton
+              type="button"
+              haptic
+              onClick={onSecondaryAction}
+              className={cn(
+                "min-h-[var(--uix-touch-min)] px-[var(--uix-space-4)] py-2.5 rounded-lg border text-[length:var(--uix-text-list-secondary)] font-medium inline-flex items-center justify-center gap-2 disabled:opacity-50",
+                onDark
+                  ? "border-white/35 bg-white/10 text-white hover:bg-white/15"
+                  : "border-border bg-secondary/80 text-foreground hover:bg-secondary",
+              )}
+            >
+              {secondaryActionLabel}
+            </TapScaleButton>
+          )}
+        </div>
       )}
     </Empty>
   );
@@ -146,35 +200,58 @@ function ErrorWithRetry({
   retryLabel = "Повторить",
   onRetry,
   className,
+  surface = "default",
 }: {
   title?: string;
   description?: string;
   retryLabel?: string;
   onRetry: () => void;
   className?: string;
+  surface?: ListEmptySurface;
 }) {
+  const onDark = surface === "darkVideo";
   return (
     <Empty
-      className={cn("min-h-[200px] gap-[var(--uix-space-5)] p-[var(--uix-space-6)]", className)}
+      className={cn(
+        "min-h-[200px] gap-[var(--uix-space-5)] p-[var(--uix-space-6)]",
+        onDark && "border border-dashed border-white/20 text-white",
+        className,
+      )}
     >
       <EmptyHeader className="gap-[var(--uix-space-2)]">
-        <EmptyMedia variant="icon">
-          <AlertCircle className="size-8 text-destructive/70" />
+        <EmptyMedia
+          variant="icon"
+          className={cn(onDark && "border-0 bg-white/15 text-white")}
+        >
+          <AlertCircle
+            className={cn("size-8", onDark ? "text-rose-300" : "text-destructive/70")}
+          />
         </EmptyMedia>
-        <EmptyTitle className="text-[length:var(--uix-text-list-primary)] font-semibold text-foreground/90">
+        <EmptyTitle
+          className={cn(
+            "text-[length:var(--uix-text-list-primary)] font-semibold",
+            onDark ? "text-white" : "text-foreground/90",
+          )}
+        >
           {title}
         </EmptyTitle>
-        <EmptyDescription className="text-[length:var(--uix-text-caption)]">
+        <EmptyDescription
+          className={cn(
+            "text-[length:var(--uix-text-caption)]",
+            onDark && "text-white/80",
+          )}
+        >
           {description}
         </EmptyDescription>
       </EmptyHeader>
-      <button
+      <TapScaleButton
         type="button"
+        haptic
         onClick={onRetry}
-        className="min-h-[var(--uix-touch-min)] px-[var(--uix-space-4)] py-2.5 rounded-lg bg-primary text-primary-foreground text-[length:var(--uix-text-list-secondary)] font-medium hover:opacity-90 active:scale-[0.98] transition-transform inline-flex items-center justify-center gap-2"
+        className="min-h-[var(--uix-touch-min)] px-[var(--uix-space-4)] py-2.5 rounded-lg bg-primary text-primary-foreground text-[length:var(--uix-text-list-secondary)] font-medium hover:opacity-90 inline-flex items-center justify-center gap-2 disabled:opacity-50"
       >
         {retryLabel}
-      </button>
+      </TapScaleButton>
     </Empty>
   );
 }

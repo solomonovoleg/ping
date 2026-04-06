@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isNative } from "@/lib/capacitor-native";
 import { primeMicrophoneCapture } from "@/lib/media-capture-prime";
 import { PINGOK_STT_MAX_MS } from "./constants";
 
@@ -35,7 +36,7 @@ type UsePingokMicroSttOptions = {
 };
 
 /**
- * Web Speech API для ПИНГОК МИКРО: одна реплика или стрим.
+ * Web Speech API в браузере; в Capacitor iOS WKWebView API нет — используем @capacitor-community/speech-recognition (SFSpeechRecognizer).
  */
 export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream = false }: UsePingokMicroSttOptions) {
   const [phase, setPhase] = useState<PingokMicroSttPhase>("idle");
@@ -48,6 +49,7 @@ export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream =
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onFinalRef = useRef(onFinal);
   const streamRef = useRef(stream);
+  const usingNativeRef = useRef(false);
   onFinalRef.current = onFinal;
   streamRef.current = stream;
 
@@ -58,6 +60,20 @@ export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream =
       clearTimeout(stopTimerRef.current);
       stopTimerRef.current = null;
     }
+  }, []);
+
+  const stopNativeRecognition = useCallback(() => {
+    if (!usingNativeRef.current) return;
+    usingNativeRef.current = false;
+    void (async () => {
+      try {
+        const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
+        await SpeechRecognition.removeAllListeners();
+        await SpeechRecognition.stop();
+      } catch {
+        /* noop */
+      }
+    })();
   }, []);
 
   const stopRecognition = useCallback(() => {
@@ -71,7 +87,8 @@ export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream =
       }
     }
     recRef.current = null;
-  }, []);
+    stopNativeRecognition();
+  }, [stopNativeRecognition]);
 
   useEffect(() => {
     return () => {
@@ -169,12 +186,78 @@ export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream =
     }
   }, [maxMs, scheduleFinishFromEnd]);
 
+  const startNativeRecognitionInstance = useCallback(async (): Promise<boolean> => {
+    try {
+      const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
+      const perm = await SpeechRecognition.requestPermissions();
+      if (perm.speechRecognition !== "granted") return false;
+
+      const { available } = await SpeechRecognition.available();
+      if (!available) return false;
+
+      await SpeechRecognition.removeAllListeners();
+      usingNativeRef.current = true;
+
+      await SpeechRecognition.addListener("partialResults", (ev: { matches: string[] }) => {
+        const raw = Array.isArray(ev.matches) ? String(ev.matches[0] ?? "") : "";
+        const t = raw.trim();
+        transcriptRef.current = t;
+        setLiveLine(t);
+      });
+
+      await SpeechRecognition.addListener("listeningState", (ev: { status: string }) => {
+        if (ev.status !== "stopped" || finishedRef.current) return;
+        if (!streamRef.current) {
+          scheduleFinishFromEnd();
+          return;
+        }
+        const t = setTimeout(() => {
+          if (finishedRef.current) return;
+          void SpeechRecognition.start({
+            language: "ru-RU",
+            partialResults: true,
+            maxResults: 5,
+            popup: false,
+          }).catch(() => {
+            scheduleFinishFromEnd();
+          });
+        }, 80);
+        timersRef.current.push(t);
+      });
+
+      await SpeechRecognition.start({
+        language: "ru-RU",
+        partialResults: true,
+        maxResults: 5,
+        popup: false,
+      });
+
+      if (!streamRef.current) {
+        stopTimerRef.current = setTimeout(() => {
+          stopTimerRef.current = null;
+          void SpeechRecognition.stop().catch(() => {
+            scheduleFinishFromEnd();
+          });
+        }, maxMs);
+      }
+      return true;
+    } catch {
+      usingNativeRef.current = false;
+      return false;
+    }
+  }, [maxMs, scheduleFinishFromEnd]);
+
   const start = useCallback(async () => {
     finishedRef.current = false;
     transcriptRef.current = "";
     accumulatedFinalRef.current = "";
     setLiveLine("");
     setPhase("listening");
+
+    if (isNative()) {
+      const nativeOk = await startNativeRecognitionInstance();
+      if (nativeOk) return;
+    }
 
     try {
       await primeMicrophoneCapture();
@@ -197,7 +280,7 @@ export function usePingokMicroStt({ onFinal, maxMs = PINGOK_STT_MAX_MS, stream =
       setPhase("error");
       timersRef.current.push(setTimeout(() => finish(""), 400));
     }
-  }, [finish, startRecognitionInstance]);
+  }, [finish, startNativeRecognitionInstance, startRecognitionInstance]);
 
   const abort = useCallback(() => {
     finishedRef.current = true;

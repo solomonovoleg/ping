@@ -1,4 +1,6 @@
-import { sql } from "drizzle-orm";
+import { count, inArray, sql } from "drizzle-orm";
+import { FEED_LATEST_COMMENTS_PREVIEW_LIMIT } from "@shared/feed-latest-comments";
+import { postCommentLikes } from "@shared/schema";
 import { getDb } from "../db";
 
 type LatestCommentRow = {
@@ -62,10 +64,24 @@ export async function loadLatestCommentsByPostIds(
       where pc.post_id in (${idList})
     ) c
     left join users u on u.id = c.user_id
-    where c.rn <= 2
+    where c.rn <= ${FEED_LATEST_COMMENTS_PREVIEW_LIMIT}
     order by c.post_id asc, c.created_at desc
   `);
   const latestCommentRows = extractQueryRows<LatestCommentRow>(latestCommentQuery);
+  const previewIds = latestCommentRows.map((r) => r.id).filter(Boolean);
+  const likeCountById = new Map<string, number>();
+  if (previewIds.length > 0) {
+    try {
+      const counts = await db
+        .select({ commentId: postCommentLikes.commentId, n: count() })
+        .from(postCommentLikes)
+        .where(inArray(postCommentLikes.commentId, previewIds))
+        .groupBy(postCommentLikes.commentId);
+      for (const row of counts) likeCountById.set(row.commentId, Number(row.n));
+    } catch {
+      /* таблица лайков может отсутствовать до миграции */
+    }
+  }
   latestCommentRows.forEach((r) => {
     if (!latestCommentsByPost[r.postId]) latestCommentsByPost[r.postId] = [];
     latestCommentsByPost[r.postId].push({
@@ -76,7 +92,7 @@ export async function loadLatestCommentsByPostIds(
       createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
       user: [r.displayName, r.surname].filter(Boolean).join(" ") || "Пользователь",
       avatar: r.avatarUrl ?? null,
-      likes: 0,
+      likes: likeCountById.get(r.id) ?? 0,
     });
   });
   return latestCommentsByPost;

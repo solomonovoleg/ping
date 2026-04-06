@@ -1,12 +1,20 @@
 /**
  * Один пузырь сообщения (текст/голос/фото/видео/пост). React.memo — при «печатает» не ре-рендерим весь список.
  */
-import { memo, createElement, Fragment, useRef, useState, type CSSProperties } from "react";
-import { Clock, AlertCircle, Reply as ReplyIcon } from "lucide-react";
+import { memo, createElement, Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Play, Reply as ReplyIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveUrl } from "@/lib/api-base";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
-import { formatMessageTime, isOutgoingMessageReadByPeer } from "../utils/format";
+import {
+  formatMessageTime,
+  isOutgoingMessageReadByPeer,
+  outgoingDeliveryAriaLabel,
+  outgoingDeliveryPulseFooterLabel,
+  outgoingDeliveryTitle,
+  incomingMessageFooterAria,
+} from "../utils/format";
+import { OutgoingMessageFooter } from "./OutgoingMessageFooter";
 import { buildProfilePath } from "@/lib/profile-route";
 import { extractFirstUrl } from "@/lib/link-preview";
 import { parseExternalVideoUrl } from "@/lib/external-video";
@@ -18,18 +26,27 @@ import { VoiceMessagePlayer } from "@/components/VoiceMessagePlayer";
 import { ShatterEffect } from "@/components/ShatterEffect";
 import { CodeBlock } from "./CodeBlock";
 import { PulseDmSentVideoNote } from "@/features/chat/components/pulse/PulseDmSentVideoNote";
+import { ChatPdfAttachment } from "@/features/chat/components/ChatPdfAttachment";
 import { useOfflineResolvedMediaUrl } from "@/hooks/useOfflineResolvedMediaUrl";
+import { usePrefersReducedMotion } from "@/lib/motion";
 import { parseCodeSegments } from "../utils/code-detect";
+import { ChatTableBubble, parseTablePayloadFromFenceBody } from "../message-table";
+import { deriveVideoNotePosterUrl } from "../utils/video-note-poster";
+import { VideoNoteBubble } from "@/features/chat/components/video-note/VideoNoteBubble";
+import { registerChatMessageMediaPlaybackPauser } from "@/features/chat/chat-message-media-playback-interrupt";
 import type { ApiMessage } from "../types";
+
+const CHAT_INLINE_VIDEO_DOUBLE_TAP_MS = 320;
+/** Двойной тап по пузырю сообщения → реакция ❤️ (как в сториз / ленте). */
+const CHAT_MESSAGE_DOUBLE_TAP_MS = 320;
+const CHAT_MESSAGE_DOUBLE_TAP_MAX_DIST_PX = 56;
 
 function ChatInlineMediaThumb({
   src,
-  type,
   onOpenMedia,
 }: {
   src: string;
-  type: "image" | "video";
-  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note" | "pdf", title?: string) => void;
 }) {
   const offlineReadySrc = useOfflineResolvedMediaUrl(src);
 
@@ -39,26 +56,141 @@ function ChatInlineMediaThumb({
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (offlineReadySrc && onOpenMedia) onOpenMedia(offlineReadySrc, type);
+        if (offlineReadySrc && onOpenMedia) onOpenMedia(offlineReadySrc, "image");
       }}
       className="block rounded-[10px] overflow-hidden max-w-[260px] w-full text-left focus:outline-none focus:ring-2 focus:ring-primary/50"
     >
-      {type === "image" ? (
-        <img
-          src={offlineReadySrc}
-          alt="Фото"
-          className="max-h-[280px] w-full object-cover"
-          loading="lazy"
-          decoding="async"
-        />
-      ) : (
-        <video
-          src={offlineReadySrc}
-          className="max-h-[280px] max-w-[260px] w-full object-cover rounded-[10px]"
-          playsInline
-          muted
-        />
+      <img
+        src={offlineReadySrc}
+        alt="Фото"
+        className="max-h-[280px] w-full object-cover select-auto"
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+      />
+    </button>
+  );
+}
+
+/** Видео в чате: один тап — play/pause в пузыре (+25% при воспроизведении); двойной — полноэкранный просмотр. */
+function ChatInlineVideoThumb({
+  src,
+  onOpenMedia,
+}: {
+  src: string;
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note" | "pdf", title?: string) => void;
+}) {
+  const offlineReadySrc = useOfflineResolvedMediaUrl(src);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastTapMsRef = useRef(0);
+  const [playing, setPlaying] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const sync = () => setPlaying(!v.paused);
+    const onEnded = () => setPlaying(false);
+    v.addEventListener("play", sync);
+    v.addEventListener("pause", sync);
+    v.addEventListener("ended", onEnded);
+    return () => {
+      v.removeEventListener("play", sync);
+      v.removeEventListener("pause", sync);
+      v.removeEventListener("ended", onEnded);
+    };
+  }, [offlineReadySrc]);
+
+  useEffect(() => {
+    return registerChatMessageMediaPlaybackPauser(() => {
+      try {
+        videoRef.current?.pause();
+      } catch {
+        /* ignore */
+      }
+    });
+  }, []);
+
+  const openViewer = () => {
+    if (!offlineReadySrc || !onOpenMedia) return;
+    videoRef.current?.pause();
+    onOpenMedia(offlineReadySrc, "video");
+  };
+
+  const toggleInline = () => {
+    const el = videoRef.current;
+    if (!el) return;
+    void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+    if (el.paused) {
+      el.muted = false;
+      void el.play().catch(() => {
+        el.muted = true;
+        void el.play().catch(() => {});
+      });
+    } else {
+      el.pause();
+    }
+  };
+
+  const onClickVideo = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!offlineReadySrc) return;
+    if (e.detail === 2) {
+      lastTapMsRef.current = 0;
+      openViewer();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastTapMsRef.current < CHAT_INLINE_VIDEO_DOUBLE_TAP_MS) {
+      lastTapMsRef.current = 0;
+      openViewer();
+      return;
+    }
+    lastTapMsRef.current = now;
+    toggleInline();
+  };
+
+  if (!offlineReadySrc) {
+    return (
+      <div className="flex max-h-[280px] max-w-[260px] items-center justify-center rounded-[10px] bg-muted/30 px-3 py-6 text-xs text-muted-foreground">
+        Видео недоступно
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClickVideo}
+      className={cn(
+        "relative block w-full max-w-[260px] touch-manipulation rounded-[10px] text-left outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+        !reducedMotion && "transition-transform duration-200 ease-out",
+        playing && "scale-[1.25]",
+        "origin-center will-change-transform",
       )}
+      aria-label={
+        playing
+          ? "Пауза. Двойное нажатие — открыть на весь экран"
+          : "Воспроизвести в чате. Двойное нажатие — открыть на весь экран"
+      }
+    >
+      <video
+        ref={videoRef}
+        src={offlineReadySrc}
+        className="pointer-events-none max-h-[280px] w-full max-w-[260px] rounded-[10px] object-cover"
+        playsInline
+        muted
+        preload="metadata"
+        controls={false}
+      />
+      {!playing ? (
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-black/25">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white shadow-md">
+            <Play className="ml-0.5 h-5 w-5 fill-current" aria-hidden />
+          </span>
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -200,25 +332,33 @@ export type ChatMessageRowProps = {
   onScrollToReply: (id: string) => void;
   onShatterComplete: (id: string) => void;
   onOpenProfile: (authorId: string) => void;
+  onOpenSharedTarget?: (target:
+    | { type: "post"; postId: string; authorId?: string }
+    | { type: "story"; storyId: string; authorId?: string }
+    | { type: "comment"; postId: string; commentId: string; authorId?: string }) => void;
   /** ID следующего голосового в чате (для «слушать следующее») */
   nextVoiceMessageId?: string | null;
+  /** Сырой URL следующего голосового — preload, пока играет текущее */
+  nextVoiceSrc?: string | null;
   /** ID голосового, который сейчас воспроизводится (для автозапуска следующего) */
   activeVoiceId?: string | null;
   /** Вызывается при завершении воспроизведения голосового (передаётся ID следующего для автозапуска) */
   onVoiceEnded?: (nextVoiceMessageId: string | null) => void;
+  /** ID следующего видеокружка в чате (для «смотреть следующее») */
+  nextVideoNoteMessageId?: string | null;
+  /** ID видеокружка, который сейчас воспроизводится (для автозапуска следующего). */
+  activeVideoNoteId?: string | null;
+  /** Вызывается при завершении видеокружка (передаётся ID следующего). */
+  onVideoNoteEnded?: (nextVideoNoteMessageId: string | null) => void;
   /** Открыть медиа (фото/видео) во встроенном просмотрщике */
-  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note" | "pdf", title?: string) => void;
   /** Переведённый текст (если есть перевод) */
   translatedText?: string | null;
+  /** Идёт догрузка перевода по API (показываем короткую подпись) */
+  translationPending?: boolean;
+  /** Двойной тап / быстрый второй тап — поставить или снять реакцию «сердечко» по умолчанию */
+  onDoubleTapDefaultReaction?: (msg: ApiMessage) => void;
 };
-
-function formatVideoNoteDuration(seconds: number | null): string {
-  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return "0:00";
-  const total = Math.floor(seconds);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
 
 /** Расшифровка + перевод для видеокружка (как у голосового). */
 function MediaTranscriptBlock({
@@ -248,100 +388,11 @@ function MediaTranscriptBlock({
         {open ? "Скрыть текст" : "Показать текст"}
       </button>
       {open && (
-        <div className="mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
+        <div className="uix-select-text mt-1 text-[11px] text-muted-foreground/85 leading-snug whitespace-pre-wrap break-words">
           <p>{main}</p>
           {hasOriginal ? <p className="mt-1 text-[10px] opacity-75">Оригинал: {transcript!.trim()}</p> : null}
         </div>
       )}
-    </div>
-  );
-}
-
-const VIDEO_NOTE_PREVIEW_SEC = 1.2;
-const VIDEO_NOTE_PLAY_START_SEC = 0.15;
-
-function VideoNoteBubble({
-  src,
-  isMe,
-  bubbleColorPreset = "primary",
-}: {
-  src: string;
-  isMe: boolean;
-  bubbleColorPreset?: MessageBubbleColorPreset;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [durationSec, setDurationSec] = useState<number | null>(null);
-  const [previewReady, setPreviewReady] = useState(false);
-  const borderClass = isMe ? MSG_BUBBLE_CLASSES[bubbleColorPreset].videoNoteBorder : "border-border/55";
-
-  const togglePlayback = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      video.muted = false;
-      if (video.currentTime < VIDEO_NOTE_PLAY_START_SEC || video.currentTime >= VIDEO_NOTE_PREVIEW_SEC) {
-        video.currentTime = VIDEO_NOTE_PLAY_START_SEC;
-      }
-      void video.play().catch(() => {});
-      return;
-    }
-    video.pause();
-  };
-
-  return (
-    <div className={cn("flex", isPlaying && "w-full justify-center")}>
-      <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        togglePlayback();
-      }}
-      className={cn(
-        "group relative block h-[176px] w-[176px] overflow-hidden rounded-full border shadow-md transition-transform duration-300 ease-out will-change-transform",
-        isPlaying ? "z-10 scale-[1.4]" : "scale-100",
-        borderClass
-      )}
-      aria-label={isPlaying ? "Пауза видеокружка" : "Воспроизвести видеокружок"}
-    >
-      <video
-        ref={videoRef}
-        src={src}
-        className="h-full w-full object-cover"
-        playsInline
-        muted={false}
-        preload="auto"
-        controls={false}
-        onLoadedData={() => setPreviewReady(true)}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
-        onLoadedMetadata={(e) => {
-          const target = e.currentTarget;
-          const dur = Number.isFinite(target.duration) ? target.duration : null;
-          setDurationSec(dur);
-          // Берём ранний кадр (в районе 1с), чтобы превью стабильно появлялось на разных кодеках.
-          if (dur != null && dur > 0.35 && target.paused) {
-            const maxSeek = Math.max(0.2, dur - 0.12);
-            const previewAt = Math.min(VIDEO_NOTE_PREVIEW_SEC, maxSeek);
-            try {
-              target.currentTime = previewAt;
-            } catch {
-              // Если seek не удался, оставляем первый доступный кадр.
-            }
-          }
-        }}
-        onSeeked={() => setPreviewReady(true)}
-        onError={() => setPreviewReady(true)}
-      />
-      {!previewReady && (
-        <div className="pointer-events-none absolute inset-0 bg-muted/70" />
-      )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
-      <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white/95">
-        {formatVideoNoteDuration(durationSec)}
-      </span>
-    </button>
     </div>
   );
 }
@@ -377,21 +428,56 @@ function ChatMessageRowInner({
   onScrollToReply,
   onShatterComplete,
   onOpenProfile,
+  onOpenSharedTarget,
   nextVoiceMessageId,
+  nextVoiceSrc,
   activeVoiceId,
   onVoiceEnded,
+  nextVideoNoteMessageId,
+  activeVideoNoteId,
+  onVideoNoteEnded,
   onOpenMedia,
   translatedText,
+  translationPending = false,
+  onDoubleTapDefaultReaction,
 }: ChatMessageRowProps) {
   const bubbleStyles = MSG_BUBBLE_CLASSES[messageBubbleColor];
   const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const doubleTapRef = useRef<{ id: string; at: number; x: number; y: number } | null>(null);
+  /** iOS: и pointerup, и touchend — без дубля одного «отпускания». */
+  const lastBubbleFinishAtRef = useRef(0);
   const swipeStartXRef = useRef<number | null>(null);
   const swipeStartedRef = useRef(false);
   const swipeTriggeredRef = useRef(false);
   const swipeHapticTriggeredRef = useRef(false);
   const replyHintRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (msg.type !== "voice") return;
+    if (activeVoiceId !== msg.id) return;
+    const raw = typeof nextVoiceSrc === "string" ? nextVoiceSrc.trim() : "";
+    if (!raw) return;
+    const href = resolveUrl(raw);
+    const link = document.createElement("link");
+    link.rel = "preload";
+    link.as = "audio";
+    link.href = href;
+    document.head.appendChild(link);
+    return () => {
+      link.remove();
+    };
+  }, [msg.type, msg.id, activeVoiceId, nextVoiceSrc]);
   const showSenderName = !isDm;
-  const isMedia = msg.type === "voice" || msg.type === "image" || msg.type === "video" || msg.type === "video_note";
+  const isMedia =
+    msg.type === "voice" ||
+    msg.type === "image" ||
+    msg.type === "video" ||
+    msg.type === "video_note" ||
+    msg.type === "sticker" ||
+    msg.type === "file";
+  const isStoryReply = msg.type === "story_reply";
+  const isPostShare = msg.type === "post_share";
+  const isCommentShare = msg.type === "comment_share";
+  const isStructuredShare = isStoryReply || isPostShare || isCommentShare;
   // PULSE / Telegram: основной радиус 18px, хвост 4px, стык группы ~8px
   const bubbleRounding = isMe
     ? cn(
@@ -411,8 +497,15 @@ function ChatMessageRowInner({
   const vibeTextBubble = chatVibeActive && !isMedia && msg.type === "text";
   const pulseTextShell =
     Boolean(pulseMobileDm) && !isMedia && msg.type === "text" && !vibeTextBubble;
-  const bubbleClasses = isMedia
-    ? "p-0 rounded-[18px] overflow-hidden relative select-none touch-none bg-transparent"
+  const bubbleClasses = isStructuredShare
+    ? "p-0 overflow-visible relative select-none touch-none bg-transparent border-0 shadow-none"
+    : isMedia
+    ? cn(
+        "p-0 rounded-[18px] relative select-none touch-none bg-transparent",
+        msg.type === "video" || msg.type === "video_note"
+          ? "overflow-visible z-[1]"
+          : "overflow-hidden",
+      )
     : cn(
         "px-2.5 py-1.5 relative select-none touch-none",
         vibeTextBubble
@@ -432,15 +525,54 @@ function ChatMessageRowInner({
                 : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
         bubbleRounding
       );
+  const pulseStructuredSnippet = Boolean(pulseMobileDm) && isStructuredShare;
+  const pulseStructuredIncomingBorderStyle: CSSProperties | undefined =
+    pulseStructuredSnippet && pulseMobileDm === "dark" && !isMe && pulseDmAccent.length === 7 && pulseDmAccent.startsWith("#")
+      ? { borderColor: `${pulseDmAccent}33` }
+      : undefined;
+  /** Текст под превью — пузырь; превью без внешнего пузыря. В PULSE DM те же оттенки, что у текстовых сообщений. */
+  const attachedSnippetBubble = cn(
+    "px-2.5 py-1.5 relative w-fit max-w-full min-w-0",
+    pulseStructuredSnippet && pulseMobileDm === "dark"
+      ? isMe
+        ? "border border-indigo-400/35 bg-[rgba(79,70,229,0.92)] text-white shadow-[0_1px_2px_rgba(0,0,0,0.22)] backdrop-blur-md"
+        : "border border-white/15 bg-white/[0.06] text-white/[0.9] shadow-[0_1px_2px_rgba(0,0,0,0.12)] backdrop-blur-md"
+      : pulseStructuredSnippet && pulseMobileDm === "light"
+        ? isMe
+          ? "border-0 bg-[#6366f1] text-white shadow-[0_1px_2px_rgba(99,102,241,0.25)]"
+          : "border border-black/[0.08] bg-white text-[#1a1a2e] shadow-sm"
+        : isMe
+          ? bubbleStyles.bubble
+          : "bg-white dark:bg-slate-900/70 text-foreground shadow-[0_1px_1px_rgba(0,0,0,0.06)] border border-slate-200/70 dark:border-slate-700/60",
+    bubbleRounding,
+  );
+  const pulseFooterShell = pulseTextShell || pulseStructuredSnippet;
+  /** Склейка превью и текстового пузыря: чуть плоские стыки. */
+  const structuredPreviewClass = (attachBottom: boolean) =>
+    cn(
+      "relative w-full overflow-hidden text-left outline-none transition-opacity duration-150",
+      "ring-1 ring-black/[0.07] dark:ring-white/[0.09]",
+      "focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+      attachBottom ? "rounded-t-[12px] rounded-b-[5px]" : "rounded-[12px]",
+    );
+  const structuredStackClass = "flex w-full max-w-[min(240px,72vw)] flex-col gap-1";
+  /** Пузырь текста плотнее к превью сверху (общий радиус стыка). */
+  const attachedSnippetUnderVisual = "!rounded-tl-[10px] !rounded-tr-[10px]";
+  const structuredMetaLinkBtn =
+    "inline-flex min-h-[var(--uix-touch-min)] shrink-0 items-center rounded-md px-1.5 text-[11px] font-medium text-primary hover:underline";
   const vibeBubbleShadow =
     !vibeTextBubble && !isMedia && msg.type === "text"
       ? ({
           boxShadow: `inset 0 0 52px 0 ${isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)"}, 0 1px 1px rgba(0,0,0,0.06)`,
+          transition:
+            "background-color var(--chat-vibe-token-transition) var(--uix-easing-out), box-shadow var(--chat-vibe-token-transition) var(--uix-easing-out), border-color var(--chat-vibe-token-transition) var(--uix-easing-out)",
         } as CSSProperties)
       : undefined;
   const vibeFillStyle: CSSProperties | undefined = vibeTextBubble
     ? {
         backgroundColor: isMe ? "var(--chat-vibe-bubble-out)" : "var(--chat-vibe-bubble-in)",
+        transition:
+          "background-color var(--chat-vibe-token-transition) var(--uix-easing-out), box-shadow var(--chat-vibe-token-transition) var(--uix-easing-out), border-color var(--chat-vibe-token-transition) var(--uix-easing-out)",
       }
     : undefined;
   const pulseIncomingBorderStyle: CSSProperties | undefined =
@@ -452,6 +584,66 @@ function ChatMessageRowInner({
 
   const avatarSize = 30;
   const avatarClass = "w-[30px] h-[30px] rounded-full flex-shrink-0 mt-auto";
+
+  const finishBubblePointer = (clientX: number, clientY: number) => {
+    const mono = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (mono - lastBubbleFinishAtRef.current < 40) return;
+    lastBubbleFinishAtRef.current = mono;
+
+    if (bubbleRef.current) {
+      bubbleRef.current.style.transition = "transform 140ms cubic-bezier(0.22, 1, 0.36, 1)";
+      bubbleRef.current.style.transform = "translateX(0px)";
+    }
+    if (replyHintRef.current) {
+      replyHintRef.current.style.opacity = "0";
+      replyHintRef.current.style.transform = "translateY(-50%) scale(0.9)";
+    }
+    const swipeDidReply =
+      swipeTriggeredRef.current &&
+      Boolean(onQuickReply) &&
+      msg.type !== "system" &&
+      msg.type !== "missed_call";
+    if (swipeDidReply) {
+      onQuickReply!(msg);
+      swipeStartedRef.current = false;
+      swipeStartXRef.current = null;
+      swipeTriggeredRef.current = false;
+      swipeHapticTriggeredRef.current = false;
+      onPointerUp(msg.id);
+      return;
+    }
+    swipeStartedRef.current = false;
+    swipeStartXRef.current = null;
+    swipeTriggeredRef.current = false;
+    swipeHapticTriggeredRef.current = false;
+
+    if (
+      onDoubleTapDefaultReaction &&
+      !isSelected &&
+      !isShattering &&
+      msg.type !== "system" &&
+      msg.type !== "missed_call"
+    ) {
+      const now = Date.now();
+      const prev = doubleTapRef.current;
+      const isDouble =
+        prev != null &&
+        prev.id === msg.id &&
+        now - prev.at <= CHAT_MESSAGE_DOUBLE_TAP_MS &&
+        Math.hypot(clientX - prev.x, clientY - prev.y) < CHAT_MESSAGE_DOUBLE_TAP_MAX_DIST_PX;
+      if (isDouble) {
+        doubleTapRef.current = null;
+        onDoubleTapDefaultReaction(msg);
+      } else {
+        doubleTapRef.current = { id: msg.id, at: now, x: clientX, y: clientY };
+      }
+    } else {
+      doubleTapRef.current = null;
+    }
+
+    onPointerUp(msg.id);
+  };
+
   return (
     <div
       key={msg.id}
@@ -481,7 +673,14 @@ function ChatMessageRowInner({
           </div>
           <div
             ref={bubbleRef}
-            className={cn(bubbleClasses, "w-fit max-w-full", isSelected && "ring-2 ring-primary", isHighlighted && "ring-2 ring-primary animate-pulse")}
+            data-chat-swipe-back-ignore
+            className={cn(
+              bubbleClasses,
+              "w-fit max-w-full",
+              msg.sendStatus === "sending" && "animate-in fade-in zoom-in-95 duration-150",
+              isSelected && "ring-2 ring-primary",
+              isHighlighted && "ring-2 ring-primary animate-pulse"
+            )}
             style={{ ...vibeFillStyle, ...vibeBubbleShadow, ...pulseIncomingBorderStyle }}
             onPointerDown={(e) => {
               swipeStartXRef.current = e.clientX;
@@ -514,29 +713,7 @@ function ChatMessageRowInner({
                 }
               }
             }}
-            onPointerUp={() => {
-              if (bubbleRef.current) {
-                bubbleRef.current.style.transition = "transform 140ms cubic-bezier(0.22, 1, 0.36, 1)";
-                bubbleRef.current.style.transform = "translateX(0px)";
-              }
-              if (replyHintRef.current) {
-                replyHintRef.current.style.opacity = "0";
-                replyHintRef.current.style.transform = "translateY(-50%) scale(0.9)";
-              }
-              if (swipeTriggeredRef.current && onQuickReply && msg.type !== "system" && msg.type !== "missed_call") {
-                onQuickReply(msg);
-                swipeStartedRef.current = false;
-                swipeStartXRef.current = null;
-                swipeTriggeredRef.current = false;
-                swipeHapticTriggeredRef.current = false;
-                return;
-              }
-              swipeStartedRef.current = false;
-              swipeStartXRef.current = null;
-              swipeTriggeredRef.current = false;
-              swipeHapticTriggeredRef.current = false;
-              onPointerUp(msg.id);
-            }}
+            onPointerUp={(e) => finishBubblePointer(e.clientX, e.clientY)}
             onPointerCancel={() => {
               swipeStartedRef.current = false;
               swipeStartXRef.current = null;
@@ -601,30 +778,19 @@ function ChatMessageRowInner({
                 }
               }
             }}
-            onTouchEnd={() => {
-              if (bubbleRef.current) {
-                bubbleRef.current.style.transition = "transform 140ms cubic-bezier(0.22, 1, 0.36, 1)";
-                bubbleRef.current.style.transform = "translateX(0px)";
-              }
-              if (replyHintRef.current) {
-                replyHintRef.current.style.opacity = "0";
-                replyHintRef.current.style.transform = "translateY(-50%) scale(0.9)";
-              }
-              if (swipeTriggeredRef.current && onQuickReply && msg.type !== "system" && msg.type !== "missed_call") {
-                onQuickReply(msg);
-                swipeStartedRef.current = false;
-                swipeStartXRef.current = null;
-                swipeTriggeredRef.current = false;
-                swipeHapticTriggeredRef.current = false;
-                return;
-              }
-              swipeStartedRef.current = false;
-              swipeStartXRef.current = null;
-              swipeTriggeredRef.current = false;
-              swipeHapticTriggeredRef.current = false;
-              onPointerUp(msg.id);
+            onTouchEnd={(e) => {
+              const touch = e.changedTouches?.[0];
+              if (touch) finishBubblePointer(touch.clientX, touch.clientY);
+              else finishBubblePointer(0, 0);
             }}
             onContextMenu={(e) => {
+              const target = e.target as HTMLElement;
+              if (target.closest("img")) {
+                return;
+              }
+              if ((msg.type === "video" || msg.type === "video_note") && target.closest("video")) {
+                return;
+              }
               try {
                 onContextMenu(e);
                 if (msg.type !== "system" && msg.type !== "missed_call" && bubbleRef.current && onOpenMenu) {
@@ -682,9 +848,13 @@ function ChatMessageRowInner({
                           ? "Голосовое сообщение"
                           : msg.replyTo.type === "image"
                             ? "Фото"
-                            : msg.replyTo.type === "video_note"
+                            : msg.replyTo.type === "sticker"
+                              ? "Стикер"
+                              : msg.replyTo.type === "video_note"
                               ? "Видеокружок"
-                              : msg.replyTo.type
+                              : msg.replyTo.type === "file"
+                                ? `PDF · ${msg.replyTo.content}`
+                                : msg.replyTo.type
                       : "Сообщение"}
                   </p>
                 </button>
@@ -696,63 +866,253 @@ function ChatMessageRowInner({
                 const voiceSrc = rawContent ? resolveUrl(rawContent) : "";
                 if (!voiceSrc) return <span className="text-sm text-muted-foreground">Голосовое сообщение (недоступно)</span>;
                 return (
-                  <VoiceMessagePlayer
-                    src={voiceSrc}
-                    isMe={isMe}
-                    bubbleColorPreset={messageBubbleColor}
-                    transcript={msg.transcript}
-                    translatedTranscript={translatedText}
-                    onEnded={onVoiceEnded ? () => onVoiceEnded(nextVoiceMessageId ?? null) : undefined}
-                    autoPlay={activeVoiceId === msg.id}
-                  />
+                  <>
+                    <VoiceMessagePlayer
+                      src={voiceSrc}
+                      isMe={isMe}
+                      bubbleColorPreset={messageBubbleColor}
+                      chatVibeActive={chatVibeActive}
+                      transcript={msg.transcript}
+                      translatedTranscript={translatedText}
+                      onEnded={onVoiceEnded ? () => onVoiceEnded(nextVoiceMessageId ?? null) : undefined}
+                      autoPlay={activeVoiceId === msg.id}
+                      uploadProgress={msg.localUploadProgress ?? null}
+                    />
+                    {translationPending && !translatedText?.trim() && msg.transcript?.trim() ? (
+                      <p className="text-[10px] text-muted-foreground/75 mt-1" aria-live="polite">
+                        Перевод расшифровки…
+                      </p>
+                    ) : null}
+                  </>
+                );
+              })()
+            ) : msg.type === "sticker" ? (
+              (() => {
+                const raw = typeof msg.content === "string" ? msg.content.trim() : "";
+                let stickerSrc = "";
+                try {
+                  const o = JSON.parse(raw) as { imageUrl?: string };
+                  if (typeof o.imageUrl === "string") stickerSrc = resolveUrl(o.imageUrl);
+                } catch {
+                  /* noop */
+                }
+                if (!stickerSrc) {
+                  return <span className="text-sm text-muted-foreground">Стикер</span>;
+                }
+                return (
+                  <button
+                    type="button"
+                    className="inline-flex max-w-[min(220px,72vw)] items-center justify-center rounded-xl bg-transparent p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    onClick={() => onOpenMedia?.(stickerSrc, "image", "sticker.webp")}
+                    aria-label="Открыть стикер"
+                  >
+                    <img
+                      src={stickerSrc}
+                      alt=""
+                      className="max-h-[min(200px,40vh)] w-auto max-w-full object-contain"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </button>
                 );
               })()
             ) : msg.type === "image" ? (
-              <ChatInlineMediaThumb
-                src={resolveUrl(msg.content)}
-                type="image"
-                onOpenMedia={onOpenMedia}
-              />
+              <ChatInlineMediaThumb src={resolveUrl(msg.content)} onOpenMedia={onOpenMedia} />
             ) : msg.type === "video" ? (
-              <ChatInlineMediaThumb
-                src={resolveUrl(msg.content)}
-                type="video"
-                onOpenMedia={onOpenMedia}
+              <ChatInlineVideoThumb src={resolveUrl(msg.content)} onOpenMedia={onOpenMedia} />
+            ) : msg.type === "file" ? (
+              <ChatPdfAttachment
+                content={msg.content}
+                isMe={isMe}
+                disabled={msg.sendStatus === "sending"}
+                onOpenPreview={
+                  onOpenMedia ? (src, fileName) => onOpenMedia(src, "pdf", fileName) : undefined
+                }
               />
             ) : msg.type === "video_note" ? (
               <>
                 {pulseMobileDm && isMe ? (
+                  (() => {
+                    const vnRead = isOutgoingMessageReadByPeer(msg.createdAt, lastReadAt);
+                    const vnFooter = outgoingDeliveryPulseFooterLabel(msg.createdAt, vnRead, msg.sendStatus);
+                    const vnHintTitle = outgoingDeliveryTitle(vnRead, lastReadAt, msg.sendStatus);
+                    const vnHintAria = vnFooter
+                      ? `${formatMessageTime(msg.createdAt)}, ${outgoingDeliveryAriaLabel(vnRead, lastReadAt, msg.sendStatus)}`
+                      : null;
+                    return (
                   <PulseDmSentVideoNote
                     src={resolveUrl(msg.content)}
+                    posterSrc={(() => {
+                      const raw = msg.videoPosterUrl ?? deriveVideoNotePosterUrl(msg.content);
+                      return raw ? resolveUrl(raw) : null;
+                    })()}
                     accentColor={pulseDmAccent}
-                    footerLabel={
-                      msg.sendStatus === "sending" || msg.sendStatus === "failed"
-                        ? null
-                        : (() => {
-                            const t = formatMessageTime(msg.createdAt);
-                            const isRead = isOutgoingMessageReadByPeer(msg.createdAt, lastReadAt);
-                            return isRead ? `${t} ✓✓` : `${t} ✓`;
-                          })()
-                    }
+                    footerLabel={vnFooter}
+                    footerHintTitle={vnFooter ? vnHintTitle : null}
+                    footerHintAria={vnHintAria}
+                    uploadProgress={msg.localUploadProgress ?? null}
+                    autoPlay={activeVideoNoteId === msg.id}
+                    onEnded={onVideoNoteEnded ? () => onVideoNoteEnded(nextVideoNoteMessageId ?? null) : undefined}
                   />
+                    );
+                  })()
                 ) : (
-                  <VideoNoteBubble src={resolveUrl(msg.content)} isMe={isMe} bubbleColorPreset={messageBubbleColor} />
+                  <VideoNoteBubble
+                    src={resolveUrl(msg.content)}
+                    posterSrc={(() => {
+                      const raw = msg.videoPosterUrl ?? deriveVideoNotePosterUrl(msg.content);
+                      return raw ? resolveUrl(raw) : null;
+                    })()}
+                    isMe={isMe}
+                    borderClass={isMe ? bubbleStyles.videoNoteBorder : "border-border/55"}
+                    uploadProgress={msg.localUploadProgress ?? null}
+                    autoPlay={activeVideoNoteId === msg.id}
+                    onEnded={onVideoNoteEnded ? () => onVideoNoteEnded(nextVideoNoteMessageId ?? null) : undefined}
+                  />
                 )}
                 <MediaTranscriptBlock transcript={msg.transcript} translatedTranscript={translatedText} />
+                {translationPending && !translatedText?.trim() && msg.transcript?.trim() ? (
+                  <p className="text-[10px] text-muted-foreground/75 mt-0.5" aria-live="polite">
+                    Перевод расшифровки…
+                  </p>
+                ) : null}
               </>
             ) : msg.type === "post_share" ? (
               (() => {
                 let preview: { postId?: string; text?: string; imageUrl?: string | null; authorName?: string; authorId?: string } = {};
                 try { preview = JSON.parse(msg.content); } catch {}
+                const postId = preview.postId ?? "";
                 const authorId = preview.authorId ?? "";
                 const authorName = preview.authorName ?? "Пользователь";
+                const canOpenPost = Boolean(postId && onOpenSharedTarget);
+                const imageRaw = preview.imageUrl ? resolveUrl(preview.imageUrl) : "";
+                const postBody = (preview.text ?? "").trim();
+                const openPost = () => {
+                  if (postId && onOpenSharedTarget) {
+                    onOpenSharedTarget({ type: "post", postId, authorId: authorId || undefined });
+                    return;
+                  }
+                  if (authorId) onOpenProfile(authorId);
+                };
+                const showTextBubble = postBody.length > 0 || !imageRaw;
+                const connectSnippet = Boolean(imageRaw && showTextBubble);
                 return (
-                  <div className="max-w-[240px] rounded-[10px] overflow-hidden border border-border/50 bg-muted/30 dark:bg-white/5">
-                    {preview.imageUrl && <img src={resolveUrl(preview.imageUrl)} alt="" className="w-full max-h-[200px] object-cover" loading="lazy" decoding="async" />}
-                    <div className="p-2">
-                      <p className="text-[13px] line-clamp-2 text-foreground/90">{preview.text || "Пост"}</p>
-                      <p className="text-[11px] text-muted-foreground mt-1">{authorName}</p>
-                      <button type="button" className="mt-2 text-xs text-primary font-medium hover:underline" onClick={() => onOpenProfile(authorId)}>Открыть пост</button>
+                  <div className={structuredStackClass}>
+                    {imageRaw ? (
+                      <button
+                        type="button"
+                        disabled={!canOpenPost}
+                        onClick={openPost}
+                        className={cn(
+                          structuredPreviewClass(connectSnippet),
+                          "bg-black/20 dark:bg-black/35",
+                          canOpenPost ? "cursor-pointer active:opacity-90" : "cursor-default opacity-90",
+                        )}
+                        aria-label={canOpenPost ? "Открыть пост" : "Превью поста"}
+                      >
+                        <img
+                          src={imageRaw}
+                          alt=""
+                          className="max-h-[min(200px,42vh)] w-full object-cover"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      </button>
+                    ) : null}
+                    <div className="flex min-w-0 flex-wrap items-end gap-x-2 gap-y-1 px-0.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] text-muted-foreground">Пост</p>
+                        <p className="text-[12px] font-semibold leading-tight text-foreground/95">{authorName}</p>
+                      </div>
+                      {!canOpenPost ? (
+                        <span className="inline-flex shrink-0 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+                          Недоступно
+                        </span>
+                      ) : null}
+                      {canOpenPost && !imageRaw ? (
+                        <button type="button" className={structuredMetaLinkBtn} onClick={openPost}>
+                          Открыть пост
+                        </button>
+                      ) : null}
+                    </div>
+                    {showTextBubble ? (
+                      <div
+                        className={cn(attachedSnippetBubble, connectSnippet && attachedSnippetUnderVisual)}
+                        style={pulseStructuredIncomingBorderStyle}
+                      >
+                        <p className="text-[14px] leading-[1.32] line-clamp-8 break-words text-foreground/90">{postBody || "Пост"}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()
+            ) : msg.type === "comment_share" ? (
+              (() => {
+                let payload: { postId?: string; commentId?: string; text?: string; authorName?: string; authorId?: string; postPreview?: string } = {};
+                try {
+                  payload = JSON.parse(msg.content);
+                } catch {
+                  payload = { text: msg.content };
+                }
+                const authorName = payload.authorName || "Комментарий";
+                const text = payload.text?.trim() || "Комментарий";
+                const canOpenComment = Boolean(payload.postId && payload.commentId && onOpenSharedTarget);
+                const postPreview = (payload.postPreview ?? "").trim();
+                const openComment = () => {
+                  if (payload.postId && payload.commentId && onOpenSharedTarget) {
+                    onOpenSharedTarget({
+                      type: "comment",
+                      postId: payload.postId,
+                      commentId: payload.commentId,
+                      authorId: payload.authorId || undefined,
+                    });
+                  }
+                };
+                const connectSnippet = Boolean(postPreview);
+                return (
+                  <div className={structuredStackClass}>
+                    {postPreview ? (
+                      <button
+                        type="button"
+                        disabled={!canOpenComment}
+                        onClick={openComment}
+                        className={cn(
+                          structuredPreviewClass(true),
+                          "bg-muted/35 px-2.5 py-2 text-left dark:bg-white/[0.05]",
+                          canOpenComment ? "cursor-pointer active:opacity-90" : "cursor-default",
+                        )}
+                        aria-label={canOpenComment ? "Открыть комментарий в посте" : "Контекст поста"}
+                      >
+                        <p className="text-[11px] font-medium text-muted-foreground">К посту</p>
+                        <p className="mt-1 line-clamp-3 text-[12px] leading-snug text-foreground/85">{postPreview}</p>
+                      </button>
+                    ) : null}
+                    <div className="flex min-w-0 flex-wrap items-end gap-x-2 gap-y-1 px-0.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] text-muted-foreground">Комментарий</p>
+                        <p className="text-[12px] font-semibold leading-tight text-foreground/95">{authorName}</p>
+                      </div>
+                      {!canOpenComment ? (
+                        <span className="inline-flex shrink-0 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+                          Недоступно
+                        </span>
+                      ) : null}
+                      {canOpenComment ? (
+                        <button
+                          type="button"
+                          className={structuredMetaLinkBtn}
+                          title="Открыть комментарий в посте"
+                          onClick={openComment}
+                        >
+                          Открыть комментарий
+                        </button>
+                      ) : null}
+                    </div>
+                    <div
+                      className={cn(attachedSnippetBubble, connectSnippet && attachedSnippetUnderVisual)}
+                      style={pulseStructuredIncomingBorderStyle}
+                    >
+                      <p className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap text-foreground/90">{text}</p>
                     </div>
                   </div>
                 );
@@ -779,52 +1139,102 @@ function ChatMessageRowInner({
                 const isVideo = isLikelyStoryVideoUrl(mediaRaw);
                 const posterSrc = thumbRaw || (!isVideo ? mediaRaw : "");
                 const authorName = payload.authorName || "История";
+                const avatarRaw = payload.authorAvatar ? resolveUrl(payload.authorAvatar) : "";
+                const canOpenStory = Boolean(payload.storyId && onOpenSharedTarget);
+                const replyText = (payload.replyText ?? "").trim();
+                const connectSnippet = Boolean(mediaRaw && replyText);
+                const openStory = () => {
+                  if (canOpenStory && payload.storyId) {
+                    onOpenSharedTarget?.({
+                      type: "story",
+                      storyId: payload.storyId,
+                      authorId: payload.authorId || undefined,
+                    });
+                  }
+                };
                 return (
-                  <div className="max-w-[min(240px,72vw)] rounded-[12px] overflow-hidden border border-border/50 bg-muted/30 dark:bg-white/5">
-                    {mediaRaw && (
-                      <div className="relative w-full aspect-[9/16] bg-black/40">
-                        {isVideo ? (
-                          <video
-                            src={mediaRaw}
-                            className="absolute inset-0 h-full w-full object-cover"
-                            muted
-                            playsInline
-                            preload="metadata"
-                            poster={posterSrc || undefined}
-                            aria-label="Превью сториз"
-                          />
-                        ) : (
-                          <img
-                            src={posterSrc || mediaRaw}
-                            alt=""
-                            className="absolute inset-0 h-full w-full object-cover"
-                            loading="lazy"
-                            decoding="async"
-                          />
+                  <div className={structuredStackClass}>
+                    {mediaRaw ? (
+                      <button
+                        type="button"
+                        disabled={!canOpenStory}
+                        onClick={openStory}
+                        className={cn(
+                          structuredPreviewClass(connectSnippet),
+                          "max-h-[min(52vh,420px)] bg-black/35 dark:bg-black/50",
+                          canOpenStory ? "cursor-pointer active:opacity-90" : "cursor-default opacity-90",
                         )}
+                        aria-label={canOpenStory ? "Открыть сториз" : "Превью сториз"}
+                      >
+                        <div className="relative aspect-[9/16] w-full max-h-[min(52vh,420px)]">
+                          {isVideo ? (
+                            <video
+                              src={mediaRaw}
+                              className="absolute inset-0 h-full w-full object-cover"
+                              muted
+                              playsInline
+                              preload="metadata"
+                              poster={posterSrc || undefined}
+                              aria-hidden
+                            />
+                          ) : (
+                            <img
+                              src={posterSrc || mediaRaw}
+                              alt=""
+                              className="absolute inset-0 h-full w-full object-cover"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          )}
+                          {isVideo ? (
+                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>
+                              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 text-white shadow-lg backdrop-blur-[1px] ring-1 ring-white/25">
+                                <Play className="ml-0.5 h-5 w-5 fill-current" aria-hidden />
+                              </span>
+                            </span>
+                          ) : null}
+                        </div>
+                      </button>
+                    ) : null}
+                    <div className="flex min-w-0 flex-wrap items-end gap-x-2 gap-y-1 px-0.5">
+                      <UserAvatar
+                        avatarUrl={avatarRaw || undefined}
+                        displayName={authorName}
+                        seed={payload.authorId ?? authorName}
+                        size={24}
+                        className="h-6 w-6 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] text-muted-foreground">Сториз</p>
+                        <p className="text-[12px] font-semibold leading-tight text-foreground/95">{authorName}</p>
+                        {payload.storyTimeLabel ? (
+                          <p className="text-[11px] text-muted-foreground">{payload.storyTimeLabel}</p>
+                        ) : null}
                       </div>
-                    )}
-                    <div className="p-2.5">
-                      <p className="text-[11px] text-muted-foreground">Репост сториз</p>
-                      <p className="text-[13px] font-medium mt-0.5">{authorName}</p>
-                      {payload.storyTimeLabel && (
-                        <p className="text-[11px] text-muted-foreground mt-0.5">{payload.storyTimeLabel}</p>
-                      )}
-                      {payload.replyText && (
-                        <p className="text-[13px] leading-snug whitespace-pre-wrap break-words text-foreground/90 mt-2 border-t border-border/40 pt-2">
-                          {payload.replyText}
-                        </p>
-                      )}
-                      {payload.authorId && (
-                        <button
-                          type="button"
-                          className="mt-2 text-xs text-primary font-medium hover:underline"
-                          onClick={() => onOpenProfile(payload.authorId!)}
-                        >
-                          Профиль автора
+                      {!canOpenStory ? (
+                        <span className="inline-flex shrink-0 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
+                          Недоступно
+                        </span>
+                      ) : null}
+                      {canOpenStory && !mediaRaw ? (
+                        <button type="button" className={structuredMetaLinkBtn} onClick={openStory}>
+                          Открыть сториз
                         </button>
-                      )}
+                      ) : null}
                     </div>
+                    {!payload.storyId && payload.authorId ? (
+                      <button type="button" className={cn(structuredMetaLinkBtn, "self-start")} onClick={() => onOpenProfile(payload.authorId!)}>
+                        Профиль автора
+                      </button>
+                    ) : null}
+                    {replyText ? (
+                      <div
+                        className={cn(attachedSnippetBubble, connectSnippet && attachedSnippetUnderVisual)}
+                        style={pulseStructuredIncomingBorderStyle}
+                      >
+                        <p className="uix-select-text text-[14px] leading-[1.32] break-words whitespace-pre-wrap">{replyText}</p>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })()
@@ -837,20 +1247,29 @@ function ChatMessageRowInner({
                   if (hasCode) {
                     return (
                       <div className="max-w-[min(280px,80vw)]">
-                        {segments.map((seg, i) =>
-                          seg.type === "code" ? (
-                            <CodeBlock key={i} code={seg.content} lang={seg.lang} className="my-1" />
-                          ) : (
-                            <p key={i} className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap">
+                        {segments.map((seg, i) => {
+                          if (seg.type === "code") {
+                            if (seg.lang === "table") {
+                              const tablePayload = parseTablePayloadFromFenceBody(seg.content);
+                              return tablePayload ? (
+                                <ChatTableBubble key={i} payload={tablePayload} className="my-1" />
+                              ) : (
+                                <CodeBlock key={i} code={seg.content} lang={seg.lang} className="my-1" />
+                              );
+                            }
+                            return <CodeBlock key={i} code={seg.content} lang={seg.lang} className="my-1" />;
+                          }
+                          return (
+                            <p key={i} className="uix-select-text text-[14px] leading-[1.32] break-words whitespace-pre-wrap">
                               {linkifyTextWithMentions(seg.content, onOpenProfile)}
                             </p>
-                          ),
-                        )}
+                          );
+                        })}
                       </div>
                     );
                   }
                   return (
-                    <p className="text-[14px] leading-[1.32] break-words whitespace-pre-wrap max-w-[min(240px,72vw)]">
+                    <p className="uix-select-text text-[14px] leading-[1.32] break-words whitespace-pre-wrap max-w-[min(240px,72vw)]">
                       {linkifyTextWithMentions(displayText, onOpenProfile)}
                     </p>
                   );
@@ -861,60 +1280,41 @@ function ChatMessageRowInner({
                   const externalVideo = parseExternalVideoUrl(url);
                   return externalVideo ? <ExternalVideoEmbedCard url={url} /> : <LinkPreviewCard url={url} />;
                 })()}
+                {translationPending && !translatedText?.trim() && msg.type === "text" ? (
+                  <p className="text-[10px] text-muted-foreground/75 mt-0.5" aria-live="polite">
+                    Перевод…
+                  </p>
+                ) : null}
               </>
             )}
             {showFooter && (
               <div
                 className={cn(
                   "text-[11px] flex justify-end items-center gap-0.5",
-                  isMedia ? "mt-1 px-0.5" : "mt-0.5",
+                  isMedia || isStructuredShare ? "mt-1 px-0.5" : "mt-0.5",
                   vibeTextBubble && isMe
                     ? "text-white/85"
-                    : pulseTextShell && pulseMobileDm === "dark" && isMe
+                    : pulseFooterShell && pulseMobileDm === "dark" && isMe
                       ? "text-white/65"
-                      : pulseTextShell && pulseMobileDm === "light" && isMe
+                      : pulseFooterShell && pulseMobileDm === "light" && isMe
                         ? "text-white/85"
-                        : isMe && !isMedia
+                        : isMe
                           ? bubbleStyles.footer
                           : "text-muted-foreground",
                 )}
               >
-                {formatMessageTime(msg.createdAt)}
-                {isMe && (() => {
-                  if (msg.sendStatus === "sending") return <span className="inline-flex items-center gap-0.5" title="Отправляется"><Clock className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" aria-hidden /></span>;
-                  if (msg.sendStatus === "failed") return (
-                    <span className="inline-flex items-center gap-1">
-                      <span title="Ошибка отправки"><AlertCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden /></span>
-                      <button type="button" className="text-[10px] font-medium underline underline-offset-1 hover:opacity-100 opacity-90" onClick={(e) => { e.stopPropagation(); onRetry(msg); }}>Повторить</button>
-                    </span>
-                  );
-                  const isRead = isOutgoingMessageReadByPeer(msg.createdAt, lastReadAt);
-                  const title = isRead && lastReadAt ? `Прочитано · ${formatMessageTime(lastReadAt)}` : "Доставлено";
-                  const checkGlow = vibeTextBubble
-                    ? "drop-shadow-[0_0_4px_rgba(255,255,255,0.45)]"
-                    : pulseTextShell && pulseMobileDm === "dark" && isMe
-                      ? "drop-shadow-[0_0_5px_rgba(165,180,252,0.55)]"
-                      : "drop-shadow-[0_0_5px_hsl(var(--primary)/0.6)]";
-                  return (
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-0.5",
-                        isRead &&
-                          (vibeTextBubble
-                            ? "text-white"
-                            : pulseTextShell && pulseMobileDm === "dark" && isMe
-                              ? "text-indigo-200"
-                              : pulseTextShell && pulseMobileDm === "light" && isMe
-                                ? "text-white"
-                                : "text-primary"),
-                      )}
-                      title={title}
-                    >
-                      <svg className={cn("w-3 h-3 flex-shrink-0", isRead && checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>
-                      {isRead && <svg className={cn("w-3 h-3 flex-shrink-0 -ml-2.25", checkGlow)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg>}
-                    </span>
-                  );
-                })()}
+                {!isMe ? (
+                  <span aria-label={incomingMessageFooterAria(msg.createdAt)}>{formatMessageTime(msg.createdAt)}</span>
+                ) : (
+                  <OutgoingMessageFooter
+                    msg={msg}
+                    lastReadAt={lastReadAt}
+                    vibeTextBubble={vibeTextBubble}
+                    pulseTextShell={pulseFooterShell}
+                    pulseMobileDm={pulseMobileDm}
+                    onRetry={onRetry}
+                  />
+                )}
               </div>
             )}
           </div>

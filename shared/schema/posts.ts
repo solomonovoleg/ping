@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { boolean, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./users";
 import type { PostMediaLayout } from "../post-media-layout";
+import type { PostContentInterestsPayload } from "./post-content-interests";
 
 /** Извлечь уникальные хештеги из текста (#слово) в нижнем регистре */
 export function extractHashtags(text: string): string[] {
@@ -36,6 +37,8 @@ export type PostVisibility = (typeof POST_VISIBILITY)[number];
 /** Посты в ленте (автор = пользователь) */
 export const posts = pgTable("posts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** Короткий сегмент в публичных URL (/u/…/p/{link_code}); UUID в путях поддерживается для совместимости. */
+  linkCode: varchar("link_code", { length: 12 }).notNull().unique(),
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   text: text("text").notNull(),
   /** Одно фото/видео (для обратной совместимости); при наличии mediaUrls используется первый элемент для превью */
@@ -54,6 +57,15 @@ export const posts = pgTable("posts", {
   visibility: varchar("visibility", { length: 20 }).notNull().default("public"),
   /** Кампания EDGE (интерактив в ленте). FK в SQL не задаём — кампания может быть вне этой БД. */
   edgeId: varchar("edge_id", { length: 128 }),
+  /** Кто видит блок EDGE: self | followers | public (null = public для старых строк). */
+  edgeDisplayAudience: varchar("edge_display_audience", { length: 20 }),
+  /** Интересы/темы по тексту поста (LLM, OpenRouter), версия в payload.v */
+  contentInterests: jsonb("content_interests").$type<PostContentInterestsPayload | null>(),
+  contentInterestsAt: timestamp("content_interests_at", { withTimezone: true, mode: "date" }),
+  /** false = не показывать блок превью по ссылке на внешнее видео (YouTube, VK и т.д.) */
+  linkEmbedEnabled: boolean("link_embed_enabled").notNull().default(true),
+  /** false — только Push (создан из раздела Push), не показывать в сетке/ленте профиля и в глобальной ленте */
+  showOnAuthorWall: boolean("show_on_author_wall").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

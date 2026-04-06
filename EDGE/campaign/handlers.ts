@@ -1,9 +1,9 @@
 import type { Request, Response, NextFunction } from "express";
-import { runPrizeDraw } from "./service.js";
+import { parsePrizeDrawRulesOverrideFromBody, runPrizeDraw } from "./service.js";
 
 export async function postDraw(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const body = (req.body ?? {}) as { edgeId?: unknown; giftKey?: unknown; count?: unknown };
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const edgeId = String(body.edgeId ?? "").trim();
     if (!edgeId) {
       res.status(400).json({ error: "edgeId_required" });
@@ -11,8 +11,9 @@ export async function postDraw(req: Request, res: Response, next: NextFunction):
     }
     const giftKey = body.giftKey !== undefined && body.giftKey !== null ? String(body.giftKey) : undefined;
     const count = body.count !== undefined && body.count !== null ? Number(body.count) : undefined;
+    const rulesOverride = parsePrizeDrawRulesOverrideFromBody(body);
 
-    const result = await runPrizeDraw({ edgeId, giftKey, count });
+    const result = await runPrizeDraw({ edgeId, giftKey, count, rulesOverride });
     if (!result.ok) {
       if (result.error === "campaign_not_found") {
         res.status(404).json({ error: "campaign_not_found" });

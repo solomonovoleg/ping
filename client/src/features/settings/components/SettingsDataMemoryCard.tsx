@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Bookmark, ChevronRight, Database, Download, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Bookmark, ChevronRight, Database, Download, Loader2, MessagesSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { clearMediaOfflineCache } from "@/lib/media-offline-cache";
+import { clearSessionOfflineCaches } from "@/lib/offline-session-cache";
 import { downloadUserDataExportFile } from "@/lib/user-data-export";
 
 type Props = {
@@ -13,7 +15,9 @@ type Props = {
 
 export function SettingsDataMemoryCard({ onNavigateSaved, onOpenDataPage }: Props) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [clearingMediaCache, setClearingMediaCache] = useState(false);
+  const [clearingChatsProfileCache, setClearingChatsProfileCache] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const handleClearMediaCache = async () => {
@@ -42,6 +46,24 @@ export function SettingsDataMemoryCard({ onNavigateSaved, onOpenDataPage }: Prop
     }
   };
 
+  const handleClearChatsProfileCache = async () => {
+    setClearingChatsProfileCache(true);
+    try {
+      await clearSessionOfflineCaches();
+      await queryClient.invalidateQueries({ queryKey: ["chats"] });
+      await queryClient.invalidateQueries({ queryKey: ["chats", "hidden"] });
+      toast({
+        title: "Локальные данные очищены",
+        description:
+          "Кеш списка чатов, последних сообщений и сохранённых профилей удалён. Медиа и неотправленные сообщения не затронуты. Данные подтянутся с сервера при открытии.",
+      });
+    } catch {
+      toast({ title: "Не удалось очистить локальные данные", variant: "destructive" });
+    } finally {
+      setClearingChatsProfileCache(false);
+    }
+  };
+
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -60,8 +82,9 @@ export function SettingsDataMemoryCard({ onNavigateSaved, onOpenDataPage }: Prop
   return (
     <div className="bg-card rounded-2xl overflow-hidden border border-border/50 shadow-sm p-4 space-y-3">
       <p className="text-sm text-muted-foreground leading-relaxed">
-        Локально сохраняются копии медиа для быстрой загрузки офлайн. Очистка не затрагивает сообщения на сервере и не
-        удаляет неотправленные из очереди.
+        Локально сохраняются копии медиа для быстрой загрузки офлайн, а также снимки списка чатов и открытых чужих
+        профилей для мгновенного показа. Очистка не затрагивает сообщения на сервере и не удаляет неотправленные из
+        очереди.
       </p>
       <p className="text-sm text-muted-foreground leading-relaxed">
         Выгрузка JSON — снимок профиля, подписок, чатов (без полной истории переписок), избранных сообщений в чатах и
@@ -94,6 +117,25 @@ export function SettingsDataMemoryCard({ onNavigateSaved, onOpenDataPage }: Prop
           <>
             <Database className="h-4 w-4 mr-2 shrink-0" aria-hidden />
             Очистить кэш медиа
+          </>
+        )}
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        className="w-full min-h-[var(--uix-touch-min)]"
+        disabled={clearingChatsProfileCache}
+        onClick={() => void handleClearChatsProfileCache()}
+      >
+        {clearingChatsProfileCache ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
+            Очистка…
+          </>
+        ) : (
+          <>
+            <MessagesSquare className="h-4 w-4 mr-2 shrink-0" aria-hidden />
+            Очистить кеш чатов и профилей
           </>
         )}
       </Button>

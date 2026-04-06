@@ -3,7 +3,7 @@ import path from "path";
 import type { Dirent, Stats } from "fs";
 import { statfs } from "node:fs/promises";
 import type { Pool } from "pg";
-import { s3Configured } from "../../upload/s3";
+import { s3Configured, probeS3BucketHead } from "../../upload/s3";
 import { buildServerHostSnapshot, type ServerHostSnapshot } from "./host-snapshot";
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|heic|heif|bmp)$/i;
@@ -32,6 +32,10 @@ export type DiskOpsReport = {
   statfsPath: string;
   projectPath: string;
   s3Configured: boolean;
+  /** Режим хранения новых медиа для интерпретации объёма uploads/ */
+  mediaStorageMode: "s3" | "local";
+  /** HeadBucket при OPS_DISK_S3_HEAD_BUCKET=1; иначе не выполняется */
+  s3BucketProbe: { ran: false } | { ran: true; ok: true } | { ran: true; ok: false; error: string };
   mount: DiskMountStats | null;
   mountError: string | null;
   host: ServerHostSnapshot;
@@ -318,7 +322,7 @@ export async function computeDiskOpsReport(pool: Pool | null): Promise<DiskOpsRe
     try {
       const q4 = await pool.query<{ s: string }>(
         `SELECT coalesce(sum(length(content)), 0)::text AS s FROM messages
-         WHERE type IN ('text','system','post_share','story_reply')`
+         WHERE type IN ('text','system','post_share','comment_share','story_reply')`
       );
       dbTextPayload = Number(q4.rows[0]?.s ?? NaN);
       if (!Number.isFinite(dbTextPayload)) dbTextPayload = null;
@@ -405,6 +409,19 @@ export async function computeDiskOpsReport(pool: Pool | null): Promise<DiskOpsRe
     );
   }
 
+  const mediaStorageMode: DiskOpsReport["mediaStorageMode"] = s3Configured ? "s3" : "local";
+  const runS3Head =
+    process.env.OPS_DISK_S3_HEAD_BUCKET === "1" || process.env.OPS_DISK_S3_HEAD_BUCKET === "true";
+  let s3BucketProbe: DiskOpsReport["s3BucketProbe"] = { ran: false };
+  if (runS3Head) {
+    if (s3Configured) {
+      const head = await probeS3BucketHead();
+      s3BucketProbe = head.ok ? { ran: true, ok: true } : { ran: true, ok: false, error: head.error };
+    } else {
+      s3BucketProbe = { ran: true, ok: false, error: "S3 не настроен — проверка бакета не применима" };
+    }
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     cwd,
@@ -412,6 +429,8 @@ export async function computeDiskOpsReport(pool: Pool | null): Promise<DiskOpsRe
     statfsPath,
     projectPath,
     s3Configured,
+    mediaStorageMode,
+    s3BucketProbe,
     mount,
     mountError,
     host,

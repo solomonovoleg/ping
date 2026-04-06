@@ -18,6 +18,9 @@ export const DURATION_NORMAL_S = DURATION_NORMAL_MS / 1000;
 /** Акцентные анимации (рассыпание, «магические» эффекты) */
 export const DURATION_EMPHASIS_MS = 420;
 
+/** Медленный цикл «плавания» центрального логотипа в нижнем меню */
+export const DURATION_LOGO_FLOAT_MS = 2800;
+
 /** Плавная смена настроения чата (PULSE: кроссфейд фона и паттерна) */
 export const DURATION_CHAT_VIBE_CROSSFADE_MS = 5000;
 

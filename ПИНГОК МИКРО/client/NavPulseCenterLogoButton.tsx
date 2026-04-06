@@ -1,7 +1,7 @@
 import { useCallback, useId, useRef, useState } from "react";
 import { ArrowUp, Hand } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { usePrefersReducedMotion } from "@/lib/motion";
+import { DURATION_LOGO_FLOAT_MS, usePrefersReducedMotion } from "@/lib/motion";
 import { playPingokReadySound, triggerTapFeedback } from "@/lib/micro-feedback";
 import { triggerSelectionHaptic } from "@/lib/capacitor-native";
 import { PingokMicroOverlay } from "./PingokMicroOverlay";
@@ -10,26 +10,30 @@ import { PINGOK_LOGO_LONG_PRESS_MS } from "./constants";
 const RING_C = 2 * Math.PI * 24;
 const ACCENT = "#818cf8";
 const SWIPE_UP_PX = 36;
-/** Соответствует viewBox кольца (52×52) и укладывается в `--uix-nav-height` без налёта на контент. */
-const PULSE_BUTTON_SCALE = 1;
-const BUTTON_SIZE_PX = Math.round(52 * PULSE_BUTTON_SCALE);
-const INNER_SIZE_PX = Math.round(44 * PULSE_BUTTON_SCALE);
-const LOGO_IDLE_SIZE_PX = Math.round(24 * PULSE_BUTTON_SCALE);
-const LOGO_ACTIVE_SIZE_PX = Math.round(26 * PULSE_BUTTON_SCALE);
+/** Чуть крупнее визуально; hit-box шире, чтобы тап не «терялся» у края. */
+const PULSE_BUTTON_SCALE = 1.14;
+/** Логотип ~в 2× крупнее прежнего (24→48, 26→52 в базовых юнитах). */
+const BUTTON_SIZE_PX = Math.round(70 * PULSE_BUTTON_SCALE);
+const INNER_SIZE_PX = Math.round(58 * PULSE_BUTTON_SCALE);
+const LOGO_IDLE_SIZE_PX = Math.round(48 * PULSE_BUTTON_SCALE);
+const LOGO_ACTIVE_SIZE_PX = Math.round(52 * PULSE_BUTTON_SCALE);
+/** F-PING.png: много прозрачного поля; визуальная «масса» птицы (крылья вверх) */
+const LOGO_IMG_OPTICAL_NUDGE_Y_PX = 15;
+/** Минимум области нажатия (px) — больше визуала, без `pointerleave`-отмены на микросдвиге. */
+const TOUCH_BOX_PX = Math.max(68, BUTTON_SIZE_PX + 14);
 
 type VoiceMode = "record" | "stream";
 
 type Props = {
-  isActive: boolean;
   logoSrc: string;
   onShortPress: () => void;
 };
 
 /**
- * Центр PULSE: тап → профиль; удержание 2.8 с (кольцо) → отпускание → голос;
+ * Центр PULSE: тап → профиль; удержание (кольцо, см. PINGOK_LOGO_LONG_PRESS_MS) → голос;
  * при удержании свайп вверх → режим стрима.
  */
-export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Props) {
+export function NavPulseCenterLogoButton({ logoSrc, onShortPress }: Props) {
   const ringGradId = useId().replace(/:/g, "");
   const reducedMotion = usePrefersReducedMotion();
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -171,7 +175,6 @@ export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Pr
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
-          onPointerLeave={onPointerCancel}
           onContextMenu={(e) => e.preventDefault()}
           onTouchStart={(e) => e.preventDefault()}
           className={cn(
@@ -179,8 +182,8 @@ export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Pr
             "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           )}
           style={{
-            width: BUTTON_SIZE_PX,
-            height: BUTTON_SIZE_PX,
+            width: TOUCH_BOX_PX,
+            height: TOUCH_BOX_PX,
             filter: voiceActive ? `drop-shadow(0 0 10px ${ACCENT}88)` : undefined,
             transition: "filter .4s ease",
             WebkitUserSelect: "none",
@@ -189,86 +192,105 @@ export function NavPulseCenterLogoButton({ isActive, logoSrc, onShortPress }: Pr
           }}
         >
           <div
-            className={cn(
-              "absolute inset-0 scale-0 rounded-full bg-primary/12 transition-transform duration-150",
-              isActive && "scale-100",
-            )}
-          />
-
-          {holding && !reducedMotion ? (
-            <svg className="absolute inset-0 size-full overflow-visible" viewBox="0 0 52 52" aria-hidden>
-              <circle cx="26" cy="26" r="24" fill="none" stroke="rgba(129,140,248,.18)" strokeWidth="2" />
-              <circle
-                cx="26"
-                cy="26"
-                r="24"
-                fill="none"
-                stroke={`url(#${ringGradId})`}
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeDasharray={RING_C}
-                className="pingok-ring-animate"
-                style={{
-                  transformOrigin: "26px 26px",
-                  transform: "rotate(-90deg)",
-                }}
-              />
-              <defs>
-                <linearGradient id={ringGradId} x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#818cf8" />
-                  <stop offset="50%" stopColor="#a78bfa" />
-                  <stop offset="100%" stopColor="#06b6d4" />
-                </linearGradient>
-              </defs>
-            </svg>
-          ) : null}
-
-          {voiceActive && !reducedMotion ? (
-            <>
-              <div
-                className="pointer-events-none absolute -inset-2 rounded-full border-[1.5px]"
-                style={{
-                  borderColor: `${ACCENT}44`,
-                  animation: "pingok-ring-pulse 1.6s ease-in-out infinite",
-                }}
-              />
-              <div
-                className="pointer-events-none absolute -inset-4 rounded-full border"
-                style={{
-                  borderColor: `${ACCENT}22`,
-                  animation: "pingok-ring-pulse 1.6s ease-in-out infinite 0.5s",
-                }}
-              />
-            </>
-          ) : null}
-
-          <div
-            className="relative z-10 flex size-11 items-center justify-center rounded-[14px] border-[1.5px] border-white/15 transition-transform duration-200"
-            style={{
-              width: INNER_SIZE_PX,
-              height: INNER_SIZE_PX,
-              overflow: "hidden",
-              background: holding
-                ? `linear-gradient(145deg,${ACCENT},#7c3aed,${ACCENT}99)`
-                : voiceActive
-                  ? `linear-gradient(145deg,${ACCENT},#06b6d4)`
-                  : "transparent",
-              borderColor: holding || voiceActive ? "rgba(255,255,255,.15)" : "transparent",
-              transform: holding ? "scale(1.08)" : "scale(1)",
-              animation: holding && !reducedMotion ? "pingok-mode-glow 1.2s ease-in-out infinite" : undefined,
-            }}
+            className="relative shrink-0"
+            style={{ width: BUTTON_SIZE_PX, height: BUTTON_SIZE_PX }}
           >
-            <img
-              src={logoSrc}
-              alt=""
-              className="object-contain select-none pointer-events-none transition-[width,height] duration-200"
+            {holding && !reducedMotion ? (
+              <div
+                className="pointer-events-none absolute inset-0"
+                style={{ transform: `translateY(${LOGO_IMG_OPTICAL_NUDGE_Y_PX}px)` }}
+              >
+              <svg className="absolute inset-0 size-full overflow-visible" viewBox="0 0 52 52" aria-hidden>
+                <circle cx="26" cy="26" r="24" fill="none" stroke="rgba(129,140,248,.18)" strokeWidth="2" />
+                <circle
+                  cx="26"
+                  cy="26"
+                  r="24"
+                  fill="none"
+                  stroke={`url(#${ringGradId})`}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeDasharray={RING_C}
+                  className="pingok-ring-animate"
+                  style={{
+                    transformOrigin: "26px 26px",
+                    transform: "rotate(-90deg)",
+                  }}
+                />
+                <defs>
+                  <linearGradient id={ringGradId} x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#818cf8" />
+                    <stop offset="50%" stopColor="#a78bfa" />
+                    <stop offset="100%" stopColor="#06b6d4" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              </div>
+            ) : null}
+
+            {voiceActive && !reducedMotion ? (
+              <div
+                className="pointer-events-none absolute inset-0"
+                style={{ transform: `translateY(${LOGO_IMG_OPTICAL_NUDGE_Y_PX}px)` }}
+              >
+                <div
+                  className="pointer-events-none absolute -inset-2 rounded-full border-[1.5px]"
+                  style={{
+                    borderColor: `${ACCENT}44`,
+                    animation: "pingok-ring-pulse 1.6s ease-in-out infinite",
+                  }}
+                />
+                <div
+                  className="pointer-events-none absolute -inset-4 rounded-full border"
+                  style={{
+                    borderColor: `${ACCENT}22`,
+                    animation: "pingok-ring-pulse 1.6s ease-in-out infinite 0.5s",
+                  }}
+                />
+              </div>
+            ) : null}
+
+            <div
+              className="relative z-10 flex size-11 items-center justify-center rounded-[14px] border-[1.5px] border-white/15 transition-transform duration-200"
               style={{
-                width: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,
-                height: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,
-                objectFit: "contain",
-                display: "block",
+                width: INNER_SIZE_PX,
+                height: INNER_SIZE_PX,
+                overflow: "hidden",
+                background: holding
+                  ? `linear-gradient(145deg,${ACCENT},#7c3aed,${ACCENT}99)`
+                  : voiceActive
+                    ? `linear-gradient(145deg,${ACCENT},#06b6d4)`
+                    : "transparent",
+                borderColor: holding || voiceActive ? "rgba(255,255,255,.15)" : "transparent",
+                transform: holding ? "scale(1.08)" : "scale(1)",
+                animation: holding && !reducedMotion ? "pingok-mode-glow 1.2s ease-in-out infinite" : undefined,
               }}
-            />
+            >
+              <div
+                className={cn(
+                  "flex items-center justify-center",
+                  !holding && !voiceActive && !reducedMotion && "pingok-nav-logo-float",
+                )}
+                style={
+                  !holding && !voiceActive && !reducedMotion
+                    ? { animationDuration: `${DURATION_LOGO_FLOAT_MS}ms` }
+                    : undefined
+                }
+              >
+                <img
+                  src={logoSrc}
+                  alt=""
+                  className="object-contain select-none pointer-events-none transition-[width,height] duration-200"
+                  style={{
+                    width: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,
+                    height: holding || voiceActive ? LOGO_ACTIVE_SIZE_PX : LOGO_IDLE_SIZE_PX,
+                    objectFit: "contain",
+                    display: "block",
+                    transform: `translateY(${LOGO_IMG_OPTICAL_NUDGE_Y_PX}px)`,
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </button>
       </div>

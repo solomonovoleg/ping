@@ -8,6 +8,8 @@ export const stories = pgTable("stories", {
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   mediaUrl: text("media_url").notNull(),
   thumbnailUrl: text("thumbnail_url"),
+  /** Текст поверх сторис; поддерживаются @упоминания как в постах (@[Имя](publicId)). */
+  caption: text("caption"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   /** Когда сториз перестаёт быть активным (для 24/46/56 часов). */
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" })

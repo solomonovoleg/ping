@@ -35,7 +35,8 @@ export function PostVideoTrimmerModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "max-w-full w-full h-[100dvh] max-h-[100dvh] translate-x-0 translate-y-0 top-0 left-0 rounded-none border-0 p-0 flex flex-col gap-0 sm:max-w-lg sm:h-auto sm:max-h-[90vh] sm:rounded-lg sm:border sm:top-[50%] sm:left-[50%] sm:translate-x-[-50%] sm:translate-y-[-50%]",
+          // max-sm: без zoom/slide у контента — иначе WebKit часто не рисует кадр <video> (чёрный прямоугольник).
+          "max-w-full w-full h-[100dvh] max-h-[100dvh] translate-x-0 translate-y-0 top-0 left-0 rounded-none border-0 p-0 flex flex-col gap-0 max-sm:data-[state=closed]:animate-out max-sm:data-[state=open]:animate-in max-sm:data-[state=closed]:fade-out-0 max-sm:data-[state=open]:fade-in-0 max-sm:data-[state=closed]:zoom-out-100 max-sm:data-[state=open]:zoom-in-100 max-sm:data-[state=closed]:slide-out-to-left-0 max-sm:data-[state=closed]:slide-out-to-top-0 max-sm:data-[state=open]:slide-in-from-left-0 max-sm:data-[state=open]:slide-in-from-top-0 sm:max-w-lg sm:h-auto sm:max-h-[90vh] sm:rounded-lg sm:border sm:top-[50%] sm:left-[50%] sm:translate-x-[-50%] sm:translate-y-[-50%]",
         )}
       >
         <DialogHeader className="px-4 pt-4 pb-2 shrink-0 border-b border-border/60 sm:pt-6">
@@ -47,17 +48,19 @@ export function PostVideoTrimmerModal({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 flex flex-col px-4 py-3 gap-3 overflow-y-auto">
-          <div className="relative w-full max-w-md mx-auto aspect-[9/16] max-h-[48vh] bg-black rounded-lg overflow-hidden">
+          <div className="relative isolate z-0 w-full max-w-md mx-auto aspect-[9/16] max-h-[48vh] bg-black rounded-lg overflow-hidden">
             {file && t.previewUrl ? (
               <video
                 ref={t.videoRef}
                 src={t.previewUrl}
-                className="w-full h-full object-contain"
+                poster={t.posterUrl ?? undefined}
+                className="relative z-[1] h-full w-full object-contain [transform:translate3d(0,0,0)]"
                 playsInline
-                preload="metadata"
+                preload="auto"
                 onLoadedMetadata={t.onVideoLoaded}
+                onLoadedData={t.onVideoLoadedData}
                 onError={t.onVideoError}
-                muted={false}
+                muted={!t.playing}
               />
             ) : null}
             {t.metaError ? (
@@ -90,6 +93,7 @@ export function PostVideoTrimmerModal({
             timeFromClientX={t.timeFromClientX}
             setRange={t.setRange}
             seekToStart={t.seekToStart}
+            previewCurrentRange={t.previewCurrentRange}
             onPointerDownHandle={t.onPointerDownHandle}
           />
         </div>

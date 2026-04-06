@@ -7,6 +7,7 @@ import {
 import { useLocation } from "wouter";
 
 const fontStack = "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
+const DESKTOP_PREVIEW_MIN_WIDTH_PX = 1024;
 
 /**
  * Эталон PULSE (макеты из `pulse-template/`). Только dev, без подмены ChatDetail.
@@ -20,6 +21,8 @@ const fontStack = "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
  */
 export default function PulseTemplatePreview() {
   const [location] = useLocation();
+  const isDesktopViewport =
+    typeof window !== "undefined" && window.innerWidth >= DESKTOP_PREVIEW_MIN_WIDTH_PX;
 
   if (location === "/dev/pulse-template/stories-other") {
     return (
@@ -59,6 +62,17 @@ export default function PulseTemplatePreview() {
   }
 
   if (location === "/dev/pulse-template/desktop") {
+    return (
+      <div
+        className="min-h-[100dvh] w-full overflow-hidden bg-[#080810] text-white"
+        style={{ fontFamily: fontStack }}
+      >
+        <MessengerChatDark />
+      </div>
+    );
+  }
+
+  if (isDesktopViewport) {
     return (
       <div
         className="min-h-[100dvh] w-full overflow-hidden bg-[#080810] text-white"

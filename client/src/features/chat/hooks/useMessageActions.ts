@@ -13,9 +13,15 @@ import {
   sendMessage,
   transcribeVoiceOrVideoNoteMessage,
 } from "@/lib/chat";
-import { triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
+import { isNative, triggerLightHaptic, triggerSelectionHaptic } from "@/lib/capacitor-native";
+import {
+  copyChatMessageImageToClipboard,
+  resolveChatMessageCopyFallbackUrl,
+  saveChatMessageAttachment,
+} from "../utils/save-message-attachment";
 import { API, apiFetch } from "@/lib/api-base";
-import { playDeleteSound } from "@/lib/send-sound";
+import { playDeleteSound, playLikeActionSound } from "@/lib/send-sound";
+import { DOUBLE_TAP_LIKE_EMOJI } from "@/lib/double-tap-like-reaction";
 import { parseMessageDate } from "../utils/format";
 import type { ApiMessage } from "../types";
 
@@ -37,6 +43,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [shatteringMessageId, setShatteringMessageId] = useState<string | null>(null);
   const [transcriptRequestingIds, setTranscriptRequestingIds] = useState<Set<string>>(new Set());
+  const [savingAttachmentMessageId, setSavingAttachmentMessageId] = useState<string | null>(null);
 
   const messageMenuRef = useRef<HTMLDivElement>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,6 +108,15 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     [chatId, closeMenu, toast, setMessages]
   );
 
+  const handleDoubleTapDefaultReaction = useCallback(
+    (msg: ApiMessage) => {
+      if (msg.type === "system" || msg.type === "missed_call") return;
+      playLikeActionSound();
+      void handleReaction(msg, DOUBLE_TAP_LIKE_EMOJI);
+    },
+    [handleReaction],
+  );
+
   const handleMessagePointerDown = useCallback((msg: ApiMessage, e: React.PointerEvent) => {
     if (msg.type === "system" || msg.type === "missed_call") return;
     if (!msg?.id) return;
@@ -132,14 +148,21 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
   const handleMessagePointerLeave = useCallback(() => clearLongPress(), [clearLongPress]);
   const handleMessageContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      e.preventDefault();
+      const target = e.target as HTMLElement;
+      if (target.closest("img")) {
+        return;
+      }
       try {
-        const row = (e.target as HTMLElement)?.closest?.("[data-message-id]");
+        const row = target.closest?.("[data-message-id]");
         if (!row) return;
         const msgId = row.getAttribute("data-message-id");
         if (!msgId) return;
         const msg = messages.find((m) => m.id === msgId);
         if (!msg || msg.type === "system" || msg.type === "missed_call") return;
+        if ((msg.type === "video" || msg.type === "video_note") && target.closest("video")) {
+          return;
+        }
+        e.preventDefault();
         triggerLightHaptic();
         const rect = row.getBoundingClientRect();
         setMessageMenu({ msg, x: rect.left, y: rect.bottom + 4 });
@@ -167,13 +190,43 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
   }, []);
 
-  const handleCopy = useCallback((msg: ApiMessage) => {
-    if (msg.type === "text") {
-      navigator.clipboard.writeText(msg.content);
-      toast({ title: "Скопировано" });
-    }
-    closeMenu();
-  }, [toast, closeMenu]);
+  const handleCopy = useCallback(
+    (msg: ApiMessage) => {
+      closeMenu();
+
+      void (async () => {
+        if (msg.type === "text") {
+          try {
+            await navigator.clipboard.writeText(msg.content);
+            toast({ title: "Скопировано" });
+          } catch {
+            toast({ title: "Не удалось скопировать", variant: "destructive" });
+          }
+          return;
+        }
+
+        try {
+          await copyChatMessageImageToClipboard(msg);
+          void triggerLightHaptic();
+          toast({ title: "Изображение скопировано" });
+          return;
+        } catch {
+          /* не изображение или браузер не умеет image/png в буфер */
+        }
+
+        const fallbackUrl = resolveChatMessageCopyFallbackUrl(msg);
+        if (fallbackUrl) {
+          try {
+            await navigator.clipboard.writeText(fallbackUrl);
+            toast({ title: "Ссылка скопирована" });
+          } catch {
+            toast({ title: "Не удалось скопировать", variant: "destructive" });
+          }
+        }
+      })();
+    },
+    [toast, closeMenu]
+  );
 
   const handleRequestTranscript = useCallback(
     async (msg: ApiMessage) => {
@@ -254,7 +307,16 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
       try {
         await sendMessage(targetChatId, {
           content: forwardingMessage.content,
-          type: forwardingMessage.type as "text" | "voice" | "image" | "video",
+          type: forwardingMessage.type as
+            | "text"
+            | "voice"
+            | "image"
+            | "video"
+            | "video_note"
+            | "file"
+            | "post_share"
+            | "comment_share"
+            | "story_reply",
           forwardedFromMessageId: forwardingMessage.id,
           originalChatId: chatId,
         });
@@ -290,6 +352,24 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
         closeMenu();
       } catch {
         toast({ title: "Не удалось убрать", variant: "destructive" });
+      }
+    },
+    [closeMenu, toast]
+  );
+
+  const handleSaveAttachmentToDevice = useCallback(
+    async (msg: ApiMessage) => {
+      setSavingAttachmentMessageId(msg.id);
+      try {
+        await saveChatMessageAttachment(msg);
+        const toGallery = isNative() && msg.type !== "voice" && msg.type !== "file";
+        toast({ title: toGallery ? "Сохранено в галерею" : "Сохранено" });
+        closeMenu();
+      } catch (e) {
+        if ((e as Error)?.name === "AbortError") return;
+        toast({ title: "Не удалось сохранить", variant: "destructive" });
+      } finally {
+        setSavingAttachmentMessageId(null);
       }
     },
     [closeMenu, toast]
@@ -397,6 +477,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     messageMenuRef,
     closeMenu,
     handleReaction,
+    handleDoubleTapDefaultReaction,
     handleMessagePointerDown,
     handleMessagePointerUp,
     handleMessagePointerLeave,
@@ -426,5 +507,7 @@ export function useMessageActions({ chatId, messages, setMessages, user, onEdit 
     handleShatterComplete,
     transcriptRequestingIds,
     handleRequestTranscript,
+    savingAttachmentMessageId,
+    handleSaveAttachmentToDevice,
   };
 }

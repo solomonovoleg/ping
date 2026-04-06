@@ -10,6 +10,8 @@ import {
   createPost,
   uploadPostMedia,
   fetchPostsByAuthor,
+  fetchPost,
+  updatePost,
   type FeedPost,
   type PostVideoTrimUpload,
 } from "@/lib/posts";
@@ -30,25 +32,61 @@ import {
   usePrefersReducedMotion,
 } from "@/lib/motion";
 import { getTextareaCaretCoordinates } from "@/lib/textarea-caret";
-import { useCreatePostDraft } from "@/hooks/useCreatePostDraft";
+import { useCreatePostDraft, createPostDraftStorageKey } from "@/hooks/useCreatePostDraft";
 import { buildPostMediaLayout, type PostMediaLayout } from "@shared/post-media-layout";
-import { POST_VIDEO_MAX_SECONDS } from "@shared/post-video";
 import { extractMentions, MAX_POST_MENTIONS } from "@shared/schema/posts";
+import { describePushAudience } from "@/features/push/push-audience-copy";
 import { CreatePostPulseMobile } from "@/pages/CreatePostPulseMobile";
 import { MentionPicker } from "@/features/chat/components/MentionPicker";
 import { buildMentionList } from "@/features/chat/components/mention-list";
 import type { ApiChatMember } from "@/features/chat/types";
 import { listContactsWithProfiles } from "@/lib/users";
+import { buildProfilePostPath } from "@/lib/profile-route";
+import { LoadingProgress } from "@/components/ui/loading-progress";
+import { UploadProgressMediaTileOverlay } from "@/components/ui/upload-progress-panel";
+import { MotionBottomSheetPanel, MotionBottomSheetScrollArea } from "@/components/ui/motion-bottom-sheet";
+import { Switch } from "@/components/ui/switch";
+import { extractFirstExternalVideoUrl } from "@/lib/post-external-video";
+import { fetchMyPushQuota } from "@/lib/push-feed";
+import type { PushTtlValue } from "@shared/schema/push-feed";
+import { acceptAiDisclosure, hasAcceptedAiDisclosure } from "@/lib/ai-disclosure";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type MediaKind = "image" | "video" | "audio";
 
 type MediaSlot =
   | { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null }
-  | { type: "uploading"; preview: string; id: number; kind: MediaKind; aspectRatio?: number | null };
+  | {
+      type: "uploading";
+      preview: string;
+      id: number;
+      kind: MediaKind;
+      aspectRatio?: number | null;
+      /** Прогресс отправки файла на сервер, 0–100 */
+      progress?: number;
+    };
 
 const MAX_MEDIA = 10;
 const MAX_MEDIA_PUBLISHED = 10; // Сервер принимает до 10 медиа в посте
 const MAX_CHARS = 8000;
+const PUSH_TTL_OPTIONS: Array<{ value: PushTtlValue; label: string }> = [
+  { value: "12h", label: "12ч" },
+  { value: "24h", label: "24ч" },
+  { value: "48h", label: "48ч" },
+  { value: "56h", label: "56ч" },
+  { value: "forever", label: "Бессрочно" },
+];
+const PUSH_TTL_ROW1 = PUSH_TTL_OPTIONS.slice(0, 3);
+const PUSH_TTL_ROW2 = PUSH_TTL_OPTIONS.slice(3);
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -109,11 +147,28 @@ function parseEdgeIdFromSearch(search: string): string {
   }
 }
 
+function parseEditPostIdFromSearch(search: string): string {
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  try {
+    return new URLSearchParams(raw).get("edit")?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function inferMediaKindFromUrl(url: string): MediaKind {
+  if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) return "video";
+  if (/\.(mp3|m4a|aac|wav|ogg)(\?|$)/i.test(url)) return "audio";
+  return "image";
+}
+
 export default function CreatePost() {
   const [, setLocation] = useLocation();
   const search = useSearch();
   const presetEdgeId = useMemo(() => parseEdgeIdFromSearch(search), [search]);
-  const { user } = useAuth();
+  const editPostId = useMemo(() => parseEditPostIdFromSearch(search), [search]);
+  const isEditMode = Boolean(editPostId);
+  const { user, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -124,17 +179,25 @@ export default function CreatePost() {
   const videoTrimResolverRef = useRef<((t: PostVideoTrimUpload | null) => void) | null>(null);
   const [videoTrimFile, setVideoTrimFile] = useState<File | null>(null);
   const [text, setText] = useState("");
+  /** Превью по внешней видеоссылке в тексте (YouTube и т.д.); выкл. — только ссылка в подписи */
+  const [linkEmbedEnabled, setLinkEmbedEnabled] = useState(true);
+  const [sendToPush, setSendToPush] = useState(false);
+  const [pushTtl, setPushTtl] = useState<PushTtlValue>("24h");
   const [mediaItems, setMediaItems] = useState<MediaSlot[]>([]);
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [isProofreading, setIsProofreading] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [selectionToast, setSelectionToast] = useState<{ start: number; end: number; x?: number; y?: number } | null>(null);
+  const [proofreadDisclosureOpen, setProofreadDisclosureOpen] = useState(false);
   const [error, setError] = useState("");
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStartPos, setMentionStartPos] = useState(0);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+  const [editHydratedForId, setEditHydratedForId] = useState<string | null>(null);
+  /** Один раз подтянуть текст/медиа с сервера на этот id; refetch поста не должен затирать локально добавленные файлы. */
+  const editContentHydratedForPostIdRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
   const isNativePlatform = isNative();
   const useBottomSelectionBar = isNativePlatform || isMobile;
@@ -155,8 +218,8 @@ export default function CreatePost() {
     const aspects = imageItems.map((s) => (typeof s.aspectRatio === "number" && Number.isFinite(s.aspectRatio) ? s.aspectRatio : 1));
     return buildPostMediaLayout(aspects);
   })();
-  const canPublish = (text.trim().length > 0 || mediaUrls.length > 0) && !isPublishing && !hasUploading;
   const pulseMobile = isMobile;
+  const showLinkEmbedRow = Boolean(extractFirstExternalVideoUrl(text.trim()));
 
   const pulseHandleLine =
     user?.nickname?.trim() != null && user.nickname.trim() !== ""
@@ -171,6 +234,23 @@ export default function CreatePost() {
     staleTime: 60_000,
     enabled: !!user,
   });
+  const { data: pushQuota } = useQuery({
+    queryKey: ["push", "quota"],
+    queryFn: fetchMyPushQuota,
+    staleTime: 15_000,
+    enabled: !!user?.id && !isEditMode,
+  });
+  const pushQuotaRemaining = pushQuota?.remaining ?? 3;
+  const pushQuotaMax = pushQuota?.maxPerDay ?? 3;
+  const pushSubscribersInFeed = pushQuota?.subscribersInFeed ?? 0;
+  const pushNotifyRecipients = pushQuota?.notifyRecipients ?? 0;
+  const pushAudienceCopy = describePushAudience(pushSubscribersInFeed, pushNotifyRecipients);
+  const isPushQuotaExceeded = sendToPush && pushQuotaRemaining <= 0;
+  const canPublish =
+    (text.trim().length > 0 || mediaUrls.length > 0 || Boolean(presetEdgeId)) &&
+    !isPublishing &&
+    !hasUploading &&
+    (!sendToPush || (pushQuota?.remaining ?? 3) > 0);
   const mentionMembers: ApiChatMember[] = mentionContacts.map((c) => ({
     id: c.id,
     publicId: c.publicId,
@@ -178,6 +258,94 @@ export default function CreatePost() {
     surname: c.surname,
     avatarUrl: c.avatarUrl,
   }));
+
+  const {
+    data: postToEdit,
+    isLoading: postEditLoading,
+    isError: postEditQueryFailed,
+    error: postEditQueryError,
+  } = useQuery({
+    queryKey: ["post", editPostId],
+    queryFn: () => fetchPost(editPostId),
+    enabled: Boolean(editPostId && user?.id),
+    staleTime: 60_000,
+  });
+
+  const prevEditPostIdRef = useRef<string>("");
+  useEffect(() => {
+    if (prevEditPostIdRef.current && !editPostId) {
+      setText("");
+      setLinkEmbedEnabled(true);
+      setSendToPush(false);
+      setPushTtl("24h");
+      setMediaItems([]);
+      setError("");
+      editContentHydratedForPostIdRef.current = null;
+      setEditHydratedForId(null);
+    }
+    prevEditPostIdRef.current = editPostId;
+  }, [editPostId]);
+
+  useEffect(() => {
+    if (!editPostId) {
+      editContentHydratedForPostIdRef.current = null;
+      setEditHydratedForId(null);
+      return;
+    }
+    if (authLoading) return;
+    if (!user?.id) {
+      toast({ title: "Войдите, чтобы редактировать пост", variant: "destructive" });
+      setLocation("/posts");
+      return;
+    }
+    if (postEditQueryFailed) {
+      const msg =
+        postEditQueryError instanceof Error ? postEditQueryError.message : "Не удалось загрузить пост";
+      toast({ title: msg, variant: "destructive" });
+      setLocation("/posts");
+      return;
+    }
+    if (postEditLoading) return;
+    if (!postToEdit) {
+      toast({ title: "Пост не найден", variant: "destructive" });
+      setLocation("/posts");
+      return;
+    }
+    if (postToEdit.authorId !== user.id) {
+      toast({ title: "Можно редактировать только свой пост", variant: "destructive" });
+      setLocation("/posts");
+      return;
+    }
+    if (editContentHydratedForPostIdRef.current === editPostId) return;
+    setText((postToEdit.text ?? "").slice(0, MAX_CHARS));
+    const urls = postToEdit.mediaUrls?.length
+      ? postToEdit.mediaUrls
+      : postToEdit.imageUrl
+        ? [postToEdit.imageUrl]
+        : [];
+    setMediaItems(
+      urls.map((url) => ({
+        type: "done" as const,
+        url,
+        kind: inferMediaKindFromUrl(url),
+      })),
+    );
+    setLinkEmbedEnabled(postToEdit.linkEmbedEnabled !== false);
+    setError("");
+    editContentHydratedForPostIdRef.current = editPostId;
+    setEditHydratedForId(editPostId);
+    // editHydratedForId не в deps: иначе лишние проходы эффекта; guard только через ref выше.
+  }, [
+    editPostId,
+    authLoading,
+    user?.id,
+    postEditLoading,
+    postEditQueryFailed,
+    postEditQueryError,
+    postToEdit,
+    toast,
+    setLocation,
+  ]);
 
   const insertPostMention = useCallback(
     (member: ApiChatMember) => {
@@ -213,15 +381,44 @@ export default function CreatePost() {
     [text, toast, mentionStartPos],
   );
 
+  const draftStorageKey = useMemo(() => createPostDraftStorageKey(presetEdgeId), [presetEdgeId]);
+  useEffect(() => {
+    if (!extractFirstExternalVideoUrl(text.trim())) setLinkEmbedEnabled(true);
+  }, [text]);
+
   const { clearDraft } = useCreatePostDraft(
+    draftStorageKey,
     MAX_CHARS,
     MAX_MEDIA,
     text,
     setText,
     mediaItems,
     setMediaItems,
-    toast
+    toast,
+    { skip: isEditMode },
   );
+
+  const leaveCreatePost = useCallback(
+    (path: string) => {
+      if (!isEditMode) {
+        clearDraft();
+        setText("");
+        setLinkEmbedEnabled(true);
+        setSendToPush(false);
+        setPushTtl("24h");
+        setMediaItems([]);
+        setShowPreview(false);
+        setError("");
+      }
+      setLocation(path);
+    },
+    [isEditMode, clearDraft, setLocation],
+  );
+
+  const showEditBlockingLoader =
+    Boolean(editPostId && user?.id) &&
+    (postEditLoading ||
+      (Boolean(postToEdit && user?.id && postToEdit.authorId === user.id) && editHydratedForId !== editPostId));
 
   useEffect(() => {
     if (!selectionToast) return;
@@ -311,7 +508,15 @@ export default function CreatePost() {
           setShowPreview(true);
           try {
             console.debug("[create-post] uploading video…", payload.file.name, payload.file.size);
-            const url = await uploadPostMedia(payload.file, trim);
+            const url = await uploadPostMedia(payload.file, trim, {
+              onProgress: (p) => {
+                setMediaItems((prev) =>
+                  prev.map((item) =>
+                    item.type === "uploading" && item.id === id ? { ...item, progress: p } : item,
+                  ),
+                );
+              },
+            });
             console.debug("[create-post] uploaded:", url);
             setMediaItems((prev) =>
               prev.map((item) =>
@@ -350,7 +555,15 @@ export default function CreatePost() {
           console.debug("[create-post] compressing…", file.name, file.type, file.size);
           const toUpload = file.type.startsWith("image/") ? await compressImage(file) : file;
           console.debug("[create-post] uploading…", toUpload.name, toUpload.size);
-          const url = await uploadPostMedia(toUpload);
+          const url = await uploadPostMedia(toUpload, undefined, {
+            onProgress: (p) => {
+              setMediaItems((prev) =>
+                prev.map((item) =>
+                  item.type === "uploading" && item.id === id ? { ...item, progress: p } : item,
+                ),
+              );
+            },
+          });
           console.debug("[create-post] uploaded:", url);
           setMediaItems((prev) =>
             prev.map((item) =>
@@ -410,7 +623,15 @@ export default function CreatePost() {
     try {
       const file = await dataUrlToFile(dataUrl);
       const toUpload = await compressImage(file);
-      const url = await uploadPostMedia(toUpload);
+      const url = await uploadPostMedia(toUpload, undefined, {
+        onProgress: (p) => {
+          setMediaItems((prev) =>
+            prev.map((item) =>
+              item.type === "uploading" && item.id === id ? { ...item, progress: p } : item,
+            ),
+          );
+        },
+      });
       setMediaItems((prev) =>
         prev.map((item) =>
           item.type === "uploading" && item.id === id ? { type: "done" as const, url, kind: "image" as const, aspectRatio } : item
@@ -473,7 +694,7 @@ export default function CreatePost() {
     setSelectionToast({ start, end, x, y });
   };
 
-  const handleProofread = async () => {
+  const runProofread = async () => {
     if (!text.trim()) {
       toast({ title: "Добавьте текст для проверки", variant: "destructive" });
       return;
@@ -490,9 +711,17 @@ export default function CreatePost() {
     }
   };
 
+  const handleProofread = async () => {
+    if (!hasAcceptedAiDisclosure("proofread")) {
+      setProofreadDisclosureOpen(true);
+      return;
+    }
+    await runProofread();
+  };
+
   const handlePublish = async () => {
     const trimmed = text.trim();
-    if (!trimmed && mediaUrls.length === 0) return;
+    if (!trimmed && mediaUrls.length === 0 && !presetEdgeId) return;
     const doneItems = mediaItems.filter((s): s is { type: "done"; url: string; kind: MediaKind; aspectRatio?: number | null } => s.type === "done");
     const imageItems = doneItems.filter((s) => s.kind === "image");
     let mediaLayout: PostMediaLayout | null = null;
@@ -503,48 +732,85 @@ export default function CreatePost() {
     setError("");
     setIsPublishing(true);
     try {
-      const created = await createPost({
-        text: trimmed,
-        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-        mediaLayout,
-        ...(presetEdgeId ? { edgeId: presetEdgeId } : {}),
-      });
-      if (user?.id) {
-        const channelName = [user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль";
-        const newPost: FeedPost = {
-          id: created.id,
-          authorId: user.id,
-          text: trimmed || "",
-          imageUrl: mediaUrls[0] ?? null,
-          mediaUrls: mediaUrls.length ? mediaUrls : null,
-          mediaLayout,
-          edgeId: presetEdgeId || null,
-          reactions: [],
-          myReaction: null,
-          viewsCount: 0,
-          createdAt: created.createdAt,
-          channelName,
-          author: {
-            id: user.id,
-            publicId: user.publicId ?? 0,
-            displayName: user.displayName ?? null,
-            surname: user.surname ?? null,
-            avatarUrl: user.avatarUrl ?? null,
-          },
-          commentsCount: 0,
-        };
-        queryClient.setQueryData<FeedPost[]>(["posts", "author", user.id], (prev = []) => [newPost, ...prev]);
-        queryClient.setQueryData<FeedPost[]>(["posts", "feed"], (prev = []) => [newPost, ...prev]);
-        const fromServer = await fetchPostsByAuthor(user.id, 50);
-        if (fromServer.length > 0) {
-          queryClient.setQueryData(["posts", "author", user.id], fromServer);
-        }
-        await queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+      if (!isEditMode && sendToPush && isPushQuotaExceeded) {
+        throw new Error(`Лимит Push исчерпан: ${pushQuotaMax}/${pushQuotaMax} за 24 часа`);
       }
-      await queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
-      clearDraft();
-      toast({ title: "Пост опубликован" });
-      setLocation("/profile/me");
+      if (editPostId) {
+        await updatePost(editPostId, {
+          text: trimmed,
+          imageUrl: mediaUrls.length ? (mediaUrls[0] ?? null) : null,
+          mediaUrls: mediaUrls.length ? mediaUrls : null,
+          mediaLayout: mediaUrls.length ? mediaLayout : null,
+          linkEmbedEnabled,
+        });
+        // Сразу после ответа сервера: иначе ошибка invalidate/fetch ниже оставит старый черновик в localStorage.
+        clearDraft();
+        void queryClient.invalidateQueries({ queryKey: ["post", editPostId] });
+        void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+        if (user?.id) {
+          void queryClient.invalidateQueries({ queryKey: ["posts", "author", user.id] });
+        }
+        void queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
+        toast({ title: "Пост обновлён" });
+        setLocation(
+          buildProfilePostPath({
+            postId: editPostId,
+            linkCode: queryClient.getQueryData<FeedPost>(["post", editPostId])?.linkCode,
+            isMe: true,
+            publicId: user?.publicId,
+            userId: user?.id,
+            fallbackPath: "/posts",
+          }),
+        );
+      } else {
+        const created = await createPost({
+          text: trimmed,
+          mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+          mediaLayout,
+          ...(presetEdgeId ? { edgeId: presetEdgeId } : {}),
+          ...(linkEmbedEnabled === false ? { linkEmbedEnabled: false } : {}),
+          ...(sendToPush ? { sendToPush: true, pushTtl } : {}),
+        });
+        // Сразу после ответа сервера: иначе сбой fetchPostsByAuthor / invalidate оставляет черновик — при следующем входе снова «восстановление».
+        clearDraft();
+        if (user?.id) {
+          const channelName = [user.displayName, user.surname].filter(Boolean).join(" ") || "Профиль";
+          const newPost: FeedPost = {
+            id: created.id,
+            ...(created.linkCode ? { linkCode: created.linkCode } : {}),
+            authorId: user.id,
+            text: trimmed || "",
+            imageUrl: mediaUrls[0] ?? null,
+            mediaUrls: mediaUrls.length ? mediaUrls : null,
+            mediaLayout,
+            edgeId: presetEdgeId || null,
+            ...(linkEmbedEnabled === false ? { linkEmbedEnabled: false } : {}),
+            reactions: [],
+            myReaction: null,
+            viewsCount: 0,
+            createdAt: created.createdAt,
+            channelName,
+            author: {
+              id: user.id,
+              publicId: user.publicId ?? 0,
+              displayName: user.displayName ?? null,
+              surname: user.surname ?? null,
+              avatarUrl: user.avatarUrl ?? null,
+            },
+            commentsCount: 0,
+          };
+          queryClient.setQueryData<FeedPost[]>(["posts", "author", user.id], (prev = []) => [newPost, ...prev]);
+          queryClient.setQueryData<FeedPost[]>(["posts", "feed"], (prev = []) => [newPost, ...prev]);
+          const fromServer = await fetchPostsByAuthor(user.id, 50);
+          if (fromServer.length > 0) {
+            queryClient.setQueryData(["posts", "author", user.id], fromServer);
+          }
+          await queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+        }
+        await queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
+        toast({ title: sendToPush ? "Пост опубликован в Push" : "Пост опубликован" });
+        setLocation("/profile/me");
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Ошибка публикации";
       setError(message);
@@ -575,13 +841,20 @@ export default function CreatePost() {
       exit={{ y: "100%" }}
       transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
     >
+      {showEditBlockingLoader ? (
+        <div className="absolute inset-0 z-[120] flex flex-col bg-background">
+          <LoadingProgress loading minHeight="100%" className="flex flex-1 flex-col justify-center">
+            <p className="uix-content-x pb-4 text-center text-sm text-muted-foreground">Загружаем пост…</p>
+          </LoadingProgress>
+        </div>
+      ) : null}
       {!pulseMobile ? (
         <div className="glass uix-content-x pt-safe-offset-2 pb-[var(--uix-space-3)] border-b border-border/50 z-10 sticky top-0">
           <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-[var(--uix-space-2)]">
             <div className="flex justify-start min-w-0">
               <TapScaleButton
                 type="button"
-                onClick={() => setLocation("/posts")}
+                onClick={() => leaveCreatePost("/posts")}
                 haptic
                 subtle
                 className="text-foreground hover:bg-secondary px-2 py-2 -ml-2 rounded-full transition-colors font-medium text-[15px] leading-none min-h-[var(--uix-touch-min)] flex items-center shrink-0"
@@ -591,7 +864,7 @@ export default function CreatePost() {
               </TapScaleButton>
             </div>
             <h1 className="text-center text-[17px] font-semibold leading-tight tracking-tight text-foreground truncate max-w-[min(200px,46vw)]">
-              Новая запись
+              {isEditMode ? "Редактирование" : "Новая запись"}
             </h1>
             <div className="flex justify-end min-w-0">
               <TapScaleButton
@@ -606,14 +879,14 @@ export default function CreatePost() {
                     : "bg-secondary text-muted-foreground cursor-not-allowed"
                 )}
               >
-                {isPublishing ? "Публикуем…" : "Опубликовать"}
+                {isPublishing ? (isEditMode ? "Сохраняем…" : "Публикуем…") : isEditMode ? "Сохранить" : "Опубликовать"}
               </TapScaleButton>
             </div>
           </div>
         </div>
       ) : null}
 
-      {presetEdgeId ? (
+      {presetEdgeId && !isEditMode && !pulseMobile ? (
         <div
           className="border-b border-primary/25 bg-primary/10 uix-content-x py-2.5"
           role="status"
@@ -627,7 +900,7 @@ export default function CreatePost() {
 
       {pulseMobile ? (
         <CreatePostPulseMobile
-          onBack={() => setLocation("/posts")}
+          onBack={() => leaveCreatePost("/posts")}
           displayName={displayName || "Профиль"}
           handleLine={pulseHandleLine}
           avatarUrl={user?.avatarUrl}
@@ -654,6 +927,23 @@ export default function CreatePost() {
           imageInputRef={imageInputRef}
           videoInputRef={videoInputRef}
           onFileChange={(e) => void handleFileChange(e)}
+          headerTitle={isEditMode ? "Редактировать" : undefined}
+          publishButtonLabel={isEditMode ? "Сохранить" : undefined}
+          publishingButtonLabel={isEditMode ? "Сохраняем…" : undefined}
+          isEditMode={isEditMode}
+          edgeCampaignId={!isEditMode ? presetEdgeId : undefined}
+          edgePreviewViewerId={user?.id ?? "guest"}
+          showLinkEmbedRow={showLinkEmbedRow}
+          linkEmbedEnabled={linkEmbedEnabled}
+          setLinkEmbedEnabled={setLinkEmbedEnabled}
+          sendToPush={sendToPush}
+          setSendToPush={setSendToPush}
+          pushTtl={pushTtl}
+          setPushTtl={setPushTtl}
+          pushQuotaRemaining={pushQuotaRemaining}
+          pushQuotaMax={pushQuotaMax}
+          pushSubscribersInFeed={pushSubscribersInFeed}
+          pushNotifyRecipients={pushNotifyRecipients}
         />
       ) : null}
 
@@ -696,17 +986,6 @@ export default function CreatePost() {
           >
             {text.length}/{MAX_CHARS}
           </span>
-        </div>
-        <div className="rounded-2xl border border-border/60 bg-secondary/20 px-[var(--uix-space-4)] py-[var(--uix-space-3)] space-y-[var(--uix-space-2)]">
-          <p className="text-[13px] leading-snug text-foreground/90">
-            Текст, заголовки (выделите строки — H1/H2/H3) и медиа. На телефоне — галерея и камера; на ПК — выбор файлов.
-          </p>
-          <p className="uix-text-caption text-muted-foreground leading-relaxed">
-            Видео на сервере сжимается и обрезается до {POST_VIDEO_MAX_SECONDS} с. Слотов: {mediaCount}/{MAX_MEDIA} • Осталось: {availableMediaSlots}
-            {mediaUrls.length > MAX_MEDIA_PUBLISHED && (
-              <span className="ml-1 text-amber-600">• В пост попадёт {MAX_MEDIA_PUBLISHED}</span>
-            )}
-          </p>
         </div>
 
         {selectionToast && !showPreview && !pulseMobile && (
@@ -859,6 +1138,79 @@ export default function CreatePost() {
                   className="w-full bg-transparent border-none focus:ring-0 resize-none min-h-[min(200px,42vh)] text-[17px] leading-relaxed outline-none placeholder:text-muted-foreground"
                   autoFocus
                 />
+                {showLinkEmbedRow ? (
+                  <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-border/45 bg-muted/25 px-3 py-2">
+                    <span className="text-[11px] leading-snug text-muted-foreground">Превью видео по ссылке</span>
+                    <Switch
+                      checked={linkEmbedEnabled}
+                      onCheckedChange={setLinkEmbedEnabled}
+                      aria-label="Превью видео по ссылке в посте"
+                    />
+                  </div>
+                ) : null}
+                {!isEditMode ? (
+                  <div className="mt-2 rounded-xl border border-border/45 bg-muted/20 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold text-foreground">Отправить в Push</p>
+                        <p className="text-[11px] leading-snug text-muted-foreground">
+                          Осталось {pushQuotaRemaining}/{pushQuotaMax} за 24 часа
+                        </p>
+                      </div>
+                      <Switch
+                        checked={sendToPush}
+                        onCheckedChange={setSendToPush}
+                        aria-label="Отправить пост в Push-ленту подписчикам"
+                      />
+                    </div>
+                    {sendToPush ? (
+                      <>
+                        <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">{pushAudienceCopy.short}</p>
+                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                          {PUSH_TTL_ROW1.map((option) => (
+                            <TapScaleButton
+                              key={option.value}
+                              type="button"
+                              subtle
+                              onClick={() => setPushTtl(option.value)}
+                              className={cn(
+                                "flex min-h-[34px] w-full items-center justify-center whitespace-nowrap rounded-full border px-1 text-[11px] font-semibold",
+                                pushTtl === option.value
+                                  ? "bg-primary/12 border-primary/35 text-foreground"
+                                  : "bg-background border-border/50 text-muted-foreground",
+                              )}
+                            >
+                              {option.label}
+                            </TapScaleButton>
+                          ))}
+                        </div>
+                        <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                          {PUSH_TTL_ROW2.map((option) => (
+                            <TapScaleButton
+                              key={option.value}
+                              type="button"
+                              subtle
+                              onClick={() => setPushTtl(option.value)}
+                              className={cn(
+                                "flex min-h-[34px] w-full items-center justify-center whitespace-nowrap rounded-full border px-1 text-[11px] font-semibold",
+                                pushTtl === option.value
+                                  ? "bg-primary/12 border-primary/35 text-foreground"
+                                  : "bg-background border-border/50 text-muted-foreground",
+                              )}
+                            >
+                              {option.label}
+                            </TapScaleButton>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                    {isPushQuotaExceeded ? (
+                      <p className="mt-2 text-[11px] text-destructive">
+                        Достигнут лимит Push: максимум {pushQuotaMax} публикации за 24 часа.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="w-full min-h-[min(160px,36vh)] rounded-2xl border border-border/60 bg-secondary/20 px-[var(--uix-space-3)] py-[var(--uix-space-3)] text-[15px] leading-relaxed">
@@ -939,8 +1291,12 @@ export default function CreatePost() {
                       <img src={src} alt={`Медиа ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
                     )}
                     {uploading && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                        <div className="w-10 h-10 border-2 border-white/90 border-t-transparent rounded-full animate-spin" />
+                      <div className="absolute inset-0 bg-black/50 px-2">
+                        <UploadProgressMediaTileOverlay
+                          percent={slot.type === "uploading" ? slot.progress ?? null : null}
+                          reducedMotion={prefersReducedMotion}
+                          className="h-full w-full"
+                        />
                       </div>
                     )}
                     <button
@@ -1031,9 +1387,6 @@ export default function CreatePost() {
               <Files className="h-[18px] w-[18px]" />
             </TapScaleButton>
           </div>
-          <p className="mt-[var(--uix-space-2)] text-center uix-text-caption text-muted-foreground">
-            Свободных слотов: {availableMediaSlots}
-          </p>
         </div>
       </div>
       ) : null}
@@ -1053,18 +1406,24 @@ export default function CreatePost() {
               onClick={() => setShowMediaPicker(false)}
               aria-label="Закрыть выбор медиа"
             />
-            <motion.div
-              className="absolute inset-x-0 bottom-0 z-10 rounded-t-[1.25rem] border-t border-border/80 bg-background px-[var(--uix-space-3)] pt-[var(--uix-space-2)] pb-[calc(var(--uix-space-4)+env(safe-area-inset-bottom,0px))] shadow-2xl"
+            <MotionBottomSheetPanel
+              className="absolute inset-x-0 bottom-0 z-10 flex max-h-[min(92dvh,720px)] flex-col rounded-t-[1.25rem] border-t border-border/80 bg-background px-[var(--uix-space-3)] pt-[var(--uix-space-2)] pb-[calc(var(--uix-space-4)+env(safe-area-inset-bottom,0px))] shadow-2xl"
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
               transition={{ duration: prefersReducedMotion ? 0.05 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
+              disableSwipeDismiss={prefersReducedMotion}
+              onDismiss={() => setShowMediaPicker(false)}
+              dragHandle={
+                <>
+                  <div className="mx-auto mb-[var(--uix-space-3)] h-1 w-10 rounded-full bg-muted-foreground/20" aria-hidden />
+                  <p className="px-[var(--uix-space-2)] pb-[var(--uix-space-3)] text-[13px] font-semibold text-foreground">
+                    Источник медиа
+                  </p>
+                </>
+              }
             >
-            <div className="mx-auto mb-[var(--uix-space-3)] h-1 w-10 rounded-full bg-muted-foreground/20" aria-hidden />
-            <p className="px-[var(--uix-space-2)] pb-[var(--uix-space-3)] text-[13px] font-semibold text-foreground">
-              Источник медиа
-            </p>
-            <div className="flex flex-col gap-[var(--uix-space-1)]">
+            <MotionBottomSheetScrollArea className="flex min-h-0 flex-1 flex-col gap-[var(--uix-space-1)] overflow-y-auto overscroll-y-contain">
             {isNativePlatform && (
               <TapScaleButton
                 type="button"
@@ -1162,18 +1521,18 @@ export default function CreatePost() {
                 aria-label="Выбрать файлы медиа"
               />
             </label>
-            </div>
+            </MotionBottomSheetScrollArea>
 
             <TapScaleButton
               type="button"
               haptic
               subtle
-              className="mt-[var(--uix-space-3)] w-full rounded-xl border border-border/60 bg-secondary/45 px-[var(--uix-space-4)] py-[var(--uix-space-3)] text-[15px] font-medium min-h-[48px]"
+              className="mt-[var(--uix-space-3)] w-full shrink-0 rounded-xl border border-border/60 bg-secondary/45 px-[var(--uix-space-4)] py-[var(--uix-space-3)] text-[15px] font-medium min-h-[48px]"
               onClick={() => setShowMediaPicker(false)}
             >
               Отмена
             </TapScaleButton>
-            </motion.div>
+            </MotionBottomSheetPanel>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1184,6 +1543,31 @@ export default function CreatePost() {
         onOpenChange={handleVideoTrimOpenChange}
         onConfirm={handleVideoTrimConfirm}
       />
+
+      <AlertDialog open={proofreadDisclosureOpen} onOpenChange={setProofreadDisclosureOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>AI-корректура текста</AlertDialogTitle>
+            <AlertDialogDescription>
+              При проверке текста его содержимое отправляется на внешний AI-сервис (OpenRouter) для анализа и исправления.
+              Не отправляйте персональные или чувствительные данные, если не хотите передавать их третьей стороне.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                acceptAiDisclosure("proofread");
+                setProofreadDisclosureOpen(false);
+                void runProofread();
+              }}
+            >
+              Согласен, проверить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </motion.div>
   );
 }

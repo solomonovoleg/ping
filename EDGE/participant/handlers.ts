@@ -35,7 +35,9 @@ export async function getLeaderboard(req: Request, res: Response, next: NextFunc
       return;
     }
     const limit = Number(req.query.limit ?? 30);
-    const payload = await getCampaignLeaderboard(edgeId, userId, limit);
+    const kindRaw = String(req.query.kind ?? "primary").trim().toLowerCase();
+    const kind = kindRaw === "secondary" ? "secondary" : "primary";
+    const payload = await getCampaignLeaderboard(edgeId, userId, limit, kind);
     if (!payload) {
       res.status(503).json({ error: "edge_db_unavailable" });
       return;

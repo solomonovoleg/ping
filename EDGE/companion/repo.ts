@@ -8,6 +8,10 @@ export type EdgeCampaignRow = {
   status: string;
   gifts_json: unknown;
   leaderboard_global_enabled: boolean;
+  leaderboard_primary_enabled: boolean;
+  leaderboard_secondary_enabled: boolean;
+  primary_leaderboard_frozen_at: Date | null;
+  secondary_leaderboard_frozen_at: Date | null;
   follow_reward_enabled: boolean;
   creator_platform_user_id: string | null;
   config_json: unknown;
@@ -38,7 +42,8 @@ export async function findCampaignByPublicId(publicId: string): Promise<EdgeCamp
   try {
     const { rows } = await pool.query<EdgeCampaignRow>(
       `SELECT public_id, edge_type, title, status, gifts_json,
-              leaderboard_global_enabled, follow_reward_enabled,
+              leaderboard_global_enabled, leaderboard_primary_enabled, leaderboard_secondary_enabled,
+              primary_leaderboard_frozen_at, secondary_leaderboard_frozen_at, follow_reward_enabled,
               creator_platform_user_id, config_json
        FROM edge_campaigns
        WHERE public_id = $1

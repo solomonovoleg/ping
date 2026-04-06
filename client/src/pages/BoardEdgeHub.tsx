@@ -1,10 +1,7 @@
-import { ChevronLeft, Sparkles, LayoutList, PlusCircle } from "lucide-react";
+import { Banknote, ChevronLeft, LayoutList, Sparkles } from "lucide-react";
 import { useLocation } from "wouter";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 
-/**
- * Точка входа EDGE с Борда: каталог типов (пока один) и переход к управлению.
- */
 export default function BoardEdgeHub() {
   const [, setLocation] = useLocation();
 
@@ -23,16 +20,10 @@ export default function BoardEdgeHub() {
         </TapScaleButton>
         <div className="min-w-0 flex-1">
           <h1 className="uix-text-title">EDGE</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">Интерактив в ленте</p>
         </div>
       </header>
 
       <div className="uix-content-x flex flex-1 flex-col gap-4 py-6 pb-[calc(var(--uix-nav-bottom)+var(--uix-space-4))]">
-        <p className="uix-text-list-secondary text-muted-foreground">
-          Полный конструктор (персонаж, призы, задания, расписание) описан в репозитории:{" "}
-          <span className="font-mono text-[11px] text-foreground/80">docs/EDGE_BOARD_CREATOR_SPEC.md</span>
-        </p>
-
         <TapScaleButton
           type="button"
           haptic
@@ -40,12 +31,29 @@ export default function BoardEdgeHub() {
           className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-4 rounded-3xl border border-primary/25 bg-primary/10 p-5 text-left shadow-sm"
         >
           <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary/20 text-primary">
-            <PlusCircle className="h-7 w-7" aria-hidden />
+            <Sparkles className="h-7 w-7" aria-hidden />
           </div>
           <div className="min-w-0">
-            <h2 className="font-semibold text-foreground">Новый EDGE</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Каталог типов: пока доступен только «Персонаж». Мастер создания подключается поэтапно.
+            <h2 className="font-semibold text-foreground">EDGE — персонаж</h2>
+            <p className="mt-1 uix-text-caption leading-snug text-muted-foreground">
+              Тамагочи, тапы, задания — как раньше.
+            </p>
+          </div>
+        </TapScaleButton>
+
+        <TapScaleButton
+          type="button"
+          haptic
+          onClick={() => setLocation("/board/edge/new-money")}
+          className="flex min-h-[var(--uix-touch-min)] w-full items-center gap-4 rounded-3xl border border-emerald-500/25 bg-emerald-500/10 p-5 text-left shadow-sm dark:border-emerald-400/20 dark:bg-emerald-400/10"
+        >
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+            <Banknote className="h-7 w-7" aria-hidden />
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-semibold text-foreground">EDGE MONEY</h2>
+            <p className="mt-1 uix-text-caption leading-snug text-muted-foreground">
+              Рейтинг за действия в Пинге и призы по местам. Мастер с подсказками.
             </p>
           </div>
         </TapScaleButton>
@@ -61,23 +69,9 @@ export default function BoardEdgeHub() {
             <LayoutList className="h-7 w-7" aria-hidden />
           </div>
           <div className="min-w-0">
-            <h2 className="font-semibold text-foreground">Мои кампании</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Черновики, активные и завершённые; участники и ручной розыгрыш (через админку).
-            </p>
+            <h2 className="font-semibold text-foreground">МОИ EDGE</h2>
           </div>
         </TapScaleButton>
-
-        <div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4">
-          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Sparkles className="h-4 w-4 text-primary" aria-hidden />
-            Каталог типов
-          </div>
-          <ul className="mt-2 space-y-1 uix-text-caption text-muted-foreground">
-            <li>• Персонаж — тамагочи, лидерборд, призы (уже в продукте)</li>
-            <li>• Остальные типы — в плане (`docs/EDGE_PRODUCT_SPEC.md`)</li>
-          </ul>
-        </div>
       </div>
     </div>
   );

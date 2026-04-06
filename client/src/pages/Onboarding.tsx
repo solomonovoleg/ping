@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
+import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AvatarCropModal } from "@/components/AvatarCropModal";
@@ -19,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { Gender } from "@shared/schema";
 import { NAME_MAX_LENGTH } from "@shared/schema";
 import { FormError } from "@/components/ui/form-error";
+import { consumePendingAuthReturn } from "@/lib/auth-return-path";
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "Мужской" },
@@ -88,7 +90,7 @@ export default function Onboarding() {
       });
       setUserFromLogin(updated);
       await refetch();
-      setLocation("/");
+      setLocation(consumePendingAuthReturn("/posts"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка");
     } finally {
@@ -103,7 +105,7 @@ export default function Onboarding() {
 
   return (
     <div className="h-[100dvh] min-h-0 w-full max-w-full overflow-x-hidden overflow-y-hidden flex flex-col bg-background">
-      <header className="shrink-0 flex items-center justify-end py-3 px-4 border-b border-border/30">
+      <header className="shrink-0 flex items-center justify-end py-3 border-b border-border/30">
         <button
           type="button"
           onClick={handleLogout}
@@ -115,7 +117,7 @@ export default function Onboarding() {
         </button>
       </header>
       <div
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col items-center p-4 pb-[max(2rem,env(safe-area-inset-bottom,0px)+1rem)]"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col items-center py-4 pb-[max(2rem,env(safe-area-inset-bottom,0px)+1rem)]"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
       <div className="w-full max-w-[340px] flex flex-col items-center gap-6">
@@ -222,13 +224,14 @@ export default function Onboarding() {
             </div>
           </div>
           {error && <FormError message={error} />}
-          <Button
+          <TapScaleButton
             type="submit"
-            className="w-full"
+            haptic
+            className="w-full min-h-[var(--uix-touch-min)] rounded-lg text-[length:var(--uix-text-input)] font-semibold shadow-none hover:opacity-95 inline-flex items-center justify-center bg-primary text-primary-foreground disabled:opacity-50 disabled:pointer-events-none"
             disabled={loading || uploadingAvatar || !displayName.trim() || !surname.trim() || !gender}
           >
             {loading ? "Сохранение..." : "Продолжить"}
-          </Button>
+          </TapScaleButton>
         </form>
       </div>
       </div>

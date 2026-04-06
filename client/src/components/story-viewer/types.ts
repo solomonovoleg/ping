@@ -10,12 +10,23 @@ export interface Story {
   expiresAt?: string;
   likesCount?: number;
   isLiked?: boolean;
+  /** Подпись с @упоминаниями (как в постах). */
+  caption?: string | null;
 }
+
+export type StoryViewerAnalyticsEvent =
+  | { type: "first_frame"; storyId: string; msSinceOpen: number }
+  | { type: "slide_changed"; fromIndex: number; toIndex: number; storyId: string }
+  | { type: "closed"; lastIndex: number; storyCount: number; sessionMs: number };
 
 export interface StoryViewerProps {
   stories: Story[];
   initialIndex?: number;
   onClose: () => void;
+  /** Ключ для восстановления позиции в цепочке (sessionStorage). */
+  sessionResumeKey?: string;
+  /** Внутренняя аналитика качества просмотра (опционально). */
+  onStoryViewerAnalytics?: (event: StoryViewerAnalyticsEvent) => void;
   viewerUserId?: string;
   onStoryView?: (storyId: string) => void;
   onOpenViewers?: (storyId: string) => void;

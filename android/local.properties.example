@@ -1,5 +1,14 @@
-# Скопируй в local.properties и укажи путь к Android SDK.
-# После установки Android Studio SDK обычно здесь:
+# Скопируй в local.properties и укажи путь к Android SDK (файл local.properties в git не коммитится).
+#
+# Вариант 1 — Android Studio:
 #   Mac: /Users/ТВОЙ_ЛОГИН/Library/Android/sdk
 #   Linux: /home/ТВОЙ_ЛОГИН/Android/Sdk
+#
+# Вариант 2 — только CLI (Homebrew Intel Mac):
+#   brew install --cask android-commandlinetools
+#   затем sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+#   sdk.dir=/usr/local/share/android-commandlinetools
+#
+# Вариант 2 — Apple Silicon (Homebrew):
+#   sdk.dir=/opt/homebrew/share/android-commandlinetools
 sdk.dir=/Users/admin/Library/Android/sdk

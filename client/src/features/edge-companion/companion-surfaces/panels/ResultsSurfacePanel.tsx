@@ -32,7 +32,7 @@ export function ResultsSurfacePanel({ staticConfig, live }: Props) {
         <ListEmptyState
           icon={Trophy}
           title="Итоги и розыгрыши"
-          description="После розыгрыша в админке победители появятся здесь автоматически. Текст «следующий розыгрыш» можно задать в настройках companion."
+          description="Когда пройдёт розыгрыш, победители появятся здесь. Организатор может добавить подсказку о следующем этапе."
           className={`${EDGE_CARD} min-h-[200px]`}
         />
       </div>
@@ -44,7 +44,7 @@ export function ResultsSurfacePanel({ staticConfig, live }: Props) {
       className="uix-content-x box-border min-h-full space-y-[var(--uix-space-4)] pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]"
       aria-label="Итоги кампании"
     >
-      <h2 className="font-edge-pet px-0.5 text-xl font-semibold leading-tight text-foreground">
+      <h2 className="font-edge-pet rounded-2xl border border-primary/15 bg-gradient-to-r from-primary/12 to-transparent px-4 py-3 text-xl font-semibold leading-tight text-foreground dark:from-primary/14">
         Итоги
       </h2>
 
@@ -52,14 +52,14 @@ export function ResultsSurfacePanel({ staticConfig, live }: Props) {
         <div className={`${EDGE_CARD} space-y-[var(--uix-space-3)]`}>
           <div className="flex items-center gap-2 uix-text-caption font-semibold text-primary">
             <Sparkles className="h-4 w-4 shrink-0" aria-hidden />
-            Последний розыгрыш (из базы EDGE)
+            Последний розыгрыш
           </div>
           <p className="uix-text-caption text-muted-foreground">{formatDrawnAt(live.drawnAt)}</p>
           <ul className="space-y-2">
             {live.winners.map((w) => (
               <li
                 key={`${w.platformUserId}-${w.giftKey}`}
-                className="flex flex-col gap-0.5 rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-0.5 rounded-xl border border-primary/18 bg-gradient-to-r from-primary/10 to-transparent px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between dark:from-primary/12"
               >
                 <span className="font-medium text-foreground">{w.giftLabel}</span>
                 <span className="uix-text-caption text-muted-foreground">
@@ -73,10 +73,10 @@ export function ResultsSurfacePanel({ staticConfig, live }: Props) {
 
       {hasStatic && staticConfig ? (
         <div className={`${EDGE_CARD} space-y-[var(--uix-space-4)]`}>
-          <p className="uix-text-caption font-semibold text-muted-foreground">От создателя</p>
+          <p className="uix-text-caption font-semibold text-primary/90">От организатора</p>
           {staticConfig.lastDrawSummary ? (
             <p className="uix-text-list-secondary leading-relaxed text-foreground/90">
-              <span className="font-semibold text-foreground">Комментарий: </span>
+              <span className="font-semibold text-foreground">Коротко о прошлом этапе: </span>
               {staticConfig.lastDrawSummary}
             </p>
           ) : null}
@@ -93,7 +93,7 @@ export function ResultsSurfacePanel({ staticConfig, live }: Props) {
               {staticConfig.winners.map((w, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2 rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5"
+                  className="flex items-start gap-2 rounded-xl border border-primary/16 bg-gradient-to-r from-primary/8 to-transparent px-3 py-2.5 dark:from-primary/10"
                 >
                   <Trophy className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
                   <div className="min-w-0">

@@ -4,7 +4,7 @@
 
 | Функция      | БД (таблица)   | Модуль сервера        | API                          | Клиент                    |
 |-------------|-----------------|------------------------|------------------------------|---------------------------|
-| **Комментарии** | ✅ `post_comments` | ✅ `server/comments/routes.ts` (~105 строк) | GET/POST `/api/posts/:postId/comments` | CommentsModal, от имени пользователя |
+| **Комментарии** | ✅ `post_comments` | ✅ `server/features/comments/` (5 подпапок, см. README) | GET/POST/DELETE `/api/posts/:postId/comments` | `client/src/features/comments/`, `CommentsModal`, `lib/comments.ts` |
 | **Лайки (реакции)** | ✅ `post_reactions` | ✅ `server/reactions/routes.ts` (~55 строк) | GET в ленте, POST/DELETE `/api/posts/:postId/reactions` | Посты + профиль: выбор эмодзи, сохранение в БД |
 | **Сториз**  | ✅ `stories`    | ✅ `server/stories/` (routes thin + service) | GET `/api/users/:userId/stories`, POST/DELETE `/api/stories`, feed, viewers | Профиль: загрузка сториз по пользователю |
 

@@ -20,7 +20,7 @@ export function CallHistoryListPage() {
         <TapScaleButton type="button" onClick={() => setLocation("/board")} subtle className="p-2 -ml-2 rounded-full" aria-label="Назад">
           <ChevronLeft className="w-6 h-6" />
         </TapScaleButton>
-        <h1 className="uix-text-title">История звонков</h1>
+        <h1 className="uix-text-title">Журнал созвонов</h1>
       </div>
       <div className="flex-1 overflow-y-auto pb-[var(--uix-nav-bottom)]">
         {isLoading && (
@@ -28,7 +28,12 @@ export function CallHistoryListPage() {
         )}
         {error && <ErrorWithRetry title="Не удалось загрузить историю" description="Попробуйте ещё раз" onRetry={() => refetch()} className="border-none" />}
         {!isLoading && !error && data.length === 0 && (
-          <ListEmptyState icon={Captions} title="История звонков пуста" description="Здесь появятся расшифровки завершённых созвонов." className="border-none" />
+          <ListEmptyState
+            icon={Captions}
+            title="Пока пусто"
+            description="Здесь появятся созвоны с титрами. Тот же журнал открывается из чата: Ещё → Журнал созвонов."
+            className="border-none"
+          />
         )}
         {!isLoading && !error && data.length > 0 && (
           <ul className="divide-y divide-border/40">

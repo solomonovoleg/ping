@@ -1,579 +1,178 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { flushSync } from "react-dom";
-import { useLocation, useParams } from "wouter";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchUserProfile, fetchProfilePage, followUser, unfollowUser, type PublicProfile } from "@/lib/users";
-import { startDm } from "@/lib/search";
+import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { PublicProfile } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { fetchPostsByAuthor, type FeedPost } from "@/lib/posts";
-import {
-  archiveStory,
-  deleteStory,
-  fetchStoriesByUser,
-  createStory,
-  fetchStoryViewers,
-  likeStory,
-  unlikeStory,
-  type StoryItem,
-  type StoryExpiresHours,
-} from "@/lib/stories";
-import { sendMessage, uploadChatMedia } from "@/lib/chat";
-import { isNavigatorShareCancelled } from "@/lib/navigator-share";
-import { playLikeActionSound } from "@/lib/send-sound";
-import { userProfileRu } from "./i18n.ru";
-import { parseProfilePagePayload } from "./model/parse-profile-page";
+import type { FeedPost } from "@/lib/posts";
+import type { StoryItem } from "@/lib/stories";
+import { buildUserProfilePageResult } from "./model/build-user-profile-page-result";
 import { deriveUserProfileLayoutFields } from "./model/derive-user-profile-layout";
-import { useUserProfilePostMutations } from "./hooks/useUserProfilePostMutations";
-
-const t = userProfileRu;
+import { useUserProfileActionBundle } from "./hooks/useUserProfileActionBundle";
+import { useUserProfileDerivedPosts } from "./hooks/useUserProfileDerivedPosts";
+import { useUserProfileLocalState } from "./hooks/useUserProfileLocalState";
+import { useUserProfileOtherProfileState } from "./hooks/useUserProfileOtherProfileState";
+import { useUserProfileQueries } from "./hooks/useUserProfileQueries";
+import { useUserProfileRouteState } from "./hooks/useUserProfileRouteState";
+import { useUserProfileStoryState } from "./hooks/useUserProfileStoryState";
+import { useUserProfileUiEffects } from "./hooks/useUserProfileUiEffects";
 
 export function useUserProfilePage(paramsProp?: { id: string }) {
-  const [, setLocation] = useLocation();
-  const paramsFromRoute = useParams<{ id?: string }>();
-  const fromPath =
-    typeof window !== "undefined"
-      ? (window.location.pathname.match(/^\/(?:profile|id)\/([^/?#]+)/)?.[1] ?? "")
-      : "";
-  const id = (paramsProp?.id ?? paramsFromRoute?.id ?? fromPath) ?? "";
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"posts" | "saved" | "tagged">("posts");
-  const [postViewMode, setPostViewMode] = useState<"list" | "grid">("list");
-  const [pulseAvatarMenuOpen, setPulseAvatarMenuOpen] = useState(false);
-  const [profileMoreOpen, setProfileMoreOpen] = useState(false);
-  const pulseScrollRef = useRef<HTMLDivElement>(null);
-  const [activeStoryIndex, setActiveStoryIndex] = useState<number | null>(null);
-  const [activeCommentPostId, setActiveCommentPostId] = useState<string | null>(null);
-  const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
-  const [apiProfile, setApiProfile] = useState<PublicProfile | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileError, setProfileError] = useState(false);
-  const [pagePosts, setPagePosts] = useState<FeedPost[]>([]);
-  const [pageStories, setPageStories] = useState<StoryItem[]>([]);
-  const [followLoading, setFollowLoading] = useState(false);
-  const [addingStory, setAddingStory] = useState(false);
-  const [coverLoadError, setCoverLoadError] = useState(false);
-  const [activeViewersStoryId, setActiveViewersStoryId] = useState<string | null>(null);
-  const [pendingStoryFile, setPendingStoryFile] = useState<File | null>(null);
-  const [showStoryDurationPicker, setShowStoryDurationPicker] = useState(false);
-  const [storyExpiresInHours, setStoryExpiresInHours] = useState<StoryExpiresHours>(24);
-  const [likedStoryIds, setLikedStoryIds] = useState<Record<string, boolean>>({});
-  const [likesCountByStoryId, setLikesCountByStoryId] = useState<Record<string, number>>({});
-  const avatarLongPressTimerRef = useRef<number | null>(null);
-  const avatarLongPressHandledRef = useRef(false);
-  const storyFileInputRef = useRef<HTMLInputElement>(null);
-  const [profilePinAdd, setProfilePinAdd] = useState<
-    { kind: "post"; post: FeedPost } | { kind: "story"; storyId: string } | null
-  >(null);
-  const clearProfilePinAdd = useCallback(() => setProfilePinAdd(null), []);
+  const local = useUserProfileLocalState();
 
   const { user, isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
-  const normalizedRouteId = id.trim().replace(/^@+/, "");
-  const hasInvalidRouteId = !normalizedRouteId || ["undefined", "null", "nan"].includes(normalizedRouteId.toLowerCase());
-  const isMe = id === "me";
-  const authorId = isMe ? user?.id : apiProfile?.id;
-  const authorIdReady = isMe ? authLoading === false : !!apiProfile;
+  const { id, setLocation, normalizedRouteId, hasInvalidRouteId, isMe } = useUserProfileRouteState({
+    paramsProp,
+    me: user,
+    authLoading,
+  });
+  const authorId = isMe ? user?.id : local.apiProfile?.id;
+  const authorIdReady = isMe ? authLoading === false : !!local.apiProfile;
 
-  useEffect(() => {
-    if (hasInvalidRouteId) setLocation("/posts");
-  }, [hasInvalidRouteId, setLocation]);
-
-  useEffect(() => {
-    setCoverLoadError(false);
-  }, [isMe ? (user as { coverUrl?: string | null })?.coverUrl : apiProfile?.coverUrl]);
-
-  const {
-    data: queryPosts = [],
-    isFetching: postsFetching,
-    isError: postsError,
-    error: postsErrorDetail,
-    refetch: refetchPosts,
-  } = useQuery({
-    queryKey: ["posts", "author", authorId],
-    queryFn: () => fetchPostsByAuthor(authorId!, 50),
-    enabled: !!authorId && isMe,
-    refetchOnMount: "always",
-    staleTime: 0,
+  useUserProfileUiEffects({
+    hasInvalidRouteId,
+    setLocation,
+    isMe,
+    ownCoverUrl: (user as { coverUrl?: string | null })?.coverUrl,
+    otherCoverUrl: local.apiProfile?.coverUrl,
+    setCoverLoadError: local.setCoverLoadError,
   });
 
-  const { data: myProfileStats } = useQuery({
-    queryKey: ["profile", "me", user?.id],
-    queryFn: () => fetchUserProfile(user!.id),
-    enabled: isMe && !!user?.id,
+  const queries = useUserProfileQueries({
+    authorId,
+    isMe,
+    userId: user?.id,
+    activeViewersStoryId: local.activeViewersStoryId,
   });
 
-  const { data: queryStories = [], refetch: refetchStories } = useQuery({
-    queryKey: ["stories", authorId],
-    queryFn: () => fetchStoriesByUser(authorId!),
-    enabled: !!authorId && isMe,
+  const profilePinnedPostId = isMe
+    ? (queries.myProfileStats?.pinnedPostId ?? null)
+    : (local.apiProfile?.pinnedPostId ?? null);
+
+  const derivedPosts = useUserProfileDerivedPosts({
+    isMe,
+    queryPosts: queries.queryPosts,
+    pagePosts: local.pagePosts,
+    profilePinnedPostId,
+    savedPostsForCommentLookup: queries.savedPostsForCommentLookup,
   });
 
-  const profilePosts = isMe ? queryPosts : pagePosts;
-  const apiStories = isMe ? queryStories : pageStories;
-  const hasStories = (apiStories ?? []).length > 0;
-  const storyViewersCountById = (apiStories ?? []).reduce<Record<string, number>>((acc, s) => {
-    acc[s.id] = Number((s as { viewsCount?: number }).viewsCount ?? 0);
-    return acc;
-  }, {});
-
-  useEffect(() => {
-    const nextLiked: Record<string, boolean> = {};
-    const nextLikesCount: Record<string, number> = {};
-    for (const story of apiStories ?? []) {
-      nextLiked[story.id] = story.isLiked === true;
-      nextLikesCount[story.id] = Number(story.likesCount ?? 0);
-    }
-    setLikedStoryIds(nextLiked);
-    setLikesCountByStoryId(nextLikesCount);
-  }, [apiStories]);
-
-  const { data: activeStoryViewers = [], isLoading: activeStoryViewersLoading } = useQuery({
-    queryKey: ["stories", "viewers", activeViewersStoryId],
-    queryFn: () => fetchStoryViewers(activeViewersStoryId!),
-    enabled: !!activeViewersStoryId && isMe,
+  const storyState = useUserProfileStoryState({
+    isMe,
+    queryStories: queries.queryStories,
+    pageStories: local.pageStories,
   });
 
-  const { reactionMutation, deletePostMutation, savePostMutation } = useUserProfilePostMutations(toast);
+  const { refetchOtherProfile, otherProfileBackgroundRefreshing } = useUserProfileOtherProfileState({
+    id,
+    isMe,
+    hasInvalidRouteId,
+    authLoading,
+    normalizedRouteId,
+    setApiProfile: local.setApiProfile,
+    setPagePosts: local.setPagePosts,
+    setPageStories: local.setPageStories,
+    setProfileError: local.setProfileError,
+    setProfileNotFound: local.setProfileNotFound,
+    setSoftRefreshError: local.setSoftRefreshError,
+    setProfileLoading: local.setProfileLoading,
+  });
 
-  useEffect(() => {
-    if (isMe || !id.trim()) return;
-    setProfileLoading(true);
-    setProfileError(false);
-    setPagePosts([]);
-    setPageStories([]);
-    fetchProfilePage(id, 50)
-      .then((data) => {
-        try {
-          const parsed = parseProfilePagePayload(data);
-          if (!parsed) {
-            setProfileError(true);
-            return;
-          }
-          flushSync(() => {
-            setApiProfile(parsed.profile);
-            setPagePosts(parsed.posts);
-            setPageStories(parsed.stories);
-          });
-        } catch {
-          setProfileError(true);
-        }
-      })
-      .catch(() => setProfileError(true))
-      .finally(() => setProfileLoading(false));
-  }, [isMe, id]);
-
-  const handleCopyLink = useCallback(() => {
-    const base = typeof window !== "undefined" ? window.location.origin : "";
-    const segment = isMe
-      ? String(user?.publicId ?? "me")
-      : apiProfile?.publicId != null
-        ? String(apiProfile.publicId)
-        : normalizedRouteId;
-    const url = `${base}/profile/${segment}`;
-    if (!navigator.clipboard?.writeText) {
-      toast({ title: t.toast.copyUnavailable, variant: "destructive" });
-      return;
-    }
-    navigator.clipboard
-      .writeText(url)
-      .then(() => {
-        toast({ title: t.toast.linkCopied });
-      })
-      .catch(() => {
-        toast({ title: t.toast.copyLinkFailed, variant: "destructive" });
-      });
-  }, [apiProfile?.publicId, isMe, normalizedRouteId, toast, user?.publicId]);
-
-  const handleFollowToggle = useCallback(async () => {
-    if (!apiProfile || followLoading) return;
-    setFollowLoading(true);
-    const prevProfile = apiProfile;
-    try {
-      if (apiProfile.isFollowing) {
-        await unfollowUser(apiProfile.id);
-        toast({ title: t.toast.unsubscribed, duration: 2200 });
-        setApiProfile((p) =>
-          p
-            ? {
-                ...p,
-                isFollowing: false,
-                isMutualFollow: false,
-                followersCount: Math.max(0, (p.followersCount ?? 0) - 1),
-              }
-            : p,
-        );
-      } else {
-        await followUser(apiProfile.id);
-        toast({ title: t.toast.subscribed, duration: 2200 });
-        setApiProfile((p) =>
-          p
-            ? {
-                ...p,
-                isFollowing: true,
-                isInMyContacts: true,
-                isMutualFollow: !!p.isFollowedByTarget,
-                followersCount: (p.followersCount ?? 0) + 1,
-              }
-            : p,
-        );
-      }
-      queryClient.invalidateQueries({ queryKey: ["posts"] });
-      queryClient.invalidateQueries({ queryKey: ["contacts"] });
-      void fetchProfilePage(id, 50).then((pack) => {
-        if (!pack?.profile) return;
-        flushSync(() => {
-          setApiProfile(pack.profile);
-          if (!isMe) {
-            setPagePosts(pack.posts);
-            setPageStories(Array.isArray(pack.stories) ? (pack.stories as StoryItem[]) : []);
-          }
-        });
-      });
-    } catch (e) {
-      setApiProfile(prevProfile);
-      toast({ title: e instanceof Error ? e.message : t.toast.genericError, variant: "destructive" });
-    } finally {
-      setFollowLoading(false);
-    }
-  }, [apiProfile, followLoading, id, isMe, queryClient, toast]);
-
-  const handleStartChat = useCallback(async () => {
-    if (!apiProfile?.canMessage) return;
-    try {
-      const chat = await startDm(apiProfile.id);
-      setLocation(`/chat/${encodeURIComponent(chat.id)}`);
-    } catch (e) {
-      toast({ title: e instanceof Error ? e.message : t.toast.chatStartFailed, variant: "destructive" });
-    }
-  }, [apiProfile, setLocation, toast]);
-
-  const handleStoryReply = useCallback(
-    async (payload: {
-      storyId: string;
-      authorId: string;
-      text: string;
-      story: { id: string; image: string; thumbnailUrl?: string; userName: string; userAvatar: string; time: string };
-    }) => {
-      if (!user?.id) {
-        toast({ title: t.toast.storyReplyNeedLogin, variant: "destructive" });
-        throw new Error(t.toast.storyReplyNeedLogin);
-      }
-      if (!payload.authorId || payload.authorId === user.id) {
-        toast({ title: t.toast.storyReplySelf, variant: "destructive" });
-        throw new Error(t.toast.storyReplySelf);
-      }
-      try {
-        const chat = await startDm(payload.authorId);
-        const storyPayload = {
-          storyId: payload.story.id,
-          mediaUrl: payload.story.image,
-          ...(payload.story.thumbnailUrl ? { thumbnailUrl: payload.story.thumbnailUrl } : {}),
-          authorId: payload.authorId,
-          authorName: payload.story.userName,
-          authorAvatar: payload.story.userAvatar,
-          storyTimeLabel: payload.story.time,
-          replyText: payload.text.trim(),
-        };
-        await sendMessage(chat.id, { type: "story_reply", content: JSON.stringify(storyPayload) });
-        void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
-        toast({ title: t.toast.storyReplySent });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : t.toast.genericError;
-        toast({ title: msg, variant: "destructive" });
-        throw e instanceof Error ? e : new Error(msg);
-      }
-    },
-    [queryClient, toast, user?.id]
-  );
-
-  const handleStoryLikeToggle = useCallback(
-    async (storyId: string, liked: boolean) => {
-      const prevLiked = likedStoryIds[storyId] ?? false;
-      const prevCount = likesCountByStoryId[storyId] ?? 0;
-      const optimisticLiked = !liked;
-      const optimisticCount = Math.max(0, prevCount + (liked ? -1 : 1));
-      setLikedStoryIds((prev) => ({ ...prev, [storyId]: optimisticLiked }));
-      setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: optimisticCount }));
-      try {
-        const result = liked ? await unlikeStory(storyId) : await likeStory(storyId);
-        setLikedStoryIds((prev) => ({ ...prev, [storyId]: !!result.isLiked }));
-        setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: Number(result.likesCount ?? optimisticCount) }));
-        if (!liked && result.isLiked) {
-          playLikeActionSound();
-        }
-        void queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
-      } catch (err) {
-        setLikedStoryIds((prev) => ({ ...prev, [storyId]: prevLiked }));
-        setLikesCountByStoryId((prev) => ({ ...prev, [storyId]: prevCount }));
-        toast({
-          title: err instanceof Error ? err.message : t.toast.likeUpdateFailed,
-          variant: "destructive",
-        });
-      }
-    },
-    [likedStoryIds, likesCountByStoryId, queryClient, toast]
-  );
-
-  const handleStoryShare = useCallback(
-    async (story: { id: string; image: string; userName: string; time: string }) => {
-      const shareText = t.toast.storyShareTitle(story.userName);
-      if (navigator.share) {
-        try {
-          await navigator.share({ title: shareText, text: shareText, url: story.image });
-        } catch (e) {
-          if (isNavigatorShareCancelled(e)) return;
-          throw e;
-        }
-        return;
-      }
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(story.image);
-        toast({ title: t.toast.storyLinkCopied });
-        return;
-      }
-      throw new Error(t.toast.shareFailed);
-    },
-    [toast]
-  );
-
-  const handleStoryArchive = useCallback(
-    async (storyId: string) => {
-      await archiveStory(storyId);
-      toast({ title: t.toast.storyArchived });
-      setActiveStoryIndex(null);
-      await refetchStories();
-    },
-    [refetchStories, toast]
-  );
-
-  const handleStoryDelete = useCallback(
-    async (storyId: string) => {
-      await deleteStory(storyId);
-      toast({ title: t.toast.storyDeleted });
-      setActiveStoryIndex(null);
-      await refetchStories();
-    },
-    [refetchStories, toast]
-  );
-
-  const openProfilePinPost = useCallback((post: FeedPost) => {
-    setProfilePinAdd({ kind: "post", post });
-  }, []);
-
-  const openProfilePinStory = useCallback((storyId: string) => {
-    setProfilePinAdd({ kind: "story", storyId });
-  }, []);
-
-  const handleOpenPinnedPost = useCallback(
-    (postId: string) => {
-      const seg = isMe ? "me" : encodeURIComponent(normalizedRouteId);
-      setLocation(`/profile/${seg}/post/${postId}`);
-    },
-    [isMe, normalizedRouteId, setLocation]
-  );
-
-  const handleOpenPinnedStory = useCallback(
-    (storyId: string) => {
-      const list = apiStories ?? [];
-      const idx = list.findIndex((s) => s.id === storyId);
-      if (idx >= 0) setActiveStoryIndex(idx);
-      else toast({ title: "Сториз недоступно или истекло", variant: "destructive" });
-    },
-    [apiStories, toast]
-  );
-
-  const handleStoryFileSelect = useCallback(
-    (file: File | null) => {
-      if (!file || !user?.id) return;
-      setPendingStoryFile(file);
-      setStoryExpiresInHours(24);
-      setShowStoryDurationPicker(true);
-    },
-    [user?.id]
-  );
-
-  const handlePublishStory = useCallback(async () => {
-    const file = pendingStoryFile;
-    if (!file || !user?.id) return;
-    setShowStoryDurationPicker(false);
-    setAddingStory(true);
-    try {
-      const url = await uploadChatMedia(file);
-      await createStory(url, { expiresInHours: storyExpiresInHours });
-      queryClient.invalidateQueries({ queryKey: ["stories", user.id] });
-      queryClient.invalidateQueries({ queryKey: ["stories", "feed"] });
-      toast({ title: t.toast.storyAddedHours(storyExpiresInHours) });
-    } catch (err) {
-      toast({ title: err instanceof Error ? err.message : t.toast.publishError, variant: "destructive" });
-    } finally {
-      setPendingStoryFile(null);
-      setAddingStory(false);
-    }
-  }, [pendingStoryFile, queryClient, storyExpiresInHours, toast, user?.id]);
-
-  const clearAvatarLongPress = useCallback(() => {
-    if (avatarLongPressTimerRef.current) {
-      clearTimeout(avatarLongPressTimerRef.current);
-      avatarLongPressTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => () => clearAvatarLongPress(), [clearAvatarLongPress]);
-
-  const handlePullRefresh = useCallback(async () => {
-    if (isMe) {
-      await Promise.all([
-        refetchPosts(),
-        refetchStories(),
-        user?.id ? queryClient.invalidateQueries({ queryKey: ["profile", "me", user.id] }) : Promise.resolve(),
-        queryClient.invalidateQueries({ queryKey: ["profile-pins"] }),
-      ]);
-      return;
-    }
-    if (!id.trim()) return;
-    try {
-      const data = await fetchProfilePage(id, 50);
-      const parsed = parseProfilePagePayload(data);
-      if (!parsed) {
-        setProfileError(true);
-        return;
-      }
-      setProfileError(false);
-      setApiProfile(parsed.profile);
-      setPagePosts(parsed.posts);
-      setPageStories(parsed.stories);
-    } catch {
-      setProfileError(true);
-    }
-    void queryClient.invalidateQueries({ queryKey: ["profile-pins"] });
-  }, [id, isMe, queryClient, refetchPosts, refetchStories, user?.id]);
+  const actions = useUserProfileActionBundle({
+    id,
+    isMe,
+    normalizedRouteId,
+    hasStories: storyState.hasStories,
+    hasProfileData: !!local.apiProfile,
+    userId: user?.id,
+    userPublicId: user?.publicId,
+    apiProfile: local.apiProfile,
+    followLoading: local.followLoading,
+    apiStories: storyState.apiStories,
+    likedStoryIds: storyState.likedStoryIds,
+    likesCountByStoryId: storyState.likesCountByStoryId,
+    pendingStoryFile: local.pendingStoryFile,
+    pendingStoryVideoTrim: local.pendingStoryVideoTrim,
+    storyCaption: local.storyCaption,
+    storyExpiresInHours: local.storyExpiresInHours,
+    queryClient,
+    setLocation,
+    setApiProfile: local.setApiProfile,
+    setPagePosts: local.setPagePosts,
+    setPageStories: local.setPageStories,
+    setProfileError: local.setProfileError,
+    setProfileNotFound: local.setProfileNotFound,
+    setSoftRefreshError: local.setSoftRefreshError,
+    setFollowLoading: local.setFollowLoading,
+    setLikedStoryIds: storyState.setLikedStoryIds,
+    setLikesCountByStoryId: storyState.setLikesCountByStoryId,
+    setActiveStoryIndex: local.setActiveStoryIndex,
+    setProfilePinAdd: local.setProfilePinAdd,
+    setPulseAvatarMenuOpen: local.setPulseAvatarMenuOpen,
+    storyFileInputRef: local.storyFileInputRef,
+    refetchPosts: queries.refetchPosts,
+    refetchStories: queries.refetchStories,
+    toast,
+    setAddingStory: local.setAddingStory,
+    setStoryUploadPercent: local.setStoryUploadPercent,
+    setPendingStoryFile: local.setPendingStoryFile,
+    setPendingStoryVideoTrim: local.setPendingStoryVideoTrim,
+    setShowStoryVideoTrimmer: local.setShowStoryVideoTrimmer,
+    setShowStoryDurationPicker: local.setShowStoryDurationPicker,
+    setStoryExpiresInHours: local.setStoryExpiresInHours,
+    setStoryCaption: local.setStoryCaption,
+  });
 
   const layout = deriveUserProfileLayoutFields({
     isMe,
     user,
-    apiProfile,
+    apiProfile: local.apiProfile,
     id,
     normalizedRouteId,
-    coverLoadError,
+    coverLoadError: local.coverLoadError,
   });
 
-  const handleAvatarMainClick = useCallback(() => {
-    setPulseAvatarMenuOpen(false);
-    if (!isMe) {
-      setActiveStoryIndex(0);
-      return;
-    }
-    if (avatarLongPressHandledRef.current) {
-      avatarLongPressHandledRef.current = false;
-      return;
-    }
-    if (hasStories) {
-      setActiveStoryIndex(0);
-    } else {
-      storyFileInputRef.current?.click();
-    }
-  }, [hasStories, isMe]);
-
-  const handleAvatarPointerDownMe = useCallback(() => {
-    avatarLongPressHandledRef.current = false;
-    clearAvatarLongPress();
-    avatarLongPressTimerRef.current = window.setTimeout(() => {
-      avatarLongPressHandledRef.current = true;
-      storyFileInputRef.current?.click();
-    }, 420);
-  }, [clearAvatarLongPress]);
-
   const pullRefreshDisabled =
-    showStoryDurationPicker || !!activeViewersStoryId || activeStoryIndex !== null || profileMoreOpen;
+    local.showStoryVideoTrimmer ||
+    local.showStoryDurationPicker ||
+    !!local.activeViewersStoryId ||
+    local.activeStoryIndex !== null ||
+    local.profileMoreOpen;
 
-  return {
-    setLocation,
-    hasInvalidRouteId,
-    isMe,
-    profileLoading,
-    profileError,
-    apiProfile,
-    user,
-    normalizedRouteId,
-    pulseScrollRef,
-    storyFileInputRef,
-    activeTab,
-    setActiveTab,
-    postViewMode,
-    setPostViewMode,
-    pulseAvatarMenuOpen,
-    setPulseAvatarMenuOpen,
-    profileMoreOpen,
-    setProfileMoreOpen,
-    activeStoryIndex,
-    setActiveStoryIndex,
-    activeCommentPostId,
-    setActiveCommentPostId,
-    showReactionPicker,
-    setShowReactionPicker,
-    activeViewersStoryId,
-    setActiveViewersStoryId,
-    showStoryDurationPicker,
-    setShowStoryDurationPicker,
-    pendingStoryFile,
-    setPendingStoryFile,
-    storyExpiresInHours,
-    setStoryExpiresInHours,
-    coverLoadError,
-    setCoverLoadError,
-    addingStory,
-    followLoading,
-    displayName: layout.displayName,
-    usernamePillText: layout.usernamePillText,
-    avatarUrl: layout.avatarUrl,
-    hasCover: layout.hasCover,
-    resolvedCoverUrl: layout.resolvedCoverUrl,
-    publicIdStr: layout.publicIdStr,
-    genderChip: layout.genderChip,
-    birthChip: layout.birthChip,
-    cityChip: layout.cityChip,
-    profileLinkTrim: layout.profileLinkTrim,
-    profileLinkHref: layout.profileLinkHref,
-    authorId,
-    authorIdReady,
-    profilePosts,
-    apiStories,
-    hasStories,
-    storyViewersCountById,
-    likedStoryIds,
-    likesCountByStoryId,
-    myProfileStats,
-    postsFetching,
-    postsError,
-    postsErrorDetail,
-    refetchPosts,
-    refetchStories,
-    activeStoryViewers,
-    activeStoryViewersLoading,
-    reactionMutation,
-    deletePostMutation,
-    savePostMutation,
-    handlePullRefresh,
-    pullRefreshDisabled,
-    handleCopyLink,
-    handleFollowToggle,
-    handleStartChat,
-    handleStoryReply,
-    handleStoryLikeToggle,
-    handleStoryShare,
-    handleStoryArchive,
-    handleStoryDelete,
-    handleStoryFileSelect,
-    handlePublishStory,
-    clearAvatarLongPress,
-    handleAvatarMainClick,
-    handleAvatarPointerDownMe,
-    profilePinAdd,
-    clearProfilePinAdd,
-    openProfilePinPost,
-    openProfilePinStory,
-    handleOpenPinnedPost,
-    handleOpenPinnedStory,
-  };
+  return buildUserProfilePageResult({
+    route: {
+      setLocation,
+      hasInvalidRouteId,
+      isMe,
+      normalizedRouteId,
+    },
+    view: {
+      ...local,
+      profileLoading: local.profileLoading,
+      profileError: local.profileError,
+      profileNotFound: local.profileNotFound,
+      apiProfile: local.apiProfile,
+      user,
+      pullRefreshDisabled,
+      otherProfileBackgroundRefreshing,
+    },
+    layout,
+    data: {
+      authorId,
+      authorIdReady,
+      ...queries,
+      ...storyState,
+      profilePosts: derivedPosts.profilePosts,
+      postsForCommentLookup: derivedPosts.postsForCommentLookup,
+      profilePinnedPreview: derivedPosts.profilePinnedPreview,
+      profilePostsRaw: derivedPosts.profilePostsRaw,
+      profilePinAdd: local.profilePinAdd,
+      profilePinnedPostId,
+    },
+    actions: {
+      ...actions,
+      refetchOtherProfile,
+    },
+  });
 }

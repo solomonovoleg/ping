@@ -29,6 +29,9 @@ export function registerOpsPlatformAdminRoutes(app: Express): void {
       }
       if (typeof body.maintenanceMode === "boolean") patch.maintenanceMode = body.maintenanceMode;
       if (typeof body.strictApiShield === "boolean") patch.strictApiShield = body.strictApiShield;
+      if (typeof body.registrationPhoneCallVerificationEnabled === "boolean") {
+        patch.registrationPhoneCallVerificationEnabled = body.registrationPhoneCallVerificationEnabled;
+      }
       const next = await platformUpdate(patch);
       invalidateApiShieldSettingsCache();
       await writeAuditLog({

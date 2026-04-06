@@ -3,13 +3,20 @@ import { randomUUID } from "crypto";
 
 export interface ChatsStore {
   getById(id: string): Chat | undefined;
+  getByShortCode(shortCode: string): Chat | undefined;
   getByUserId(userId: string): Chat[];
   /** Найти личный чат (dm) между двумя пользователями. */
   getDmBetween(userId1: string, userId2: string): Chat | undefined;
   create(data: InsertChat): Chat;
   addMember(data: InsertChatMember): ChatMember;
   removeMember(chatId: string, userId: string): boolean;
-  update(chatId: string, data: { name?: string; avatarUrl?: string }): Chat | undefined;
+  update(chatId: string, data: {
+    name?: string;
+    avatarUrl?: string;
+    shortCode?: string | null;
+    inviteCode?: string | null;
+    dmMultilingualEnabled?: boolean;
+  }): Chat | undefined;
   getMember(chatId: string, userId: string): ChatMember | undefined;
   getMemberIds(chatId: string): string[];
   setLastRead(chatId: string, userId: string, at: Date): void;
@@ -24,6 +31,14 @@ export function createChatsStore(): ChatsStore {
   return {
     getById(id: string) {
       return chats.get(id);
+    },
+    getByShortCode(shortCode: string) {
+      const normalized = shortCode.trim().toLowerCase();
+      if (!normalized) return undefined;
+      for (const chat of chats.values()) {
+        if ((chat.shortCode ?? "").toLowerCase() === normalized) return chat;
+      }
+      return undefined;
     },
     getByUserId(userId: string) {
       const result: Chat[] = [];
@@ -53,6 +68,9 @@ export function createChatsStore(): ChatsStore {
         type: data.type ?? "dm",
         name: data.name ?? null,
         avatarUrl: null,
+        shortCode: null,
+        inviteCode: null,
+        dmMultilingualEnabled: false,
         createdAt: new Date(),
       };
       chats.set(id, chat);
@@ -82,11 +100,22 @@ export function createChatsStore(): ChatsStore {
       list.splice(idx, 1);
       return true;
     },
-    update(chatId: string, data: { name?: string; avatarUrl?: string }) {
+    update(chatId: string, data: {
+      name?: string;
+      avatarUrl?: string;
+      shortCode?: string | null;
+      inviteCode?: string | null;
+      dmMultilingualEnabled?: boolean;
+    }) {
       const chat = chats.get(chatId);
       if (!chat) return undefined;
       if (data.name !== undefined) (chat as Chat).name = data.name;
       if (data.avatarUrl !== undefined) (chat as Chat & { avatarUrl?: string }).avatarUrl = data.avatarUrl;
+      if (data.shortCode !== undefined) (chat as Chat & { shortCode?: string | null }).shortCode = data.shortCode;
+      if (data.inviteCode !== undefined)
+        (chat as Chat & { inviteCode?: string | null }).inviteCode = data.inviteCode;
+      if (data.dmMultilingualEnabled !== undefined)
+        (chat as Chat & { dmMultilingualEnabled?: boolean }).dmMultilingualEnabled = data.dmMultilingualEnabled;
       return chat;
     },
     getMember(chatId: string, userId: string) {

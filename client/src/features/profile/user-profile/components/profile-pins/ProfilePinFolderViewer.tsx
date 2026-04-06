@@ -124,7 +124,7 @@ export function ProfilePinFolderViewer({
           transition={{ duration: reduced ? 0.12 : DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
           className="fixed inset-0 z-[321] flex flex-col bg-[#070708] text-white touch-manipulation overscroll-none"
         >
-          <header className="z-20 flex shrink-0 items-center gap-2 px-2 pt-[max(8px,env(safe-area-inset-top))] pb-2">
+          <header className="z-20 flex shrink-0 items-center gap-2 uix-fullscreen-overlay-x pt-[max(8px,env(safe-area-inset-top))] pb-2">
             <Button
               type="button"
               variant="ghost"

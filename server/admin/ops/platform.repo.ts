@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { getDb } from "../../db";
+import { ensurePlatformSettingsCompat, getDb } from "../../db";
 import { platformSettings } from "@shared/schema";
 
 const ROW_ID = "default";
@@ -10,6 +10,8 @@ export type PlatformPublicDto = {
   bannerVariant: "info" | "warning" | "danger";
   maintenanceMode: boolean;
   strictApiShield: boolean;
+  /** Регистрация со звонком New-Tel (если ключи на сервере заданы и это включено). */
+  registrationPhoneCallVerificationEnabled: boolean;
 };
 
 function defaults(): PlatformPublicDto {
@@ -19,6 +21,7 @@ function defaults(): PlatformPublicDto {
     bannerVariant: "info",
     maintenanceMode: false,
     strictApiShield: false,
+    registrationPhoneCallVerificationEnabled: true,
   };
 }
 
@@ -28,6 +31,7 @@ function normVariant(v: string | null | undefined): PlatformPublicDto["bannerVar
 }
 
 export async function platformGetPublic(): Promise<PlatformPublicDto> {
+  await ensurePlatformSettingsCompat();
   try {
     const db = getDb();
     const [row] = await db.select().from(platformSettings).where(eq(platformSettings.id, ROW_ID)).limit(1);
@@ -38,6 +42,7 @@ export async function platformGetPublic(): Promise<PlatformPublicDto> {
       bannerVariant: normVariant(row.bannerVariant),
       maintenanceMode: row.maintenanceMode,
       strictApiShield: Boolean(row.strictApiShield),
+      registrationPhoneCallVerificationEnabled: row.registrationPhoneCallVerificationEnabled !== false,
     };
   } catch {
     return defaults();
@@ -45,14 +50,22 @@ export async function platformGetPublic(): Promise<PlatformPublicDto> {
 }
 
 export async function platformUpdate(patch: Partial<PlatformPublicDto>): Promise<PlatformPublicDto> {
+  await ensurePlatformSettingsCompat();
   const db = getDb();
   const cur = await platformGetPublic();
   const next: PlatformPublicDto = {
     bannerEnabled: patch.bannerEnabled ?? cur.bannerEnabled,
-    bannerText: patch.bannerText !== undefined ? patch.bannerText.slice(0, 2000) : cur.bannerText,
+    bannerText:
+      patch.bannerText === undefined
+        ? cur.bannerText
+        : typeof patch.bannerText === "string"
+          ? patch.bannerText.slice(0, 2000)
+          : cur.bannerText,
     bannerVariant: patch.bannerVariant ?? cur.bannerVariant,
     maintenanceMode: patch.maintenanceMode ?? cur.maintenanceMode,
     strictApiShield: patch.strictApiShield ?? cur.strictApiShield,
+    registrationPhoneCallVerificationEnabled:
+      patch.registrationPhoneCallVerificationEnabled ?? cur.registrationPhoneCallVerificationEnabled,
   };
   await db
     .insert(platformSettings)
@@ -63,6 +76,7 @@ export async function platformUpdate(patch: Partial<PlatformPublicDto>): Promise
       bannerVariant: next.bannerVariant,
       maintenanceMode: next.maintenanceMode,
       strictApiShield: next.strictApiShield,
+      registrationPhoneCallVerificationEnabled: next.registrationPhoneCallVerificationEnabled,
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -73,6 +87,7 @@ export async function platformUpdate(patch: Partial<PlatformPublicDto>): Promise
         bannerVariant: next.bannerVariant,
         maintenanceMode: next.maintenanceMode,
         strictApiShield: next.strictApiShield,
+        registrationPhoneCallVerificationEnabled: next.registrationPhoneCallVerificationEnabled,
         updatedAt: new Date(),
       },
     });

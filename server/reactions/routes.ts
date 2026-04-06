@@ -4,6 +4,7 @@ import { getDb } from "../db";
 import { postReactions, posts } from "@shared/schema";
 import { requireAuth, getUserId } from "../auth/session";
 import { notifyReaction } from "../notifications/create";
+import { resolveCanonicalPostId } from "../posts/resolve-post-ref";
 import { storage } from "../storage";
 
 const ALLOWED_EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
@@ -19,11 +20,16 @@ export function registerReactionsRoutes(app: Express): void {
       return;
     }
     try {
+      const canonical = await resolveCanonicalPostId(postId);
+      if (!canonical) {
+        res.status(404).json({ message: "Пост не найден" });
+        return;
+      }
       const db = getDb();
       const [postRow] = await db
         .select({ authorId: posts.authorId })
         .from(posts)
-        .where(eq(posts.id, postId))
+        .where(eq(posts.id, canonical))
         .limit(1);
       if (!postRow) {
         res.status(404).json({ message: "Пост не найден" });
@@ -36,16 +42,29 @@ export function registerReactionsRoutes(app: Express): void {
           return;
         }
       }
-      await db
-        .insert(postReactions)
-        .values({ postId, userId, emoji })
-        .onConflictDoUpdate({
-          target: [postReactions.postId, postReactions.userId],
-          set: { emoji },
-        });
-      notifyReaction(postId, userId, emoji).catch((e) => console.error("[reactions] notify:", e));
+      const [existing] = await db
+        .select({ emoji: postReactions.emoji })
+        .from(postReactions)
+        .where(and(eq(postReactions.postId, canonical), eq(postReactions.userId, userId)))
+        .limit(1);
+      if (existing) {
+        if (existing.emoji !== emoji) {
+          await db
+            .update(postReactions)
+            .set({ emoji })
+            .where(and(eq(postReactions.postId, canonical), eq(postReactions.userId, userId)));
+        }
+      } else {
+        await db.insert(postReactions).values({ postId: canonical, userId, emoji });
+        if (postRow.authorId !== userId) {
+          void import("../edge-money-profile-likes/handle-profile-like-for-edge-money")
+            .then((m) => m.handleProfileLikeForEdgeMoney({ recipientUserId: postRow.authorId }))
+            .catch((e) => console.error("[edge-money-profile-likes]", e));
+        }
+      }
+      notifyReaction(canonical, userId, emoji).catch((e) => console.error("[reactions] notify:", e));
       const { scheduleEdgeTaskAfterPostAction } = await import("../posts/edge-task-hook");
-      scheduleEdgeTaskAfterPostAction(userId, postId, "react_post");
+      scheduleEdgeTaskAfterPostAction(userId, canonical, "react_post");
       res.status(204).end();
     } catch (e) {
       console.error("Post reaction error:", e);
@@ -62,10 +81,15 @@ export function registerReactionsRoutes(app: Express): void {
       return;
     }
     try {
+      const canonical = await resolveCanonicalPostId(postId);
+      if (!canonical) {
+        res.status(404).json({ message: "Пост не найден" });
+        return;
+      }
       const db = getDb();
       await db
         .delete(postReactions)
-        .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, userId)));
+        .where(and(eq(postReactions.postId, canonical), eq(postReactions.userId, userId)));
       res.status(204).end();
     } catch (e) {
       console.error("Delete reaction error:", e);

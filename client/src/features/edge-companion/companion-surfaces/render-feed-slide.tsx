@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { EdgeTaskPresetPublic, ResultsLivePayload } from "@/lib/edge-gamification";
+import type { EdgeParticipantState } from "@/lib/edge-participant";
 import type { CompanionSurfaceId, CompanionUiPayload } from "./types";
 import { renderCompanionSlide } from "./render-slide";
 
@@ -12,8 +13,13 @@ type Props = {
   resultsLive: ResultsLivePayload | null | undefined;
   interactLocked?: boolean;
   taskPresets?: EdgeTaskPresetPublic[];
+  leaderboardPrimaryEnabled?: boolean;
+  leaderboardSecondaryEnabled?: boolean;
   /** Слот «персонаж» в ленте ренерится снаружи (отдельный макет). */
   characterSlot: ReactNode;
+  participantState?: EdgeParticipantState;
+  /** Пробрасывается в `TasksSurfacePanel` для компактного hero в карточке ленты. */
+  embedVariant?: "full" | "feed";
 };
 
 /**
@@ -29,13 +35,17 @@ export function renderFeedCompanionSlide({
   resultsLive,
   interactLocked = false,
   taskPresets = [],
+  leaderboardPrimaryEnabled = true,
+  leaderboardSecondaryEnabled = true,
   characterSlot,
+  participantState,
+  embedVariant = "feed",
 }: Props): ReactNode {
   if (id === "character") {
     return characterSlot;
   }
   return (
-    <div className="box-border min-h-[260px] max-h-[min(70vh,420px)] overflow-y-auto overflow-x-hidden overscroll-y-contain px-1 [-webkit-overflow-scrolling:touch]">
+    <div className="box-border min-h-0 w-full px-1 pb-1">
       {renderCompanionSlide({
         id,
         edgeId,
@@ -45,6 +55,10 @@ export function renderFeedCompanionSlide({
         resultsLive,
         interactLocked,
         taskPresets,
+        leaderboardPrimaryEnabled,
+        leaderboardSecondaryEnabled,
+        participantState,
+        embedVariant,
       })}
     </div>
   );

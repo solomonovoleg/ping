@@ -17,6 +17,9 @@ export type CallState =
 
 export type CallMediaType = "audio" | "video";
 export type CallNetworkQualityLevel = "good" | "medium" | "poor" | "unknown";
+export type CallVideoQualityMode = "auto" | "hd";
+/** Профиль исходящего видео (камера/экран): только локальная отправка. */
+export type CallOutgoingVideoQuality = "low" | "medium" | "high";
 export type CallCameraFacingMode = "user" | "environment";
 export type CallReactionKind = "heart" | "clap" | "fire" | "like";
 
@@ -58,38 +61,62 @@ export type ClientCallEvent =
       chatId: string;
       mediaType: CallMediaType;
       fromDisplayName: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.accept";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.reject";
       callId: string;
       reason?: "declined" | "busy";
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.cancel";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.hangup";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.offer";
       callId: string;
       sdp: RTCSessionDescriptionInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.answer";
       callId: string;
       sdp: RTCSessionDescriptionInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.ice-candidate";
       callId: string;
       candidate: RTCIceCandidateInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.reaction";
@@ -97,6 +124,9 @@ export type ClientCallEvent =
       reaction: CallReactionKind;
       sentAt: number;
       id: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.caption";
@@ -104,23 +134,38 @@ export type ClientCallEvent =
       text: string;
       sentAt: number;
       id: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.screen-share-state";
       callId: string;
       active: boolean;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.resume-check";
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.resume-request";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       /** Локальный WebRTC перешёл в connected (подтверждение участника). */
       type: "call.connected";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     };
 
 // ─── Server → Client events ──────────────────────────────────────
@@ -134,45 +179,69 @@ export type ServerCallEvent =
       mediaType: CallMediaType;
       fromDisplayName: string;
       fromAvatarUrl?: string | null;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.accepted";
       callId: string;
       byUserId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.rejected";
       callId: string;
       byUserId: string;
       reason?: "declined" | "busy";
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.canceled";
       callId: string;
       byUserId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.hungup";
       callId: string;
       byUserId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.offer";
       callId: string;
       fromUserId: string;
       sdp: RTCSessionDescriptionInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.answer";
       callId: string;
       fromUserId: string;
       sdp: RTCSessionDescriptionInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.ice-candidate";
       callId: string;
       fromUserId: string;
       candidate: RTCIceCandidateInit;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.reaction";
@@ -181,6 +250,9 @@ export type ServerCallEvent =
       reaction: CallReactionKind;
       sentAt: number;
       id: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.caption";
@@ -189,12 +261,18 @@ export type ServerCallEvent =
       text: string;
       sentAt: number;
       id: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.screen-share-state";
       callId: string;
       fromUserId: string;
       active: boolean;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.resume-available";
@@ -209,11 +287,17 @@ export type ServerCallEvent =
       shouldInitiateOffer: boolean;
       /** Состояние сессии на сервере; для «позднего» WS при ringing+incoming — показать входящий звонок. */
       sessionState?: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.peer-reconnected";
       callId: string;
       byUserId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       /** Подтверждение подключения (в т.ч. confirmedByBoth=true когда подтвердили оба). */
@@ -221,16 +305,25 @@ export type ServerCallEvent =
       callId: string;
       byUserId: string;
       confirmedByBoth?: boolean;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.timeout";
       callId: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     }
   | {
       type: "call.error";
       callId?: string;
       code: string;
       message: string;
+      traceId?: string;
+      signalSeq?: number;
+      sentAtMs?: number;
     };
 
 // ─── Timeouts ─────────────────────────────────────────────────────
@@ -278,6 +371,7 @@ export interface CallStoreState {
   remoteStream: MediaStream | null;
   connectionState: RTCPeerConnectionState | null;
   networkQuality: CallNetworkQualityLevel;
+  videoQualityMode: CallVideoQualityMode;
   cameraFacingMode: CallCameraFacingMode;
   isScreenShareActive: boolean;
   remoteScreenShareActive: boolean;
@@ -328,6 +422,7 @@ export interface CallStoreActions {
   toggleRecordingPause: () => Promise<void>;
   sendReaction: (reaction: CallReactionKind) => void;
   toggleCaptions: () => void;
+  toggleVideoHd: () => void;
   retryCall: () => void;
 }
 

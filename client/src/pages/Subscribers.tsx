@@ -43,7 +43,7 @@ export default function Subscribers() {
 
   return (
     <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden justify-center bg-background">
-      <div className="w-full h-full max-w-[480px] min-w-0 flex flex-col bg-background relative shadow-2xl overflow-hidden">
+      <div className="w-full h-full uix-responsive-max-w min-w-0 flex flex-col bg-background relative shadow-2xl overflow-hidden">
         
         {/* Header */}
         <div className="uix-content-x py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
@@ -99,10 +99,10 @@ export default function Subscribers() {
                 >
                   <div className="flex items-center gap-3">
                     <div className="relative">
-                      <img 
-                        src={user.avatar} 
-                        alt={user.name} 
-                        className="w-12 h-12 rounded-full object-cover"
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="pointer-events-none w-12 h-12 rounded-full object-cover"
                       />
                     </div>
                     <div className="flex flex-col">
@@ -111,16 +111,17 @@ export default function Subscribers() {
                     </div>
                   </div>
                   
-                  <button
+                  <TapScaleButton
                     type="button"
+                    subtle
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleFollow(user.id);
                     }}
                     className={cn(
-                      "px-4 py-1.5 rounded-full text-[13px] font-medium transition-all active:scale-95 flex items-center gap-1.5",
-                      followingState[user.id] 
-                        ? "bg-secondary text-foreground hover:bg-secondary/80" 
+                      "px-4 py-1.5 rounded-full text-[13px] font-medium transition-colors flex items-center gap-1.5 min-h-[var(--uix-touch-min)]",
+                      followingState[user.id]
+                        ? "bg-secondary text-foreground hover:bg-secondary/80"
                         : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
                     )}
                     aria-label={followingState[user.id] ? `В подписках: ${user.name}` : `Подписаться на ${user.name}`}
@@ -136,7 +137,7 @@ export default function Subscribers() {
                         <span>Подписаться</span>
                       </>
                     )}
-                  </button>
+                  </TapScaleButton>
                 </TapScaleDiv>
               ))
             ) : (

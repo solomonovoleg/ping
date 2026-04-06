@@ -4,13 +4,19 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
+import { siteSeoHtmlPlugin } from "./vite-plugin-site-seo";
+import { firebaseSwInitPlugin } from "./vite-plugin-firebase-sw-init";
+
+const repoRoot = path.resolve(import.meta.dirname);
 
 export default defineConfig({
   base: "/",
   plugins: [
+    firebaseSwInitPlugin(repoRoot),
     react(),
     runtimeErrorOverlay(),
     tailwindcss(),
+    siteSeoHtmlPlugin(),
     metaImagesPlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
@@ -43,12 +49,19 @@ export default defineConfig({
       process.env.BUILD_VERSION || "0"
     ),
   },
+  /** Таблицы в чате: `import("xlsx")` — отдельный чанк, не раздувает основной бандл. */
+  optimizeDeps: {
+    include: ["xlsx"],
+  },
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks: (id) => {
+          if (/[\\/]node_modules[\\/]xlsx[\\/]/.test(id)) {
+            return "vendor-xlsx";
+          }
           if (id.includes("node_modules")) {
             if (id.includes("framer-motion")) return "framer-motion";
             if (id.includes("recharts")) return "recharts";

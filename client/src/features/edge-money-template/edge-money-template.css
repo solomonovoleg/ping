@@ -1,0 +1,106 @@
+[data-edge-money-template] {
+  --emoney-bg: #030305;
+  --emoney-glass: rgba(255, 255, 255, 0.04);
+  --emoney-border: rgba(255, 255, 255, 0.08);
+  --emoney-accent: hsl(221, 83%, 53%);
+  --emoney-accent-soft: hsla(221, 83%, 53%, 0.15);
+  --emoney-glow: hsla(221, 83%, 53%, 0.35);
+  --emoney-gradient-from: hsl(221, 83%, 73%);
+  --emoney-gradient-to: hsl(221, 83%, 43%);
+  --emoney-badge-bg: hsla(221, 83%, 53%, 0.15);
+  --emoney-badge-text: hsl(221, 83%, 63%);
+  --emoney-on-accent: #ffffff;
+}
+
+[data-edge-money-template] .emoney-glass-panel {
+  background: var(--emoney-glass);
+  border: 1px solid var(--emoney-border);
+  box-shadow: none;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+[data-edge-money-template] .emoney-accent {
+  color: var(--emoney-accent);
+}
+
+[data-edge-money-template] .emoney-accent-bg {
+  background-color: var(--emoney-accent);
+}
+
+[data-edge-money-template] .emoney-on-accent-fg {
+  color: var(--emoney-on-accent);
+}
+
+[data-edge-money-template] .emoney-accent-soft-bg {
+  background-color: var(--emoney-accent-soft);
+}
+
+[data-edge-money-template] .emoney-badge-bg {
+  background-color: var(--emoney-badge-bg);
+}
+
+[data-edge-money-template] .emoney-badge-text {
+  color: var(--emoney-badge-text);
+}
+
+[data-edge-money-template] .emoney-accent-border {
+  border-color: var(--emoney-accent);
+}
+
+[data-edge-money-template] .emoney-gradient-text {
+  background: linear-gradient(to right, var(--emoney-gradient-from), var(--emoney-gradient-to));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+[data-edge-money-template] .emoney-gradient-bar {
+  background: linear-gradient(to right, var(--emoney-gradient-from), var(--emoney-gradient-to));
+}
+
+[data-edge-money-template] .emoney-glow {
+  box-shadow: 0 0 22px var(--emoney-glow);
+}
+
+[data-edge-money-template] .emoney-hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+[data-edge-money-template] .emoney-hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes emoney-float {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes emoney-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+[data-edge-money-template] .emoney-float {
+  animation: emoney-float 4s ease-in-out infinite;
+}
+
+[data-edge-money-template] .emoney-shimmer {
+  animation: emoney-shimmer 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-edge-money-template] .emoney-float,
+  [data-edge-money-template] .emoney-shimmer {
+    animation: none;
+  }
+}

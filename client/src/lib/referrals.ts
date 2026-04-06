@@ -21,6 +21,14 @@ export type MyCodesResponse = {
   usedCount: number;
   limit: number;
   remaining: number;
+  autoGrant?: {
+    repeatEnabled: boolean;
+    repeatInvites: number;
+    repeatAfterHours: number;
+    firstLimitReachedAt: string | null;
+    bonusGrantedAt: string | null;
+    nextGrantAt: string | null;
+  };
 };
 
 /** Мои пригласительные коды (в настройках). В нативном приложении нужен apiFetch для Bearer. */
@@ -30,13 +38,16 @@ export async function getMyReferralCodes(): Promise<MyCodesResponse> {
   return res.json();
 }
 
-export async function createReferralCode(
-  format: "phrase" | "digits" = "phrase"
-): Promise<{ id: string; code: string; expiresAt: string; expiresInHours: number }> {
+export async function createReferralCode(): Promise<{
+  id: string;
+  code: string;
+  expiresAt: string;
+  expiresInHours: number;
+}> {
   const res = await apiFetch(`${API}/referrals/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ format }),
+    body: JSON.stringify({}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data.message as string) || "Не удалось создать приглашение");

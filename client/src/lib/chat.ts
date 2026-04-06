@@ -1,4 +1,4 @@
-import { API, apiFetch } from "@/lib/api-base";
+import { API, apiFetch, postFormDataWithUploadProgress } from "@/lib/api-base";
 
 /** Ошибка HTTP при операции с чатом (например 403 при блокировке). */
 export class ChatRequestError extends Error {
@@ -17,7 +17,10 @@ export type MessageType =
   | "image"
   | "video"
   | "video_note"
+  | "sticker"
+  | "file"
   | "post_share"
+  | "comment_share"
   | "story_reply";
 
 export async function getChatMedia(
@@ -147,6 +150,92 @@ export async function patchChatMemberMe(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { message?: string }).message || "Не удалось сохранить");
+  }
+}
+
+export type ChatListShelvesResponse = {
+  customFolders: {
+    id: string;
+    name: string;
+    sortOrder: number;
+    pushMuted: boolean;
+    createdAt: string;
+  }[];
+  builtinTabPrefs: Record<string, { labelOverride: string | null; pushMuted: boolean }>;
+};
+
+export async function fetchChatListShelves(): Promise<ChatListShelvesResponse> {
+  const res = await apiFetch(`${API}/me/chat-list-shelves`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось загрузить папки");
+  }
+  return (await res.json()) as ChatListShelvesResponse;
+}
+
+export async function createChatListCustomFolder(name: string): Promise<ChatListShelvesResponse["customFolders"][number]> {
+  const res = await apiFetch(`${API}/me/chat-list-shelves/custom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось создать папку");
+  }
+  return (await res.json()) as ChatListShelvesResponse["customFolders"][number];
+}
+
+export async function patchChatListCustomFolder(
+  folderId: string,
+  body: { name?: string; pushMuted?: boolean },
+): Promise<void> {
+  const res = await apiFetch(`${API}/me/chat-list-shelves/custom/${encodeURIComponent(folderId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось сохранить");
+  }
+}
+
+export async function deleteChatListCustomFolder(folderId: string): Promise<void> {
+  const res = await apiFetch(`${API}/me/chat-list-shelves/custom/${encodeURIComponent(folderId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось удалить папку");
+  }
+}
+
+export async function patchChatListBuiltinTabPref(
+  tabId: string,
+  body: { labelOverride?: string | null; pushMuted?: boolean },
+): Promise<void> {
+  const res = await apiFetch(`${API}/me/chat-list-shelves/builtin/${encodeURIComponent(tabId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Не удалось сохранить");
+  }
+}
+
+/** Курсор прочитанного на сервере (как в mobile). Не зависит от WS `subscribe-chat-thread`. */
+export async function markChatReadAtMessage(chatId: string, messageId: string): Promise<void> {
+  const res = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/read`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ChatRequestError((err as { message?: string }).message || "Не удалось отметить прочитанным", res.status);
   }
 }
 
@@ -338,36 +427,137 @@ function fallbackVoiceMime(): string {
   return "audio/webm";
 }
 
-export async function uploadVoice(blob: Blob): Promise<string> {
+export async function uploadVoice(blob: Blob, options?: { onProgress?: (percent: number) => void }): Promise<string> {
   const form = new FormData();
   const normalizedType = (blob.type || "").startsWith("audio/") ? blob.type : fallbackVoiceMime();
   const ext = voiceExtension(normalizedType);
   const file = new File([blob], `voice${ext}`, { type: normalizedType });
   form.append("audio", file, file.name);
-  const res = await apiFetch(`${API}/upload/voice`, { method: "POST", body: form });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { message?: string }).message || "Не удалось загрузить голосовое");
+  const { ok, status, bodyText } = await postFormDataWithUploadProgress(`${API}/upload/voice`, form, {
+    onProgress: options?.onProgress,
+  });
+  if (!ok) {
+    let msg = "Не удалось загрузить голосовое";
+    try {
+      const err = JSON.parse(bodyText) as { message?: string };
+      if (typeof err.message === "string") msg = err.message;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
   }
-  const data = (await res.json()) as { url: string };
+  let data: { url?: string } = {};
+  if (bodyText.trim()) {
+    try {
+      data = JSON.parse(bodyText) as { url?: string };
+    } catch {
+      /* ignore */
+    }
+  }
+  if (typeof data.url !== "string") throw new Error("Сервер не вернул URL голосового");
   return data.url;
 }
 
-export async function uploadChatMedia(file: File): Promise<string> {
+const CHAT_VIDEO_LIMIT_BYTES = 500 * 1024 * 1024;
+
+function formatMegabytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (!Number.isFinite(mb) || mb <= 0) return "0";
+  return mb >= 100 ? String(Math.round(mb)) : mb.toFixed(1);
+}
+
+function inferChatUploadKind(
+  file: Pick<File, "type" | "name">,
+): "image" | "video" | "pdf" | "csv" | "xlsx" | "unknown" {
+  const mime = String(file.type || "").toLowerCase();
+  const name = String(file.name || "").toLowerCase();
+  if (
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    name.endsWith(".xlsx")
+  ) {
+    return "xlsx";
+  }
+  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "csv";
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "pdf";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (/\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name)) return "image";
+  if (/\.(mp4|webm|mov)$/i.test(name)) return "video";
+  return "unknown";
+}
+
+function getTooLargeUploadMessage(file: File, statusCode: number): string {
+  const kind = inferChatUploadKind(file);
+  const sizeMb = formatMegabytes(file.size);
+  if (kind === "image") {
+    return `Фото слишком большое (${sizeMb} МБ): максимум 50 МБ.`;
+  }
+  if (kind === "pdf") {
+    return `PDF слишком большой (${sizeMb} МБ): максимум 15 МБ.`;
+  }
+  if (kind === "csv") {
+    return `CSV слишком большой (${sizeMb} МБ): максимум 10 МБ.`;
+  }
+  if (kind === "xlsx") {
+    return `Файл Excel слишком большой (${sizeMb} МБ): максимум 10 МБ.`;
+  }
+  if (kind === "video") {
+    if (file.size <= CHAT_VIDEO_LIMIT_BYTES) {
+      return `Файл ${sizeMb} МБ отклонён до приложения (HTTP ${statusCode}). Лимит видеокружков в чате — 500 МБ. Проверьте лимит прокси (nginx/CDN): client_max_body_size должен быть не меньше 550m.`;
+    }
+    return `Видео слишком большое (${sizeMb} МБ): максимум 500 МБ.`;
+  }
+  if (file.size <= CHAT_VIDEO_LIMIT_BYTES) {
+    return `Файл ${sizeMb} МБ отклонён до приложения (HTTP ${statusCode}). Проверьте лимит прокси (nginx/CDN): client_max_body_size должен быть не меньше 550m.`;
+  }
+  return `Файл слишком большой (${sizeMb} МБ): фото до 50 МБ, видео до 500 МБ, PDF до 15 МБ, CSV и XLSX до 10 МБ.`;
+}
+
+export async function uploadChatMediaWithMeta(
+  file: File,
+  options?: { onProgress?: (percent: number) => void; signal?: AbortSignal },
+): Promise<{ url: string; posterUrl?: string | null }> {
   const form = new FormData();
   form.append("file", file);
-  const res = await apiFetch(`${API}/upload/chat-media`, { method: "POST", body: form });
-  if (!res.ok) {
-    if (res.status === 413) {
-      throw new Error("Файл слишком большой: фото до 50 МБ, видео до 500 МБ.");
+  const { ok, status, bodyText } = await postFormDataWithUploadProgress(`${API}/upload/chat-media`, form, {
+    onProgress: options?.onProgress,
+    signal: options?.signal,
+  });
+  if (!ok) {
+    if (status === 413) {
+      throw new Error(getTooLargeUploadMessage(file, 413));
     }
-    const errJson = await res.json().catch(() => null);
-    const errText = errJson && typeof errJson === "object" && "message" in errJson
-      ? String((errJson as { message?: unknown }).message ?? "")
-      : "";
-    throw new Error(errText || "Не удалось загрузить файл");
+    let errText = "";
+    try {
+      const errJson = JSON.parse(bodyText) as { message?: unknown } | null;
+      if (errJson && typeof errJson === "object" && "message" in errJson) {
+        errText = String(errJson.message ?? "");
+      }
+    } catch {
+      /* ignore */
+    }
+    if (errText && /слишком большой/i.test(errText)) {
+      throw new Error(getTooLargeUploadMessage(file, status));
+    }
+    if (errText) throw new Error(errText);
+    const compactText = bodyText.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    throw new Error(compactText || "Не удалось загрузить файл");
   }
-  const data = (await res.json()) as { url: string };
+  let data: { url?: string; posterUrl?: string | null } = {};
+  if (bodyText.trim()) {
+    try {
+      data = JSON.parse(bodyText) as { url?: string; posterUrl?: string | null };
+    } catch {
+      /* ignore */
+    }
+  }
+  const url = typeof data.url === "string" ? data.url : "";
+  if (!url) throw new Error("Сервер не вернул URL медиа");
+  return { url, posterUrl: typeof data.posterUrl === "string" ? data.posterUrl : null };
+}
+
+export async function uploadChatMedia(file: File, options?: { onProgress?: (percent: number) => void }): Promise<string> {
+  const data = await uploadChatMediaWithMeta(file, options);
   return data.url;
 }
 
@@ -382,6 +572,7 @@ export type ChatMessage = {
   senderId: string | null;
   type: MessageType;
   content: string;
+  videoPosterUrl?: string | null;
   replyToId?: string | null;
   replyTo?: ReplySnapshot;
   forwardedFromMessageId?: string | null;

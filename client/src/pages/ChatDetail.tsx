@@ -1,9 +1,21 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+  useTransition,
+  type FormEvent,
+  type MouseEvent,
+  type TouchEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Code, FileText, Loader2 } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChevronLeft, ChevronDown, Phone, Video, MoreVertical, Send, Paperclip, Mic, Smile, Square, Copy, Trash2, Edit3, CheckSquare, Share2, Reply, Camera, Image, X, Bookmark, BookmarkCheck, MessageCircle, Check, List, RotateCcw, Clock, Code, FileText, Loader2, Download, Flag, Heart, History } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { usePrefersReducedMotion } from "@/lib/motion";
+import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 import { useLocation, useParams } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCallContext } from "@/contexts/CallContext";
@@ -30,8 +42,10 @@ import {
 import { compressImage } from "@/lib/compress-image";
 import { setDraft, clearDraft } from "@/lib/chat-drafts";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 
-import { isNative, takePhotoFromCamera, pickPhotoFromGallery, triggerLightHaptic } from "@/lib/capacitor-native";
+import { isNative, pickPhotoFromGallery, takePhotoFromCamera, triggerLightHaptic } from "@/lib/capacitor-native";
+import { triggerErrorFeedback } from "@/lib/micro-feedback";
 import { didWebSocketRecentlyStartGroupCallRing } from "@/lib/group-call-invite-dedupe";
 import { playSendSound, playIncomingChatMessageSound } from "@/lib/send-sound";
 import { LoadingProgress } from "@/components/ui/loading-progress";
@@ -41,22 +55,51 @@ import { DELETE_FOR_EVERYONE_MINUTES } from "@shared/constants";
 import type { ApiChat, ApiMessage, MessageListItem } from "@/features/chat";
 import type { ApiChatMember } from "@/features/chat/types";
 import { EMOJIS, formatLastSeen, buildMessageListItems, isUuid } from "@/features/chat";
+import { ChatComposerStickerEmojiPanel } from "@/features/stickers/ChatComposerStickerEmojiPanel";
 import { ChatMessageRow } from "@/features/chat/components/ChatMessageRow";
 import { useChatMessages } from "@/features/chat/hooks/useChatMessages";
 import { useMessageReadOnVisible } from "@/features/chat/hooks/useMessageReadOnVisible";
-import { useSendMessage } from "@/features/chat/hooks/useSendMessage";
+import { useSendMessage, isComposerEnterKey } from "@/features/chat/hooks/useSendMessage";
+import { getVideoNoteModalPhase, shouldShowVideoNoteModal } from "@/features/chat/hooks/video-note-state";
 import { useMessageActions } from "@/features/chat/hooks/useMessageActions";
 import { useSpellCheck } from "@/features/chat/hooks/useSpellCheck";
 import type { SpellError } from "@/lib/spellcheck";
 import { getSpellCheckEnabled, getChatSpellCheckEnabled, setChatSpellCheckEnabled } from "@/lib/spellcheck-prefs";
-import { getTranslateEnabled, setTranslateEnabled, getTranslateLang, setTranslateLang, syncPrefsOnChatOpen, type TranslateLangCode } from "@/lib/translate-prefs";
+import {
+  getTranslateEnabled,
+  setTranslateEnabled,
+  getTranslateLang,
+  setTranslateLang,
+  syncPrefsOnChatOpen,
+  applyTranslatePrefsAfterServer,
+  type TranslateLangCode,
+  type ServerTranslatePrefs,
+} from "@/lib/translate-prefs";
 import { useMessageTranslation } from "@/features/chat/hooks/useMessageTranslation";
 import { AI_CHAT_ID } from "@/features/chat/constants";
+import {
+  buildLargeTableCsvFileFromGrid,
+  buildLargeTableXlsxFileFromGrid,
+  LargeTablePasteDialog,
+  MESSAGE_TABLE_MAX_INLINE_COLS,
+  MESSAGE_TABLE_MAX_INLINE_ROWS,
+  parseTablePayloadFromFenceBody,
+  prepareLargeTablePasteData,
+  TablePasteOfferDialog,
+  tryBuildTablePasteFromClipboard,
+  type LargeTableSendFormat,
+  type ParsedGrid,
+} from "@/features/chat/message-table";
 import { formatMessageTime, parseMessageDate } from "@/features/chat/utils/format";
+import { messageHasDownloadableAttachment } from "@/features/chat/utils/save-message-attachment";
 import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useTouchEdgeNavigationEnabled, useTouchRightEdgeSwipeLeft } from "@/hooks/use-touch-edge-swipe";
 import { buildProfilePath } from "@/lib/profile-route";
-import { resolveUrl } from "@/lib/api-base";
+import { buildChatPath } from "@/lib/chat-route";
+import { API, apiFetch, resolveUrl } from "@/lib/api-base";
+import { CHAT_VIRTUAL_MESSAGES_ENABLED } from "@/lib/chat-virtual-flag";
+import { listBusinessActionsByChat, invokeBusinessAction, type BusinessActionItem } from "@/lib/business-chat";
 import { GroupChatParticipantsSheet } from "@/features/chat/components/GroupChatParticipantsSheet";
 import { ChatMediaLinksSheet } from "@/features/chat/components/ChatMediaLinksSheet";
 import { MentionPicker } from "@/features/chat/components/MentionPicker";
@@ -66,8 +109,11 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AddToTrackModal } from "@/features/board/tracks";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useChatVibe } from "@/features/chat/hooks/useChatVibe";
+import { useChatEdgeSwipeBack } from "@/features/chat/hooks/useChatEdgeSwipeBack";
 import { ChatVibeBackground } from "@/features/chat/components/ChatVibeBackground";
 import { ChatVibeOverlay } from "@/features/chat/components/ChatVibeOverlay";
+import { useChatRealtime } from "@/features/chat/hooks/useChatRealtime";
+import { useComposerTransferPulse } from "@/features/chat/hooks/useComposerTransferPulse";
 import { ChatHeaderStoryRing } from "@/features/chat/components/ChatHeaderStoryRing";
 import {
   ChatComposerSttButton,
@@ -75,6 +121,7 @@ import {
 } from "@/features/chat/components/ChatComposerSttButton";
 import { PingokDmScheduledCallBanner } from "@/features/pingok/PingokDmScheduledCallBanner";
 import { BlockedByPeerComposer } from "@/features/user-blocking";
+import { ReportContentDialog, block01ugcRu } from "@/features/store-moderation/block-01-ugc";
 import { PULSE_THEME_ACCENTS } from "@/lib/chat-vibe-themes";
 import { PulseDmComposerMedia } from "@/features/chat/components/pulse/PulseDmComposerMedia";
 import {
@@ -83,6 +130,7 @@ import {
   ChatDetailComposerReplyDraftStrips,
   ChatDetailComposerSpellFooter,
   ChatDetailComposerTopChrome,
+  ChatDetailComposerUploadStrip,
   ChatDetailNativeAttachMenu,
   ChatDetailVideoNoteModal,
   ChatDetailVoicePreviewModal,
@@ -103,6 +151,79 @@ import {
   getChatMsgColorStorageKey,
 } from "@/features/chat/chat-detail";
 import type { ChatBackgroundPreset, ChatMessageBubblePreset } from "@/features/chat/chat-detail";
+
+const TABLE_FENCE_BODY_RE = /```table\s*\n([\s\S]*?)```/i;
+
+type TablePasteOfferState =
+  | {
+      mode: "inline";
+      cols: number;
+      rows: number;
+      previewRows: string[][];
+      plainText: string;
+      tableFence: string;
+      start: number;
+      end: number;
+    }
+  | {
+      mode: "file";
+      cols: number;
+      rows: number;
+      previewRows: string[][];
+      plainText: string;
+      largeTable: {
+        grid: ParsedGrid;
+        cols: number;
+        rows: number;
+        previewRows: string[][];
+      };
+      start: number;
+      end: number;
+    };
+
+type LargeTablePasteState = {
+  grid: ParsedGrid;
+  cols: number;
+  rows: number;
+  previewRows: string[][];
+};
+
+type TablePasteFallbackTelemetryEvent = "fallback_shown" | "retry_clicked" | "reopen_success";
+
+function buildTablePreviewRowsFromFence(fence: string): string[][] {
+  const bodyMatch = TABLE_FENCE_BODY_RE.exec(fence);
+  const payload = bodyMatch?.[1] ? parseTablePayloadFromFenceBody(bodyMatch[1]) : null;
+  const rows = payload?.rows ?? [];
+  return rows.slice(0, 4).map((r) => r.slice(0, 5));
+}
+
+function emitTablePasteFallbackTelemetry(
+  event: TablePasteFallbackTelemetryEvent,
+  payload: { chatId: string; cols: number; rows: number; viaRetry?: boolean },
+) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent("ping:chat-table-paste-fallback-telemetry", {
+      detail: {
+        event,
+        chatId: payload.chatId,
+        cols: payload.cols,
+        rows: payload.rows,
+        viaRetry: Boolean(payload.viaRetry),
+        at: Date.now(),
+      },
+    }),
+  );
+}
+
+type TablePasteFallbackClientTelemetryDetail = {
+  event: TablePasteFallbackTelemetryEvent;
+  chatId: string;
+  cols: number;
+  rows: number;
+  viaRetry: boolean;
+  at: number;
+};
 
 /**
  * Страница чата. Контракт (чтобы не сломать):
@@ -126,6 +247,7 @@ function ChatDetailView({
   const { toast } = useToast();
   const spacing = useChatSpacingPreset();
   const isMobile = useIsMobile();
+  const touchEdgeNavEnabled = useTouchEdgeNavigationEnabled();
   const reducedMotion = usePrefersReducedMotion();
 
   const sendDraftRef = useRef<{ setMessage: (v: string | ((p: string) => string)) => void } | null>(null);
@@ -153,6 +275,7 @@ function ChatDetailView({
     typingDisplay,
     voiceRecordingDisplay,
     scheduleSendTyping,
+    sendMarkChatRead,
   } = useChatMessages({
     chatIdParam,
     onDraftRestore: (_, draft) => {
@@ -161,18 +284,25 @@ function ChatDetailView({
     },
   });
 
-  const mainFolder = useMemo(() => folders.find((f) => f.isMain), [folders]);
+  const mainFolder = useMemo(() => {
+    const byMain = folders.find((f) => Boolean(f.isMain));
+    if (byMain) return byMain;
+    return folders.length
+      ? folders.slice().sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, "ru"))[0]
+      : undefined;
+  }, [folders]);
   const visibleFolders = useMemo(() => {
-    return folders
-      .filter((f) => f.isMain || (f.messageCount ?? 0) > 0 || f.id === currentFolderId)
-      .slice()
-      .sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, "ru"));
+    const byActivity = (f: (typeof folders)[number]) =>
+      Boolean(f.isMain) || (f.messageCount ?? 0) > 0 || f.id === currentFolderId;
+    const filtered = folders.filter(byActivity);
+    const tabs = filtered.length > 0 ? filtered : folders;
+    return tabs.slice().sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, "ru"));
   }, [folders, currentFolderId]);
 
   useEffect(() => {
     if (chat?.type !== "group" || !mainFolder?.id || !currentFolderId) return;
     const visible = folders.filter(
-      (f) => f.isMain || (f.messageCount ?? 0) > 0 || f.id === currentFolderId,
+      (f) => Boolean(f.isMain) || (f.messageCount ?? 0) > 0 || f.id === currentFolderId,
     );
     if (!visible.some((f) => f.id === currentFolderId)) {
       void loadMessagesForFolder(mainFolder.id);
@@ -220,7 +350,6 @@ function ChatDetailView({
   const handleDeleteChatFolder = useCallback(
     (f: { id: string; name: string }) => {
       void (async () => {
-        if (!window.confirm(`Удалить папку «${f.name}»? Сообщения останутся в «Общем» чате.`)) return;
         if (!chatId) return;
         try {
           await deleteChatFolder(chatId, f.id);
@@ -238,22 +367,40 @@ function ChatDetailView({
     [chatId, refreshFolders, loadMessagesForFolder, currentFolderId, mainFolder?.id, toast],
   );
 
-  /** Открыли по /chat/123 (public id) — канонизируем в /chat/<uuid>, чтобы все запросы шли на тот же id, что и членство/переводы/WS. */
-  const replacedNumericChatUrlRef = useRef(false);
+  const replacedCanonicalChatUrlRef = useRef(false);
   useEffect(() => {
-    replacedNumericChatUrlRef.current = false;
+    replacedCanonicalChatUrlRef.current = false;
   }, [chatIdParam]);
   useEffect(() => {
-    if (!chatId || !/^\d+$/.test(chatIdParam)) return;
+    if (!chatId || !chat) return;
     if (!isUuid(chatId)) return;
-    if (replacedNumericChatUrlRef.current) return;
-    replacedNumericChatUrlRef.current = true;
-    setLocation(`/chat/${encodeURIComponent(chatId)}`, { replace: true } as { replace?: boolean });
-  }, [chatId, chatIdParam, setLocation]);
+    if (replacedCanonicalChatUrlRef.current) return;
+    if (typeof window === "undefined") return;
+    const canonicalPath = buildChatPath(chat, chatId);
+    if (!canonicalPath.startsWith("/chat/")) return;
+    const currentPath = window.location.pathname;
+    if (currentPath === canonicalPath) return;
+    replacedCanonicalChatUrlRef.current = true;
+    setLocation(`${canonicalPath}${window.location.search}`, { replace: true } as { replace?: boolean });
+  }, [chat, chatId, chatIdParam, setLocation]);
 
-  useMessageReadOnVisible(scrollContainerRef, chatId, messages, user?.id ?? null);
+  /** После отправки с кнопки фокус на кнопке, она исчезает — без refocus клавиатура на мобильных закрывается. */
+  const refocusComposerAfterClearRef = useRef<(() => void) | null>(null);
+  const onAfterComposerClear = useCallback(() => {
+    refocusComposerAfterClearRef.current?.();
+  }, []);
 
-  const send = useSendMessage({ chatId, folderId: currentFolderId, setMessages, user });
+  useMessageReadOnVisible(scrollContainerRef, chatId, messages, user?.id ?? null, sendMarkChatRead);
+
+  const composerPulseOnOutgoingSentRef = useRef<(() => void) | null>(null);
+  const send = useSendMessage({
+    chatId,
+    folderId: currentFolderId,
+    setMessages,
+    user,
+    onAfterComposerClear,
+    composerPulseOnOutgoingSentRef,
+  });
   sendDraftRef.current = send;
 
   const [spellCheckEnabled, setSpellCheckEnabledState] = useState(getSpellCheckEnabled);
@@ -271,12 +418,46 @@ function ChatDetailView({
   const spellErrors = useSpellCheck(send.message, effectiveSpellCheck);
   const [spellUndo, setSpellUndo] = useState<{ from: string; to: string } | null>(null);
 
+  const [largeTablePaste, setLargeTablePaste] = useState<{
+    grid: ParsedGrid;
+    cols: number;
+    rows: number;
+    previewRows: string[][];
+  } | null>(null);
+  const [largeTableSending, setLargeTableSending] = useState<LargeTableSendFormat | null>(null);
+  const [tablePasteOffer, setTablePasteOffer] = useState<TablePasteOfferState | null>(null);
+  const tablePasteOfferHandledRef = useRef(false);
+  const largeTablePasteRef = useRef<LargeTablePasteState | null>(null);
+  const largeTablePastePendingOpenRef = useRef<LargeTablePasteState | null>(null);
+  const largeTablePasteOpenTimerRef = useRef<number | null>(null);
+  const largeTablePasteFallbackShownRef = useRef(false);
+  const largeTablePasteRetryRequestedRef = useRef(false);
+
   const [chatTranslateEnabled, setChatTranslateEnabledState] = useState(() => getTranslateEnabled(chatId));
   const [translateLang, setTranslateLangState] = useState<TranslateLangCode>(getTranslateLang);
   useEffect(() => {
     setChatTranslateEnabledState(getTranslateEnabled(chatId));
-    syncPrefsOnChatOpen(chatId);
-  }, [chatId]);
+    let cancelled = false;
+    void apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/translate-prefs`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: ServerTranslatePrefs | null) => {
+        if (cancelled || !data) return;
+        if (data.dmMultilingual) {
+          applyTranslatePrefsAfterServer(chatId, data);
+          setChatTranslateEnabledState(getTranslateEnabled(chatId));
+          setTranslateLangState(getTranslateLang());
+        }
+        setChat((prev) =>
+          prev?.id === chatId ? { ...prev, dmMultilingualEnabled: Boolean(data.dmMultilingual) } : prev,
+        );
+      })
+      .finally(() => {
+        if (!cancelled) syncPrefsOnChatOpen(chatId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, setChat]);
   useEffect(() => {
     const handler = () => {
       setChatTranslateEnabledState(getTranslateEnabled(chatId));
@@ -286,12 +467,77 @@ function ChatDetailView({
     return () => window.removeEventListener("ping:translate-change", handler);
   }, [chatId]);
 
-  const { translations } = useMessageTranslation(
+  const { translations, translationPendingIds } = useMessageTranslation(
     messages,
     chatTranslateEnabled,
     translateLang,
     user?.id ?? "",
     chatId,
+  );
+
+  const handleDmMultilingualChange = useCallback(
+    async (enabled: boolean) => {
+      try {
+        const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/dm-multilingual`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        });
+        const j = (await r.json().catch(() => ({}))) as ServerTranslatePrefs & { message?: string };
+        if (!r.ok) {
+          toast({
+            title: "Не удалось сохранить",
+            description: typeof j.message === "string" ? j.message : "",
+            variant: "destructive",
+          });
+          return;
+        }
+        applyTranslatePrefsAfterServer(chatId, j);
+        setChatTranslateEnabledState(getTranslateEnabled(chatId));
+        setTranslateLangState(getTranslateLang());
+        setChat((prev) =>
+          prev?.id === chatId ? { ...prev, dmMultilingualEnabled: Boolean(j.dmMultilingual) } : prev,
+        );
+        syncPrefsOnChatOpen(chatId);
+      } catch {
+        toast({ title: "Ошибка сети", variant: "destructive" });
+      }
+    },
+    [chatId, setChat, toast],
+  );
+
+  const handleLargeTableSend = useCallback(
+    async (format: LargeTableSendFormat) => {
+      if (!largeTablePaste) return;
+      setLargeTableSending(format);
+      try {
+        const file =
+          format === "csv"
+            ? buildLargeTableCsvFileFromGrid(largeTablePaste.grid)
+            : await buildLargeTableXlsxFileFromGrid(largeTablePaste.grid);
+        const ok = await send.attachChatDocumentFile(file);
+        if (ok) {
+          setLargeTablePaste(null);
+          triggerLightHaptic();
+          toast({
+            title: "Таблица в чате",
+            description:
+              format === "csv"
+                ? "Отправлен CSV — откроется в Excel и Google Таблицах."
+                : "Отправлен Excel (.xlsx).",
+          });
+        }
+      } catch (err) {
+        toast({
+          title: "Не удалось собрать файл",
+          description: err instanceof Error ? err.message : "",
+          variant: "destructive",
+        });
+      } finally {
+        setLargeTableSending(null);
+      }
+    },
+    [largeTablePaste, send.attachChatDocumentFile, toast],
   );
 
   const lastAppliedTextRef = useRef<string | null>(null);
@@ -397,17 +643,24 @@ function ChatDetailView({
       requestAnimationFrame(() => {
         requestAnimationFrame(() => actions.scrollToMessageAndHighlight(messageId));
       });
-      setLocation(`/chat/${chatId}`, { replace: true } as { replace?: boolean });
+      setLocation(buildChatPath(chat ?? { id: chatId }, chatId), { replace: true } as { replace?: boolean });
     }
-  }, [loading, chatId, messages, actions.scrollToMessageAndHighlight, setLocation]);
+  }, [loading, chatId, chat, messages, actions.scrollToMessageAndHighlight, setLocation]);
   useEffect(() => () => { scrollToMessageIdRef.current = null; }, [chatId]);
 
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [composerEmojiStickerTab, setComposerEmojiStickerTab] = useState<"emoji" | "stickers">("emoji");
+  const [businessActions, setBusinessActions] = useState<BusinessActionItem[]>([]);
+  const [businessActionsLoading, setBusinessActionsLoading] = useState(false);
+  const [businessActionsError, setBusinessActionsError] = useState<string | null>(null);
+  const [invokingBusinessActionId, setInvokingBusinessActionId] = useState<string | null>(null);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStartPos, setMentionStartPos] = useState(0);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const pendingCursorRef = useRef<number | null>(null);
+  /** Один Enter не обрабатываем и в beforeinput, и в keydown (мобильный + десктоп). */
+  const composerMentionEnterLockRef = useRef(false);
   const [showAttachSource, setShowAttachSource] = useState(false);
   const [draftRestoredHint, setDraftRestoredHint] = useState(false);
   const [composerSttUi, setComposerSttUi] = useState<{ phase: "idle" | "listening" | "transcribing"; liveLine: string }>({
@@ -423,10 +676,24 @@ function ChatDetailView({
   const [showGroupMenu, setShowGroupMenu] = useState(false);
   const [showMediaLinksSheet, setShowMediaLinksSheet] = useState(false);
   const [showGroupParticipants, setShowGroupParticipants] = useState(false);
+  const [reportMessageTarget, setReportMessageTarget] = useState<ApiMessage | null>(null);
   const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
-  const [mediaViewer, setMediaViewer] = useState<{ src: string; type: "image" | "video" | "video_note" } | null>(null);
+  const [activeVideoNoteId, setActiveVideoNoteId] = useState<string | null>(null);
+  const [mediaViewer, setMediaViewer] = useState<{
+    src: string;
+    type: "image" | "video" | "video_note" | "pdf";
+    title?: string;
+  } | null>(null);
+  const [, startMediaViewerTransition] = useTransition();
+  const openChatMediaViewer = useCallback(
+    (src: string, type: "image" | "video" | "video_note" | "pdf", title?: string) => {
+      startMediaViewerTransition(() => setMediaViewer({ src, type, title }));
+    },
+    [startMediaViewerTransition],
+  );
   useEffect(() => {
     setActiveVoiceId(null);
+    setActiveVideoNoteId(null);
   }, [chatId]);
   const groupAvatarInputRef = useRef<HTMLInputElement>(null);
   const mentionPickerRef = useRef<HTMLDivElement>(null);
@@ -455,22 +722,86 @@ function ChatDetailView({
   const vibe = useChatVibe(chat?.type === "dm" ? chatId : undefined, {
     surface: isDarkTheme ? "dark" : "light",
   });
+  const { sendComposerPulse, subscribeComposerPulse } = useChatRealtime();
+  const meComposerDisplayName = useMemo(
+    () => [user?.displayName, user?.surname].filter(Boolean).join(" ").trim() || null,
+    [user?.displayName, user?.surname],
+  );
+  const composerTransferPulse = useComposerTransferPulse({
+    chatId,
+    enabled: chat?.type === "dm",
+    userId: user?.id,
+    displayName: meComposerDisplayName,
+    sendComposerPulse,
+    subscribeComposerPulse,
+  });
+  useLayoutEffect(() => {
+    if (chat?.type === "dm") {
+      composerPulseOnOutgoingSentRef.current = composerTransferPulse.recordOutgoingMessageForTransferPulse;
+    } else {
+      composerPulseOnOutgoingSentRef.current = null;
+    }
+    return () => {
+      composerPulseOnOutgoingSentRef.current = null;
+    };
+  }, [chat?.type, composerTransferPulse.recordOutgoingMessageForTransferPulse]);
   const attachSourceRef = useRef<HTMLDivElement>(null);
   const chatThemeMenuRef = useRef<HTMLDivElement>(null);
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  refocusComposerAfterClearRef.current = () => {
+    const ta = messageInputRef.current;
+    if (!ta) return;
+    const focusComposer = () => {
+      try {
+        ta.focus({ preventScroll: true });
+      } catch {
+        /* WebView */
+      }
+    };
+    focusComposer();
+    queueMicrotask(focusComposer);
+    requestAnimationFrame(focusComposer);
+    requestAnimationFrame(() => requestAnimationFrame(focusComposer));
+    setTimeout(focusComposer, 0);
+    setTimeout(focusComposer, 80);
+  };
   const composerBarRef = useRef<HTMLDivElement>(null);
   const [composerBarHeightPx, setComposerBarHeightPx] = useState(0);
   const lastMessageIdRef = useRef<string>("");
-  const { startCall } = useCallContext();
+  const { startCall, state: callState } = useCallContext();
   const groupCallCtx = useGroupCallContext();
   const [groupCallLobby, setGroupCallLobby] = useState<{
     roomId: string;
     mediaType: GroupCallMedia;
     participantCount: number;
     hostUserId: string;
+    maxMeshPeers?: number;
   } | null>(null);
+  const [inviteJoinCallBootstrapping, setInviteJoinCallBootstrapping] = useState(false);
   const lastGroupCallLobbyRoomRef = useRef<string | null>(null);
+  const inviteJoinCallAutoAttemptedRef = useRef(false);
+  /** Сбрасываем защиту от дублей при смене чата или после нового `?joinCall=1` в URL. */
+  const lastJoinCallSearchSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    lastJoinCallSearchSeenRef.current = null;
+    inviteJoinCallAutoAttemptedRef.current = false;
+  }, [chatId]);
+
+  const groupCallActiveRef = useRef(groupCallCtx.active);
+  groupCallActiveRef.current = groupCallCtx.active;
+
+  const stripJoinCallQueryFromUrl = useCallback(() => {
+    if (typeof window === "undefined" || !chatId) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (!sp.has("joinCall")) return;
+    sp.delete("joinCall");
+    const qs = sp.toString();
+    const path = buildChatPath(chat ?? { id: chatId }, chatId);
+    const next = qs ? `${path}?${qs}` : path;
+    lastJoinCallSearchSeenRef.current = null;
+    setLocation(next, { replace: true } as { replace?: boolean });
+  }, [chatId, chat, setLocation]);
 
   const startCallUnlessInGroup = useCallback(
     (
@@ -521,6 +852,202 @@ function ChatDetailView({
     el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
   }, []);
 
+  const applyChunkAtSelection = useCallback(
+    (start: number, end: number, chunk: string) => {
+      send.setMessage((prev) => prev.slice(0, start) + chunk + prev.slice(end));
+      requestAnimationFrame(() => {
+        const pos = start + chunk.length;
+        const ta = messageInputRef.current;
+        ta?.focus({ preventScroll: true });
+        ta?.setSelectionRange(pos, pos);
+        syncComposerHeight();
+      });
+    },
+    [send.setMessage, syncComposerHeight],
+  );
+
+  const dismissTablePasteOffer = useCallback(() => {
+    if (!tablePasteOffer) return;
+    if (!tablePasteOfferHandledRef.current) {
+      applyChunkAtSelection(tablePasteOffer.start, tablePasteOffer.end, tablePasteOffer.plainText);
+    }
+    tablePasteOfferHandledRef.current = false;
+    setTablePasteOffer(null);
+  }, [applyChunkAtSelection, tablePasteOffer]);
+
+  const choosePlainTablePasteOffer = useCallback(() => {
+    if (!tablePasteOffer) return;
+    tablePasteOfferHandledRef.current = true;
+    applyChunkAtSelection(tablePasteOffer.start, tablePasteOffer.end, tablePasteOffer.plainText);
+    setTablePasteOffer(null);
+  }, [applyChunkAtSelection, tablePasteOffer]);
+
+  const chooseTablePasteOffer = useCallback(() => {
+    if (!tablePasteOffer) return;
+    tablePasteOfferHandledRef.current = true;
+    if (tablePasteOffer.mode === "inline") {
+      applyChunkAtSelection(tablePasteOffer.start, tablePasteOffer.end, tablePasteOffer.tableFence);
+    } else {
+      const nextLargeTablePaste: LargeTablePasteState = {
+        grid: tablePasteOffer.largeTable.grid,
+        cols: tablePasteOffer.largeTable.cols,
+        rows: tablePasteOffer.largeTable.rows,
+        previewRows: tablePasteOffer.largeTable.previewRows,
+      };
+      largeTablePasteFallbackShownRef.current = false;
+      largeTablePasteRetryRequestedRef.current = false;
+      largeTablePastePendingOpenRef.current = nextLargeTablePaste;
+      if (largeTablePasteOpenTimerRef.current !== null) {
+        window.clearTimeout(largeTablePasteOpenTimerRef.current);
+      }
+      setTablePasteOffer(null);
+      requestAnimationFrame(() => {
+        setLargeTablePaste(nextLargeTablePaste);
+      });
+      largeTablePasteOpenTimerRef.current = window.setTimeout(() => {
+        const pending = largeTablePastePendingOpenRef.current;
+        if (largeTablePasteRef.current !== null || !pending) return;
+        largeTablePasteFallbackShownRef.current = true;
+        emitTablePasteFallbackTelemetry("fallback_shown", {
+          chatId,
+          cols: pending.cols,
+          rows: pending.rows,
+        });
+        toast({
+          title: "Не удалось открыть выбор формата",
+          description: "Попробуйте еще раз.",
+          variant: "destructive",
+          action: (
+            <ToastAction
+              altText="Повторить открытие выбора формата"
+              onClick={() => {
+                const retryData = largeTablePastePendingOpenRef.current;
+                if (!retryData) return;
+                largeTablePasteRetryRequestedRef.current = true;
+                emitTablePasteFallbackTelemetry("retry_clicked", {
+                  chatId,
+                  cols: retryData.cols,
+                  rows: retryData.rows,
+                });
+                requestAnimationFrame(() => {
+                  setLargeTablePaste(retryData);
+                });
+              }}
+            >
+              Повторить
+            </ToastAction>
+          ),
+        });
+      }, 300);
+      void triggerLightHaptic();
+      return;
+    }
+    setTablePasteOffer(null);
+    void triggerLightHaptic();
+  }, [applyChunkAtSelection, chatId, tablePasteOffer, toast]);
+
+  useEffect(() => {
+    const pending = largeTablePastePendingOpenRef.current;
+    largeTablePasteRef.current = largeTablePaste;
+    if (largeTablePaste) {
+      if (pending && largeTablePasteFallbackShownRef.current) {
+        emitTablePasteFallbackTelemetry("reopen_success", {
+          chatId,
+          cols: pending.cols,
+          rows: pending.rows,
+          viaRetry: largeTablePasteRetryRequestedRef.current,
+        });
+      }
+      largeTablePastePendingOpenRef.current = null;
+      largeTablePasteFallbackShownRef.current = false;
+      largeTablePasteRetryRequestedRef.current = false;
+      if (largeTablePasteOpenTimerRef.current !== null) {
+        window.clearTimeout(largeTablePasteOpenTimerRef.current);
+        largeTablePasteOpenTimerRef.current = null;
+      }
+    }
+  }, [chatId, largeTablePaste]);
+
+  useEffect(
+    () => () => {
+      if (largeTablePasteOpenTimerRef.current !== null) {
+        window.clearTimeout(largeTablePasteOpenTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const onTelemetry = (raw: Event) => {
+      const ev = raw as CustomEvent<TablePasteFallbackClientTelemetryDetail>;
+      const detail = ev.detail;
+      if (!detail || !chatId) return;
+      void apiFetch(`${API}/telemetry/client-event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "chat.table_paste_fallback",
+          payload: detail,
+        }),
+      }).catch(() => {
+        // non-critical telemetry
+      });
+    };
+    window.addEventListener("ping:chat-table-paste-fallback-telemetry", onTelemetry as EventListener);
+    return () => {
+      window.removeEventListener("ping:chat-table-paste-fallback-telemetry", onTelemetry as EventListener);
+    };
+  }, [chatId]);
+
+  /** Скрыть клавиатуру и вспомогательные панели ввода (общая часть для тапа по ленте и для скролла). */
+  const dismissChatComposerFocus = useCallback(() => {
+    const ta = messageInputRef.current;
+    if (ta && document.activeElement === ta) {
+      ta.blur();
+    }
+    setShowEmojiPicker(false);
+    setMentionOpen(false);
+  }, []);
+
+  /** Как в Telegram: тап по ленте сообщений убирает клавиатуру; `click` (не pointerdown), чтобы лёгкое касание при подстройке скролла не било фокус. */
+  const dismissKeyboardOnChatAreaTap = useCallback(
+    (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || target.closest("[data-chat-keep-composer-focus='1']")) return;
+      dismissChatComposerFocus();
+    },
+    [dismissChatComposerFocus],
+  );
+
+  /** iOS / тач: при прокрутке ленты клавиатура должна уходить (как в нативных мессенджерах). */
+  const chatListTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const onChatListTouchStart = useCallback((e: TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    chatListTouchStartRef.current = { x: t.clientX, y: t.clientY };
+  }, []);
+  const onChatListTouchMove = useCallback(
+    (e: TouchEvent) => {
+      const start = chatListTouchStartRef.current;
+      if (!start || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = Math.abs(t.clientX - start.x);
+      const dy = Math.abs(t.clientY - start.y);
+      if (dx < 10 && dy < 10) return;
+      chatListTouchStartRef.current = null;
+      dismissChatComposerFocus();
+    },
+    [dismissChatComposerFocus],
+  );
+  const onChatListTouchEndOrCancel = useCallback(() => {
+    chatListTouchStartRef.current = null;
+  }, []);
+
+  /** Десктоп / колёсико по ленте — тоже убираем фокус с поля ввода. */
+  const onChatListWheel = useCallback(() => {
+    dismissChatComposerFocus();
+  }, [dismissChatComposerFocus]);
+
   useEffect(() => {
     if (loading) return;
     const bar = composerBarRef.current;
@@ -552,6 +1079,72 @@ function ChatDetailView({
     setShowEmojiPicker(false);
   }, [actions.setMessageMenu]);
 
+  const handleOpenSharedTarget = useCallback(
+    (target:
+      | { type: "post"; postId: string; authorId?: string }
+      | { type: "story"; storyId: string; authorId?: string }
+      | { type: "comment"; postId: string; commentId: string; authorId?: string }) => {
+      void (async () => {
+        if (target.type === "post") {
+          const postRes = await apiFetch(`${API}/posts/${encodeURIComponent(target.postId)}`, { cache: "no-store" });
+          if (!postRes.ok) {
+            toast({ title: "Пост недоступен", description: "Возможно, он удалён или скрыт.", variant: "destructive" });
+            return;
+          }
+          const routeAuthorId = target.authorId || "me";
+          setLocation(`/u/${encodeURIComponent(routeAuthorId)}/p/${encodeURIComponent(target.postId)}`);
+          return;
+        }
+        if (target.type === "story") {
+          const storyRes = await apiFetch(`${API}/stories/${encodeURIComponent(target.storyId)}/view`, { method: "POST" });
+          if (!storyRes.ok) {
+            toast({
+              title: "Сториз недоступна",
+              description: "Возможно, она уже исчезла или удалена.",
+              variant: "destructive",
+            });
+            return;
+          }
+          const params = new URLSearchParams();
+          params.set("storyId", target.storyId);
+          if (target.authorId) params.set("storyAuthorId", target.authorId);
+          setLocation(`/posts?${params.toString()}`);
+          return;
+        }
+        const postRes = await apiFetch(`${API}/posts/${encodeURIComponent(target.postId)}`, { cache: "no-store" });
+        if (!postRes.ok) {
+          toast({ title: "Комментарий недоступен", description: "Пост больше недоступен.", variant: "destructive" });
+          return;
+        }
+        const commentsRes = await apiFetch(`${API}/posts/${encodeURIComponent(target.postId)}/comments`, { cache: "no-store" });
+        if (!commentsRes.ok) {
+          toast({ title: "Комментарий недоступен", description: "Не удалось открыть комментарии.", variant: "destructive" });
+          return;
+        }
+        const comments = (await commentsRes.json().catch(() => [])) as Array<{ id?: string }>;
+        const exists = comments.some((c) => c && typeof c.id === "string" && c.id === target.commentId);
+        if (!exists) {
+          toast({
+            title: "Комментарий недоступен",
+            description: "Возможно, он был удалён.",
+            variant: "destructive",
+          });
+          return;
+        }
+        const routeAuthorId = target.authorId || "me";
+        const params = new URLSearchParams();
+        params.set("openComments", "1");
+        params.set("commentId", target.commentId);
+        setLocation(
+          `/u/${encodeURIComponent(routeAuthorId)}/p/${encodeURIComponent(target.postId)}?${params.toString()}`
+        );
+      })().catch(() => {
+        toast({ title: "Не удалось открыть контент", variant: "destructive" });
+      });
+    },
+    [setLocation, toast]
+  );
+
   useEffect(() => {
     if (actions.messageMenu) setShowEmojiPicker(false);
   }, [actions.messageMenu]);
@@ -580,6 +1173,7 @@ function ChatDetailView({
             mediaType: r.mediaType,
             participantCount: r.participantCount,
             hostUserId: typeof r.hostUserId === "string" ? r.hostUserId : "",
+            maxMeshPeers: typeof r.maxMeshPeers === "number" ? r.maxMeshPeers : undefined,
           });
         } else {
           setGroupCallLobby(null);
@@ -593,6 +1187,89 @@ function ChatDetailView({
       window.clearInterval(id);
     };
   }, [chatId, chat?.type, groupCallCtx.active]);
+
+  /**
+   * Инвайт с `?joinCall=1`: после входа в групповой чат — один раз проверить активный созвон и открыть модалку,
+   * как по кнопке «Подключиться». Параметр убираем из URL (без лишних перезагрузок).
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const wantsJoin = sp.get("joinCall") === "1" || sp.get("joinCall") === "true";
+    if (!wantsJoin) return;
+
+    if (!isGroupCallModuleEnabled()) {
+      stripJoinCallQueryFromUrl();
+      return;
+    }
+
+    if (loading || !chatId || !chat) return;
+
+    if (chat.type !== "group") {
+      stripJoinCallQueryFromUrl();
+      return;
+    }
+
+    const qs = window.location.search;
+    if (lastJoinCallSearchSeenRef.current !== qs) {
+      inviteJoinCallAutoAttemptedRef.current = false;
+      lastJoinCallSearchSeenRef.current = qs;
+    }
+    if (inviteJoinCallAutoAttemptedRef.current) return;
+    inviteJoinCallAutoAttemptedRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (groupCallActiveRef.current) {
+          stripJoinCallQueryFromUrl();
+          return;
+        }
+        const r = await fetchActiveGroupCall(chatId);
+        if (cancelled) return;
+        if (groupCallActiveRef.current) {
+          stripJoinCallQueryFromUrl();
+          return;
+        }
+        if (!r.active) {
+          stripJoinCallQueryFromUrl();
+          toast({
+            title: "Созвон не идёт",
+            description: "Попросите начать групповой звонок и подключитесь снова из баннера в чате.",
+          });
+          return;
+        }
+        const chatTitle = chat.name?.trim() || "Групповой чат";
+        groupCallCtx.joinGroupCall({
+          roomId: r.roomId,
+          chatId,
+          mediaType: r.mediaType,
+          chatTitle,
+          hostUserId: typeof r.hostUserId === "string" ? r.hostUserId : null,
+        });
+        stripJoinCallQueryFromUrl();
+      } catch (e) {
+        if (cancelled) return;
+        stripJoinCallQueryFromUrl();
+        toast({
+          title: "Не удалось подключиться к созвону",
+          description: e instanceof Error ? e.message : "Попробуйте кнопку в баннере чата.",
+          variant: "destructive",
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loading,
+    chatId,
+    chat,
+    stripJoinCallQueryFromUrl,
+    toast,
+    groupCallCtx.joinGroupCall,
+  ]);
 
   /** Если /calls WS не доставил приглашение — короткий сигнал по поллингу (без дубля с рингтоном из AppLayout). */
   useEffect(() => {
@@ -708,9 +1385,11 @@ function ChatDetailView({
 
   useEffect(() => {
     if (loading || !chat) return;
+    /** Моб./натив: при открытии чата клавиатура не вылезает; после отправки refocus ниже держит её при серии сообщений (как в Telegram). */
+    if (isMobile || isNative()) return;
     const t = setTimeout(() => messageInputRef.current?.focus({ preventScroll: true }), 300);
     return () => clearTimeout(t);
-  }, [loading, chat?.id]);
+  }, [loading, chat?.id, isMobile]);
 
   useEffect(() => {
     syncComposerHeight();
@@ -756,6 +1435,7 @@ function ChatDetailView({
   const isCanvasMode = isCanvasPrefix && trimmedComposerText.length > 1;
 
   const isDm = chat?.type === "dm";
+  const isBusiness = chat?.type === "business";
   const blockedByPeerDm = isDm && chat?.blockedByOther?.restrictChat === true;
   const blockedByPeerNote = chat?.blockedByOther?.note ?? null;
   const senderNamesMap = useMemo(() => {
@@ -790,6 +1470,18 @@ function ChatDetailView({
     return Array.from(byId.values());
   }, [chat?.type, chat?.members, messages]);
   const messageListItems = useMemo(() => buildMessageListItems(messages), [messages]);
+  const shouldVirtualizeMessages =
+    CHAT_VIRTUAL_MESSAGES_ENABLED &&
+    messageListItems.length >= 140 &&
+    !actions.highlightedMessageId &&
+    !actions.messageMenu;
+  const messageListVirtualizer = useVirtualizer({
+    count: shouldVirtualizeMessages ? messageListItems.length : 0,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) => (messageListItems[index]?.type === "date" ? 34 : 96),
+    overscan: 10,
+  });
+  const virtualRows = shouldVirtualizeMessages ? messageListVirtualizer.getVirtualItems() : [];
   const nextVoiceByMessageId = useMemo(() => {
     const map = new Map<string, string>();
     const items = messageListItems.filter(
@@ -802,11 +1494,38 @@ function ChatDetailView({
     }
     return map;
   }, [messageListItems]);
+  const nextVoiceSrcByMessageId = useMemo(() => {
+    const map = new Map<string, string>();
+    const items = messageListItems.filter(
+      (i): i is Extract<MessageListItem, { type: "message" }> => i.type === "message"
+    );
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].msg.type !== "voice") continue;
+      const next = items.slice(i + 1).find((it) => it.msg.type === "voice");
+      if (next) {
+        const c = typeof next.msg.content === "string" ? next.msg.content.trim() : "";
+        if (c) map.set(items[i].msg.id, c);
+      }
+    }
+    return map;
+  }, [messageListItems]);
+  const nextVideoNoteByMessageId = useMemo(() => {
+    const map = new Map<string, string>();
+    const items = messageListItems.filter(
+      (i): i is Extract<MessageListItem, { type: "message" }> => i.type === "message"
+    );
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].msg.type !== "video_note") continue;
+      const next = items.slice(i + 1).find((it) => it.msg.type === "video_note");
+      if (next) map.set(items[i].msg.id, next.msg.id);
+    }
+    return map;
+  }, [messageListItems]);
   const selectedChatBgPreset = CHAT_BG_PRESETS.find((preset) => preset.id === chatBgPreset) ?? CHAT_BG_PRESETS[0];
   const isDmChat = chat?.type === "dm";
   const chatSurfaceClassName =
     isDmChat && isDarkTheme
-      ? "bg-[#080810]"
+      ? selectedChatBgPreset.darkBgClassName
       : isDmChat && !isDarkTheme
         ? "bg-[#eef1fb]"
         : isDarkTheme
@@ -820,6 +1539,10 @@ function ChatDetailView({
   const headerPulseMobileDm = pulseDmMobileChrome || pulseDmLightMobileChrome;
   /** DOM как в pulse-template: скрепка | капсула (поле + смайл) | круг видео | голос→текст | микрофон */
   const pulseDmComposerLikeTemplate = headerPulseMobileDm && isDmChat;
+  /** Пока есть текст в PULSE DM: шире поле ввода — убираем смайл, голос→текст и часы отложенной отправки. */
+  const pulseDmComposerTypingCompact =
+    pulseDmComposerLikeTemplate && Boolean(send.message.trim()) && !send.editingId;
+  const composerTransferPulseActive = isDmChat && composerTransferPulse.pulseMicHeartActive;
   const messageListPaddingBottom = useMemo(() => {
     if (composerBarHeightPx > 0) {
       return `calc(${composerBarHeightPx + 8}px + env(safe-area-inset-bottom, 0px))`;
@@ -827,16 +1550,133 @@ function ChatDetailView({
     return spacing.chatListBottomPad;
   }, [composerBarHeightPx, spacing.chatListBottomPad]);
 
+  /** Только голос: видеокружок — модал с круглым превью поверх обычного композера. */
   const pulseDmMediaActive =
     pulseDmComposerLikeTemplate &&
-    (send.voiceState === "recording" ||
+    (send.voiceState === "recording" || Boolean(send.voicePreviewUrl));
+
+  const goBackToChats = useCallback(() => {
+    void triggerLightHaptic();
+    setLocation("/");
+  }, [setLocation]);
+
+  const goToPeerProfileFromDialog = useCallback(() => {
+    if (!chat) return;
+    void triggerLightHaptic();
+    if ((chat.type === "dm" || chat.type === "business") && chat.otherMember) {
+      setLocation(
+        buildProfilePath({
+          publicId: chat.otherMember.publicId ?? 0,
+          userId: chat.otherMember.id,
+          fallbackPath: "/",
+        }),
+      );
+      return;
+    }
+    if (chat.type === "group") {
+      setShowGroupParticipants(true);
+    }
+  }, [chat, setLocation]);
+
+  const chatSwipeBackSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const chatSwipeBackSurfaceGeneration = loading ? 0 : error || !chat ? 1 : 2;
+
+  const chatSwipeBackBlocked = useMemo(
+    () =>
+      showGroupMenu ||
+      showChatThemeMenu ||
+      showGroupParticipants ||
+      showMediaLinksSheet ||
+      !!mediaViewer ||
+      showEmojiPicker ||
+      showAttachSource ||
+      mentionOpen ||
+      !!actions.messageMenu ||
+      !!actions.addToTrackMessage ||
+      !!actions.forwardingMessage ||
+      send.voiceState === "recording" ||
       Boolean(send.voicePreviewUrl) ||
       send.videoNoteState === "recording" ||
-      send.videoNoteState === "preview");
+      send.videoNoteState === "preview" ||
+      pulseDmMediaActive ||
+      composerSttUi.phase !== "idle" ||
+      groupCallCtx.active != null ||
+      callState !== "idle",
+    [
+      showGroupMenu,
+      showChatThemeMenu,
+      showGroupParticipants,
+      showMediaLinksSheet,
+      mediaViewer,
+      showEmojiPicker,
+      showAttachSource,
+      mentionOpen,
+      actions.messageMenu,
+      actions.addToTrackMessage,
+      actions.forwardingMessage,
+      send.voiceState,
+      send.voicePreviewUrl,
+      send.videoNoteState,
+      pulseDmMediaActive,
+      composerSttUi.phase,
+      groupCallCtx.active,
+      callState,
+    ],
+  );
+
+  useChatEdgeSwipeBack({
+    enabled: touchEdgeNavEnabled,
+    blocked: chatSwipeBackBlocked,
+    onBack: goBackToChats,
+    surfaceRef: chatSwipeBackSurfaceRef,
+    surfaceGeneration: chatSwipeBackSurfaceGeneration,
+  });
+
+  useTouchRightEdgeSwipeLeft({
+    enabled: touchEdgeNavEnabled,
+    blocked: chatSwipeBackBlocked,
+    onNavigate: goToPeerProfileFromDialog,
+  });
+
+  const loadBusinessActions = useCallback(async () => {
+    if (!chatId || chat?.type !== "business") {
+      setBusinessActions([]);
+      setBusinessActionsError(null);
+      setBusinessActionsLoading(false);
+      return;
+    }
+    setBusinessActionsLoading(true);
+    setBusinessActionsError(null);
+    try {
+      const rows = await listBusinessActionsByChat(chatId);
+      setBusinessActions(rows);
+    } catch (error) {
+      setBusinessActionsError(error instanceof Error ? error.message : "Не удалось загрузить команды BUSINESS");
+    } finally {
+      setBusinessActionsLoading(false);
+    }
+  }, [chatId, chat?.type]);
+
+  useEffect(() => {
+    if (chat?.type !== "business") {
+      setBusinessActions([]);
+      setBusinessActionsError(null);
+      setBusinessActionsLoading(false);
+      return;
+    }
+    void loadBusinessActions();
+    const timer = window.setInterval(() => {
+      void loadBusinessActions();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [chat?.type, loadBusinessActions]);
 
   if (loading) {
     return (
-      <div className={cn("absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-chat-bottom-pad)] uix-screen", chatSurfaceClassName)}>
+      <div
+        ref={chatSwipeBackSurfaceRef}
+        className={cn("absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-0 uix-screen", chatSurfaceClassName)}
+      >
         <div className={cn("uix-content-x sticky top-0 z-20 mx-1 mt-1 flex items-center gap-2 rounded-[20px] border border-indigo-500/20 bg-white/78 shadow-[0_12px_34px_rgba(70,71,211,0.12)] backdrop-blur-xl pt-safe-offset-2 dark:border-slate-700/45 dark:bg-slate-900/76", spacing.headerYClass)}>
           <button
             type="button"
@@ -878,7 +1718,10 @@ function ChatDetailView({
       throw new Error("ChatDetail: send или actions не определены. Не удаляй useSendMessage и useMessageActions. См. docs/CHAT_DETAIL_RULES.md");
     }
     return (
-      <div className={cn("absolute inset-0 z-[100] flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground uix-screen", chatSurfaceClassName)}>
+      <div
+        ref={chatSwipeBackSurfaceRef}
+        className={cn("absolute inset-0 z-[100] flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground uix-screen", chatSurfaceClassName)}
+      >
         <p className="text-center">{error ?? "Чат не найден"}</p>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <button
@@ -902,8 +1745,9 @@ function ChatDetailView({
 
   return (
     <div
+      ref={chatSwipeBackSurfaceRef}
       className={cn(
-        "absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-[var(--uix-chat-bottom-pad)] uix-screen",
+        "absolute inset-0 z-[100] flex h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden pb-0 uix-screen",
         chatSurfaceClassName,
         pulseDmMobileChrome && "chat-pulse-dm-mobile",
         pulseDmLightMobileChrome && "chat-pulse-dm-light-mobile",
@@ -978,10 +1822,13 @@ function ChatDetailView({
         >
           {chat.type === "group" ? (
             chat.avatarUrl ? (
-              <img
-                src={resolveUrl(chat.avatarUrl)}
-                alt=""
-                className="h-10 w-10 flex-shrink-0 rounded-full object-cover"
+              <UserAvatar
+                avatarUrl={chat.avatarUrl}
+                displayName={displayName}
+                seed={chat.id}
+                size={40}
+                className="h-10 w-10 flex-shrink-0 rounded-full"
+                pointerEventsNone
               />
             ) : (
               <div className="flex -space-x-2.5 w-10 h-10 flex-shrink-0 items-center justify-start mr-9">
@@ -993,6 +1840,7 @@ function ChatDetailView({
                     seed={m.id}
                     size={28}
                     className="h-7 w-7 rounded-full border-2 border-background flex-shrink-0 ring-1 ring-background"
+                    pointerEventsNone
                   />
                 ))}
               </div>
@@ -1009,6 +1857,7 @@ function ChatDetailView({
                 seed={chat.otherMember?.id ?? chat.id}
                 size={40}
                 className="h-10 w-10 rounded-full flex-shrink-0"
+                pointerEventsNone
               />
             </ChatHeaderStoryRing>
           )}
@@ -1167,6 +2016,10 @@ function ChatDetailView({
                 setShowGroupMenu(false);
                 groupAvatarInputRef.current?.click();
               }}
+              onOpenCallJournal={() => {
+                setShowGroupMenu(false);
+                setLocation("/board/calls");
+              }}
               appearanceSection={
                 <div className="border-t border-border/60 mt-2 pt-2">
                   <ChatDetailAppearancePanel
@@ -1238,10 +2091,29 @@ function ChatDetailView({
                 setTranslateLangState(lang);
                 setTranslateEnabled(chatId, true);
               }}
+              showDmMultilingual={chat.type === "dm" && Boolean(chat.otherMember)}
+              dmMultilingualEnabled={Boolean(chat.dmMultilingualEnabled)}
+              onDmMultilingualChange={handleDmMultilingualChange}
             />
+            <div className="border-t border-border/60 mt-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowChatThemeMenu(false);
+                  setLocation("/board/calls");
+                }}
+                className="mb-1 flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-secondary/70"
+              >
+                <History className="h-5 w-5 shrink-0 text-primary" />
+                <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+                  <span className="text-sm font-medium">Журнал созвонов</span>
+                  <span className="text-[11px] text-muted-foreground leading-tight">Борд — недавние и титры</span>
+                </div>
+              </button>
+            </div>
             <ChatDetailLifecycleSection
               chatId={chatId}
-              chatType="dm"
+              chatType={chat.type === "business" ? "business" : "dm"}
               isGroupAdmin={false}
               targetUserId={chat.otherMember?.id ?? null}
               targetDisplayName={displayName}
@@ -1270,6 +2142,7 @@ function ChatDetailView({
         <ChatDetailGroupCallLobbyBanner
           participantCount={groupCallLobby.participantCount}
           mediaType={groupCallLobby.mediaType}
+          maxMeshPeers={groupCallLobby.maxMeshPeers}
           onJoin={() =>
             groupCallCtx.joinGroupCall({
               roomId: groupCallLobby.roomId,
@@ -1296,6 +2169,7 @@ function ChatDetailView({
           members={chat.members ?? []}
           currentUserId={user?.id ?? ""}
           isAdmin={chat.myRole === "admin"}
+          inviteCode={chat.inviteCode ?? null}
           onClose={() => setShowGroupParticipants(false)}
           onMembersChange={(updated) => setChat(updated)}
         />
@@ -1312,7 +2186,7 @@ function ChatDetailView({
               ? (folders.find((f) => f.id === currentFolderId)?.isMain ? null : currentFolderId)
               : null
           }
-          onOpenMedia={(src, type) => setMediaViewer({ src, type })}
+          onOpenMedia={(src, type, title) => openChatMediaViewer(src, type, title)}
         />
       )}
 
@@ -1323,7 +2197,27 @@ function ChatDetailView({
       />
 
       {/* Messages: min-h-0 чтобы flex дал высоту; -webkit-overflow-scrolling: touch для инерции на iOS; overscroll для предсказуемого скролла */}
-      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+      <div
+        className="relative flex flex-1 min-h-0 overflow-hidden"
+        onDragOverCapture={
+          !isMobile && !blockedByPeerDm
+            ? (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+              }
+            : undefined
+        }
+        onDropCapture={
+          !isMobile && !blockedByPeerDm
+            ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const list = e.dataTransfer.files;
+                if (list?.length) void send.handleDroppedFiles(list);
+              }
+            : undefined
+        }
+      >
         {vibe.isActive && (
           <ChatVibeBackground
             theme={vibe.theme}
@@ -1343,6 +2237,12 @@ function ChatDetailView({
           WebkitOverflowScrolling: "touch",
           paddingBottom: messageListPaddingBottom,
         }}
+        onClickCapture={dismissKeyboardOnChatAreaTap}
+        onTouchStart={onChatListTouchStart}
+        onTouchMove={onChatListTouchMove}
+        onTouchEnd={onChatListTouchEndOrCancel}
+        onTouchCancel={onChatListTouchEndOrCancel}
+        onWheel={onChatListWheel}
         onScroll={() => {
           const el = scrollContainerRef.current;
           if (!el) return;
@@ -1361,7 +2261,7 @@ function ChatDetailView({
         <ChatDetailMessagesEmptyState show={messages.length === 0 && !loading && initialRemoteMessagesResolved} />
         {(() => {
           const pulseDmMobileKind = isDm && isMobile ? (isDarkTheme ? ("dark" as const) : ("light" as const)) : null;
-          return messageListItems.map((item, idx) => {
+          const renderItem = (item: MessageListItem, idx: number) => {
           if (item.type === "date") {
             return <ChatDetailMessageDatePill key={`date-${item.label}-${idx}`} label={item.label} />;
           }
@@ -1453,6 +2353,7 @@ function ChatDetailView({
               }
               onPointerDown={actions.handleMessagePointerDown}
               onPointerUp={actions.handleMessagePointerUp}
+              onDoubleTapDefaultReaction={actions.handleDoubleTapDefaultReaction}
               onPointerLeave={actions.handleMessagePointerLeave}
               onContextMenu={actions.handleMessageContextMenu}
               onOpenMenu={handleOpenMessageMenu}
@@ -1474,28 +2375,78 @@ function ChatDetailView({
                   })
                 )
               }
+              onOpenSharedTarget={handleOpenSharedTarget}
               nextVoiceMessageId={msg.type === "voice" ? (nextVoiceByMessageId.get(msg.id) ?? null) : undefined}
+              nextVoiceSrc={msg.type === "voice" ? (nextVoiceSrcByMessageId.get(msg.id) ?? undefined) : undefined}
               activeVoiceId={activeVoiceId}
               onVoiceEnded={(nextId) => setActiveVoiceId(nextId)}
-              onOpenMedia={(src, type) => setMediaViewer({ src, type })}
+              nextVideoNoteMessageId={msg.type === "video_note" ? (nextVideoNoteByMessageId.get(msg.id) ?? null) : undefined}
+              activeVideoNoteId={activeVideoNoteId}
+              onVideoNoteEnded={(nextId) => setActiveVideoNoteId(nextId)}
+              onOpenMedia={(src, type, title) => openChatMediaViewer(src, type, title)}
               translatedText={
                 chatTranslateEnabled &&
                 msg.senderId !== user?.id &&
                 (msg.type === "text" || msg.type === "voice" || msg.type === "video_note")
-                  ? translations.get(msg.id)?.translatedText ?? msg.translatedText ?? undefined
+                  ? translations.get(msg.id)?.translatedText ??
+                    (msg.translateTargetLang === translateLang ? msg.translatedText ?? undefined : undefined)
                   : undefined
+              }
+              translationPending={
+                Boolean(
+                  chatTranslateEnabled &&
+                    msg.senderId !== user?.id &&
+                    (msg.type === "text" || msg.type === "voice" || msg.type === "video_note") &&
+                    translationPendingIds.has(msg.id),
+                )
               }
             />
             </div>
           );
-        });
+        };
+          if (!shouldVirtualizeMessages) {
+            return messageListItems.map((item, idx) => renderItem(item, idx));
+          }
+          return (
+            <div
+              style={{
+                height: `${messageListVirtualizer.getTotalSize()}px`,
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {virtualRows.map((virtualRow) => {
+                const item = messageListItems[virtualRow.index];
+                if (!item) return null;
+                return (
+                  <div
+                    key={item.type === "date" ? `v-date-${item.label}-${virtualRow.index}` : `v-msg-${item.msg.id}`}
+                    data-index={virtualRow.index}
+                    ref={messageListVirtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {renderItem(item, virtualRow.index)}
+                  </div>
+                );
+              })}
+            </div>
+          );
         })()}
         <div ref={messagesEndRef} />
       </div>
       </div>{/* /vibe wrapper */}
 
       {!isNearBottom && (
-        <div className="pointer-events-none absolute inset-x-0 z-[108]" style={{ bottom: "calc(var(--uix-chat-bottom-pad) + 4.25rem)" }}>
+        <div
+          className="pointer-events-none absolute inset-x-0 z-[108]"
+          style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px) + 4.25rem)" }}
+        >
           <div className="uix-content-x mx-auto flex w-full max-w-4xl justify-end">
             <TapScaleButton
               type="button"
@@ -1564,6 +2515,19 @@ function ChatDetailView({
                 <Reply className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 Ответить
               </button>
+              {menu.msg.senderId && user?.id && menu.msg.senderId !== user.id ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportMessageTarget(menu.msg);
+                    actions.closeMenu();
+                  }}
+                  className="w-full flex items-center gap-3 px-4 min-h-[var(--uix-touch-min,44px)] py-2.5 text-left text-sm hover:bg-secondary/80 active:bg-secondary/60 transition-colors rounded-none"
+                >
+                  <Flag className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden />
+                  {block01ugcRu.menuReportMessage}
+                </button>
+              ) : null}
               <div className="px-2 py-2">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground px-2 mb-1.5">Реакция</p>
                 <div className="flex flex-wrap gap-1">
@@ -1589,6 +2553,22 @@ function ChatDetailView({
                 <Copy className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 Скопировать
               </button>
+              {messageHasDownloadableAttachment(menu.msg) && (
+                <button
+                  type="button"
+                  disabled={actions.savingAttachmentMessageId === menu.msg.id}
+                  onClick={() => void actions.handleSaveAttachmentToDevice(menu.msg)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors rounded-none disabled:opacity-60"
+                  aria-label="Сохранить вложение на устройство"
+                >
+                  {actions.savingAttachmentMessageId === menu.msg.id ? (
+                    <Loader2 className="w-4 h-4 text-muted-foreground flex-shrink-0 animate-spin" aria-hidden />
+                  ) : (
+                    <Download className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden />
+                  )}
+                  Сохранить на устройство
+                </button>
+              )}
               {(menu.msg.type === "voice" || menu.msg.type === "video_note") &&
                 !(typeof menu.msg.transcript === "string" && menu.msg.transcript.trim()) && (
                   <button
@@ -1699,6 +2679,44 @@ function ChatDetailView({
         chatId={chatId}
       />
 
+      <ReportContentDialog
+        open={!!reportMessageTarget}
+        onOpenChange={(o) => {
+          if (!o) setReportMessageTarget(null);
+        }}
+        target={
+          reportMessageTarget?.id
+            ? { targetType: "message", targetId: reportMessageTarget.id, contextChatId: chatId }
+            : null
+        }
+        contextLine="Сообщение в чате"
+      />
+
+      <LargeTablePasteDialog
+        open={largeTablePaste !== null}
+        onOpenChange={(o) => {
+          if (!o && largeTableSending === null) setLargeTablePaste(null);
+        }}
+        cols={largeTablePaste?.cols ?? 0}
+        rows={largeTablePaste?.rows ?? 0}
+        previewRows={largeTablePaste?.previewRows ?? []}
+        sendingFormat={largeTableSending}
+        onSend={handleLargeTableSend}
+      />
+      <TablePasteOfferDialog
+        open={tablePasteOffer !== null}
+        onOpenChange={(o) => {
+          if (o) return;
+          dismissTablePasteOffer();
+        }}
+        mode={tablePasteOffer?.mode ?? "inline"}
+        cols={tablePasteOffer?.cols ?? 0}
+        rows={tablePasteOffer?.rows ?? 0}
+        previewRows={tablePasteOffer?.previewRows ?? []}
+        onChoosePlain={choosePlainTablePasteOffer}
+        onChooseTable={chooseTablePasteOffer}
+      />
+
       {/* Модалка выбора чата для пересылки */}
       {actions.forwardingMessage &&
         createPortal(
@@ -1743,32 +2761,18 @@ onClick={() => actions.setForwardingMessage(null)}
           document.body
         )}
 
-      {/* Emoji Picker */}
       {showEmojiPicker && (
-        <div className="absolute bottom-[80px] right-4 bg-background/95 backdrop-blur-xl border border-border/50 shadow-lg rounded-2xl p-3 z-[110] w-[300px] animate-in fade-in zoom-in-95 duration-200">
-          <div className="flex justify-between items-center mb-2 px-1">
-            <span className="text-sm font-medium text-muted-foreground">Эмодзи</span>
-            <button type="button" onClick={() => setShowEmojiPicker(false)} className="text-muted-foreground hover:text-foreground transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center" aria-label="Закрыть выбор эмодзи">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="grid grid-cols-6 gap-2">
-            {EMOJIS.map((emo) => (
-              <button
-                key={emo}
-                onClick={() => {
-                  send.setMessage((prev) => prev + emo);
-                  setShowEmojiPicker(false);
-                }}
-                className="text-2xl hover:bg-secondary rounded-lg p-1 transition-colors flex items-center justify-center"
-              >
-                {emo}
-              </button>
-            ))}
-          </div>
+        <div className="absolute bottom-[80px] right-4 z-[110]">
+          <ChatComposerStickerEmojiPanel
+            emojiTab={composerEmojiStickerTab}
+            onEmojiTabChange={setComposerEmojiStickerTab}
+            emojis={EMOJIS}
+            onPickEmoji={(emo) => {
+              send.setMessage((prev) => prev + emo);
+            }}
+            onPickSticker={(id) => void send.sendSticker(id)}
+            onClosePanel={() => setShowEmojiPicker(false)}
+          />
         </div>
       )}
 
@@ -1776,6 +2780,26 @@ onClick={() => actions.setForwardingMessage(null)}
       <div
         ref={composerBarRef}
         className={cn("uix-content-x relative z-[105] shrink-0 chat-composer-bar pb-safe-offset-4", spacing.bottomBarYClass)}
+        onDragOverCapture={
+          !isMobile && !blockedByPeerDm && !send.editingId
+            ? (e) => {
+                if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+              }
+            : undefined
+        }
+        onDropCapture={
+          !isMobile && !blockedByPeerDm && !send.editingId
+            ? (e) => {
+                if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const list = e.dataTransfer.files;
+                if (list?.length) void send.handleDroppedFiles(list);
+              }
+            : undefined
+        }
       >
         <ChatDetailComposerTopChrome
           editingId={send.editingId}
@@ -1795,10 +2819,17 @@ onClick={() => actions.setForwardingMessage(null)}
           onChange={send.handleAttachFile}
         />
         <input
+          ref={send.pdfInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          className="sr-only"
+          aria-label="Прикрепить PDF до 15 мегабайт"
+          onChange={send.handleAttachPdfFile}
+        />
+        <input
           ref={send.videoNoteInputRef}
           type="file"
           accept="video/*"
-          capture="environment"
           className="sr-only"
           aria-label="Записать или выбрать видеокружок"
           onChange={send.handleVideoNoteFile}
@@ -1813,6 +2844,12 @@ onClick={() => actions.setForwardingMessage(null)}
               onDismissDraftHint={() => setDraftRestoredHint(false)}
             />
           ) : null}
+          <ChatDetailComposerUploadStrip
+            visible={!blockedByPeerDm && (send.sendingMedia || send.sendingVoice)}
+            kind={send.sendingVoice ? "voice" : "media"}
+            percent={send.sendingVoice ? send.voiceUploadPercent : send.mediaUploadPercent}
+            reducedMotion={reducedMotion}
+          />
         {blockedByPeerDm ? (
           <BlockedByPeerComposer note={blockedByPeerNote} />
         ) : pulseDmMediaActive ? (
@@ -1831,27 +2868,79 @@ onClick={() => actions.setForwardingMessage(null)}
             cancelVoicePreview={send.cancelVoicePreview}
             sendRecordedVoice={() => void send.sendRecordedVoice()}
             rerecordVoiceFromPreview={() => void send.rerecordVoiceFromPreview()}
-            videoNoteState={send.videoNoteState}
-            videoNoteDurationSec={send.videoNoteDurationSec}
-            videoNotePreviewUrl={send.videoNotePreviewUrl}
-            videoNoteLocked={send.videoNoteLocked}
-            sendingMedia={send.sendingMedia}
-            setVideoNoteLiveElement={send.setVideoNoteLiveElement}
-            cancelVideoNote={send.cancelVideoNote}
-            stopVideoNoteRecording={() => void send.stopVideoNoteRecording()}
-            sendRecordedVideoNote={() => void send.sendRecordedVideoNote()}
           />
         ) : (
         <div className="relative flex min-w-0 w-full items-end gap-2 overflow-visible pt-0.5">
           <ChatComposerSttPhaseOverlay phase={composerSttUi.phase} liveLine={composerSttUi.liveLine} />
-          {showAttachSource && isNative() && (
+          {isBusiness ? (
+            <div className="absolute bottom-full left-0 right-0 mb-2 z-[119]">
+              <div className="rounded-xl border border-border/70 bg-background/95 px-2 py-2 shadow-sm">
+                {businessActionsLoading ? (
+                  <div className="text-xs text-muted-foreground px-1 py-1">Загрузка команд…</div>
+                ) : businessActionsError ? (
+                  <button
+                    type="button"
+                    className="text-xs text-destructive hover:underline px-1 py-1"
+                    onClick={() => void loadBusinessActions()}
+                  >
+                    {businessActionsError}. Повторить
+                  </button>
+                ) : businessActions.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {businessActions.map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        disabled={invokingBusinessActionId === action.id}
+                        onClick={() => {
+                          setInvokingBusinessActionId(action.id);
+                          void invokeBusinessAction(chatId, action.id)
+                            .then(() => {
+                              triggerLightHaptic();
+                              toast({ title: `Команда: ${action.label}` });
+                            })
+                            .catch((error) => {
+                              toast({
+                                title: error instanceof Error ? error.message : "Команда не отправлена",
+                                variant: "destructive",
+                              });
+                            })
+                            .finally(() => setInvokingBusinessActionId(null));
+                        }}
+                        className="min-h-[var(--uix-touch-min)] rounded-full border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary disabled:opacity-60"
+                        aria-label={`Команда ${action.label}`}
+                      >
+                        {invokingBusinessActionId === action.id ? "…" : action.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground px-1 py-1">
+                    Команды ещё не пришли. После автоконфигурации или webhook они появятся здесь.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+          {showAttachSource && (
             <ChatDetailNativeAttachMenu
               ref={attachSourceRef}
-              onPickCamera={() => send.handleAttachFromNative("camera")}
-              onPickGallery={() => send.handleAttachFromNative("gallery")}
+              showCameraGallery={isNative()}
+              onPickCamera={() => {
+                setShowAttachSource(false);
+                void send.handleAttachFromNative("camera");
+              }}
+              onPickGallery={() => {
+                setShowAttachSource(false);
+                void send.handleAttachFromNative("gallery");
+              }}
               onPickFile={() => {
                 setShowAttachSource(false);
                 send.fileInputRef.current?.click();
+              }}
+              onPickPdf={() => {
+                setShowAttachSource(false);
+                send.pdfInputRef.current?.click();
               }}
             />
           )}
@@ -1861,11 +2950,10 @@ onClick={() => actions.setForwardingMessage(null)}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (isNative()) setShowAttachSource((v) => !v);
-              else send.fileInputRef.current?.click();
+              setShowAttachSource((v) => !v);
             }}
             className={cn("chat-composer-round chat-composer-attach flex-shrink-0")}
-            aria-label="Прикрепить фото или видео"
+            aria-label="Прикрепить фото, видео или PDF"
           >
             <Paperclip className="h-[22px] w-[22px] pointer-events-none stroke-[1.85]" aria-hidden />
           </TapScaleButton>
@@ -1922,6 +3010,7 @@ onClick={() => actions.setForwardingMessage(null)}
             )}
             <textarea
               ref={messageInputRef}
+              enterKeyHint="send"
               value={send.message}
               onChange={(e) => {
                 const value = e.target.value;
@@ -1929,13 +3018,19 @@ onClick={() => actions.setForwardingMessage(null)}
                 if (e.nativeEvent && "isComposing" in e.nativeEvent && (e.nativeEvent as InputEvent).isComposing) {
                   send.setMessage(value);
                   setDraftRestoredHint(false);
-                  if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
+                  if (!send?.editingId && value.trim().length > 0) {
+                    scheduleSendTyping();
+                    if (chat?.type === "dm") composerTransferPulse.notifyComposerTypingActivity();
+                  }
                   requestAnimationFrame(syncComposerHeight);
                   return;
                 }
                 send.setMessage(value);
                 setDraftRestoredHint(false);
-                if (!send?.editingId && value.trim().length > 0) scheduleSendTyping();
+                if (!send?.editingId && value.trim().length > 0) {
+                  scheduleSendTyping();
+                  if (chat?.type === "dm") composerTransferPulse.notifyComposerTypingActivity();
+                }
                 requestAnimationFrame(syncComposerHeight);
                 if (chat?.type === "group") {
                   const beforeCursor = value.slice(0, pos);
@@ -1957,8 +3052,103 @@ onClick={() => actions.setForwardingMessage(null)}
                 }
               }}
               onFocus={() => setDraftRestoredHint(false)}
+              onBeforeInput={(e: FormEvent<HTMLTextAreaElement>) => {
+                const ne = e.nativeEvent as InputEvent & { shiftKey?: boolean };
+                if (ne.inputType !== "insertLineBreak") return;
+                if (ne.isComposing) return;
+                if (ne.shiftKey) return;
+                if (showCanvasCommandOption) {
+                  e.preventDefault();
+                  toast({ title: "Добавь текст после !, чтобы отправить «Холст»" });
+                  return;
+                }
+                if (mentionOpen) {
+                  e.preventDefault();
+                  if (composerMentionEnterLockRef.current) return;
+                  const rowsM = buildMentionList(mentionMembersForPicker, mentionQuery, { includeEveryone: true });
+                  const picked =
+                    rowsM.length > 0
+                      ? rowsM[Math.max(0, Math.min(mentionSelectedIndex, rowsM.length - 1))]
+                      : undefined;
+                  if (picked) {
+                    composerMentionEnterLockRef.current = true;
+                    window.setTimeout(() => {
+                      composerMentionEnterLockRef.current = false;
+                    }, 60);
+                    if (picked.kind === "everyone") {
+                      commitMentionInsertion(`@all `);
+                    } else {
+                      const m = picked.member;
+                      commitMentionInsertion(`@[${memberDisplayName(m)}](${m.publicId ?? m.id}) `);
+                    }
+                  }
+                  return;
+                }
+                e.preventDefault();
+                void send.handleSend();
+              }}
+              onPaste={(e) => {
+                if (send.editingId) return;
+                const plain = e.clipboardData.getData("text/plain");
+                const html = e.clipboardData.getData("text/html") ?? "";
+                if (!plain.trim() && !html.trim()) return;
+
+                const result = tryBuildTablePasteFromClipboard(plain, html);
+                if (!result.ok) {
+                  if (result.reason === "too_large") {
+                    const prep = prepareLargeTablePasteData(plain);
+                    if (!prep.ok) {
+                      e.preventDefault();
+                      toast({
+                        title: "Не получилось оформить файл",
+                        description: prep.error,
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    e.preventDefault();
+                    const ta0 = messageInputRef.current;
+                    const start = ta0?.selectionStart ?? send.message.length;
+                    const end = ta0?.selectionEnd ?? start;
+                    setTablePasteOffer({
+                      mode: "file",
+                      cols: prep.data.cols,
+                      rows: prep.data.rows,
+                      previewRows: prep.data.previewRows,
+                      plainText: plain,
+                      largeTable: {
+                        grid: prep.data.grid,
+                        cols: prep.data.cols,
+                        rows: prep.data.rows,
+                        previewRows: prep.data.previewRows,
+                      },
+                      start,
+                      end,
+                    });
+                    tablePasteOfferHandledRef.current = false;
+                    return;
+                  }
+                  return;
+                }
+
+                e.preventDefault();
+                const ta = messageInputRef.current;
+                const start = ta?.selectionStart ?? send.message.length;
+                const end = ta?.selectionEnd ?? start;
+                setTablePasteOffer({
+                  mode: "inline",
+                  cols: result.cols,
+                  rows: result.rows,
+                  previewRows: buildTablePreviewRowsFromFence(result.fence),
+                  plainText: plain,
+                  tableFence: result.fence,
+                  start,
+                  end,
+                });
+                tablePasteOfferHandledRef.current = false;
+              }}
               onKeyDown={(e) => {
-                if (showCanvasCommandOption && e.key === "Enter" && !e.shiftKey) {
+                if (showCanvasCommandOption && isComposerEnterKey(e) && !e.shiftKey) {
                   e.preventDefault();
                   toast({ title: "Добавь текст после !, чтобы отправить «Холст»" });
                   return;
@@ -1981,13 +3171,21 @@ onClick={() => actions.setForwardingMessage(null)}
                     setMentionSelectedIndex((i) => Math.max(0, i - 1));
                     return;
                   }
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (isComposerEnterKey(e) && !e.shiftKey) {
+                    if (composerMentionEnterLockRef.current) {
+                      e.preventDefault();
+                      return;
+                    }
                     const rows = buildMentionList(mentionMembersForPicker, mentionQuery, { includeEveryone: true });
                     const selected =
                       rows.length > 0
                         ? rows[Math.max(0, Math.min(mentionSelectedIndex, rows.length - 1))]
                         : undefined;
                     if (selected) {
+                      composerMentionEnterLockRef.current = true;
+                      window.setTimeout(() => {
+                        composerMentionEnterLockRef.current = false;
+                      }, 60);
                       e.preventDefault();
                       if (selected.kind === "everyone") {
                         commitMentionInsertion(`@all `);
@@ -2019,7 +3217,8 @@ onClick={() => actions.setForwardingMessage(null)}
                 send?.editingId ? "Измените текст и нажмите отправить" : "Сообщение..."
               }
               className={cn(
-                "max-h-28 min-h-[36px] min-w-0 w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 pr-1 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
+                "max-h-28 min-h-[36px] min-w-0 w-0 flex-1 resize-none overflow-x-auto border-none bg-transparent py-2 pl-3 text-[15px] leading-5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 md:text-base",
+                pulseDmComposerTypingCompact ? "pr-3" : "pr-1",
                 !send.message.trim() && "overflow-hidden whitespace-nowrap placeholder:whitespace-nowrap text-ellipsis"
               )}
               rows={1}
@@ -2033,28 +3232,44 @@ onClick={() => actions.setForwardingMessage(null)}
                 onPointerMove={send.handleVideoNotePointerMove}
                 onPointerLeave={send.handleVideoNotePointerLeave}
                 onPointerCancel={send.handleVideoNotePointerLeave}
-                disabled={send.sendingMedia || !send.videoNoteSupported}
+                disabled={send.sendingMedia}
                 haptic
                 className="chat-composer-pill-action mr-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8 disabled:opacity-40"
-                title="Видеокружок: нажмите для выбора, удерживайте для записи"
-                aria-label="Видеокружок: нажмите для выбора, удерживайте для записи"
+                title={
+                  send.videoNoteSupported
+                    ? "Видеокружок: нажмите для выбора, удерживайте для записи"
+                    : "Видеокружок: выберите видеофайл"
+                }
+                aria-label={
+                  send.videoNoteSupported
+                    ? "Видеокружок: нажмите для выбора, удерживайте для записи"
+                    : "Видеокружок: выбрать видеофайл"
+                }
               >
                 {send.sendingMedia ? <span className="text-[10px]">…</span> : <Video className="h-[20px] w-[20px]" strokeWidth={1.75} />}
               </TapScaleButton>
             )}
-            <TapScaleButton
-              type="button"
-              haptic
-              data-active={showEmojiPicker ? "true" : undefined}
-              className={cn(
-                "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
-                showEmojiPicker && "bg-primary/12 text-primary"
-              )}
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              aria-label="Эмодзи"
-            >
-              <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
-            </TapScaleButton>
+            {(showEmojiPicker || !pulseDmComposerTypingCompact) && (
+              <TapScaleButton
+                type="button"
+                haptic
+                data-active={showEmojiPicker ? "true" : undefined}
+                className={cn(
+                  "chat-composer-pill-action flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-black/6 dark:hover:bg-white/8",
+                  showEmojiPicker && "bg-primary/12 text-primary"
+                )}
+                onClick={() => {
+                  setShowEmojiPicker((prev) => {
+                    const next = !prev;
+                    if (next) setComposerEmojiStickerTab("emoji");
+                    return next;
+                  });
+                }}
+                aria-label="Эмодзи и стикеры"
+              >
+                <Smile className="h-[20px] w-[20px]" strokeWidth={1.75} />
+              </TapScaleButton>
+            )}
           </div>
           {pulseDmComposerLikeTemplate && !send.message.trim() && !send?.editingId && (
             <TapScaleButton
@@ -2062,46 +3277,53 @@ onClick={() => actions.setForwardingMessage(null)}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (!send.videoNoteSupported || send.sendingMedia) return;
+                if (send.sendingMedia) return;
+                if (!send.videoNoteSupported) {
+                  send.handleVideoNoteButtonClick(e);
+                  return;
+                }
                 void send.startVideoNoteRecording();
               }}
-              disabled={send.sendingMedia || !send.videoNoteSupported}
+              disabled={send.sendingMedia}
               haptic
               className="chat-composer-round chat-composer-video-round flex-shrink-0"
-              title="Записать видеокружок"
-              aria-label="Записать видеокружок"
+              title={send.videoNoteSupported ? "Записать видеокружок" : "Выбрать видеофайл"}
+              aria-label={send.videoNoteSupported ? "Записать видеокружок" : "Выбрать видеофайл"}
             >
               {send.sendingMedia ? <span className="text-[10px]">…</span> : <Camera className="h-[18px] w-[18px]" strokeWidth={1.75} />}
             </TapScaleButton>
           )}
-          <ChatComposerSttButton
-            disabled={
-              Boolean(send.editingId) ||
-              send.sending ||
-              send.sendingMedia ||
-              send.voiceState === "recording" ||
-              Boolean(send.voicePreviewUrl)
-            }
-            allowSound={!reducedMotion}
-            onUiChange={setComposerSttUi}
-            onEmptyResult={() => {
-              toast({
-                title: "Не удалось распознать речь",
-                description: "Повторите попытку или проверьте доступ к микрофону.",
-              });
-            }}
-            onTranscript={(text) => {
-              send.setMessage((prev) => {
-                const t = prev.trim();
-                return t ? `${t} ${text}` : text;
-              });
-              setDraftRestoredHint(false);
-              requestAnimationFrame(() => {
-                messageInputRef.current?.focus({ preventScroll: true });
-                syncComposerHeight();
-              });
-            }}
-          />
+          {!pulseDmComposerTypingCompact ? (
+            <ChatComposerSttButton
+              disabled={
+                Boolean(send.editingId) ||
+                send.sending ||
+                send.sendingMedia ||
+                send.voiceState === "recording" ||
+                Boolean(send.voicePreviewUrl)
+              }
+              allowSound={!reducedMotion}
+              onUiChange={setComposerSttUi}
+              onEmptyResult={() => {
+                triggerErrorFeedback();
+                toast({
+                  title: "Не удалось распознать речь",
+                  description: "Повторите попытку или проверьте доступ к микрофону.",
+                });
+              }}
+              onTranscript={(text) => {
+                send.setMessage((prev) => {
+                  const t = prev.trim();
+                  return t ? `${t} ${text}` : text;
+                });
+                setDraftRestoredHint(false);
+                requestAnimationFrame(() => {
+                  messageInputRef.current?.focus({ preventScroll: true });
+                  syncComposerHeight();
+                });
+              }}
+            />
+          ) : null}
           {send.message.trim() ? (
             (() => {
             const handleCanvasSend = () => {
@@ -2117,65 +3339,68 @@ onClick={() => actions.setForwardingMessage(null)}
                   <span className="text-[11px] font-semibold">Холст</span>
                 </div>
               )}
-              <Popover>
-                <PopoverTrigger asChild>
-                  <TapScaleButton
-                    type="button"
-                    haptic
-                    className={cn(
-                      "chat-composer-round",
-                      send.scheduledAt && "border-primary/35 bg-primary/12 text-primary"
-                    )}
-                    aria-label="Отложенная отправка"
-                    title={send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отложить отправку"}
-                  >
-                    <Clock className="h-[20px] w-[20px]" strokeWidth={1.75} />
-                  </TapScaleButton>
-                </PopoverTrigger>
-                <PopoverContent side="top" align="end" className="w-52 p-1">
-                  <div className="flex flex-col gap-0.5">
-                    <button
+              {!pulseDmComposerTypingCompact ? (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <TapScaleButton
                       type="button"
-                      onClick={() => { send.setScheduledAt(null); }}
-                      className="flex items-center gap-2 px-3 py-2 text-left text-sm rounded-md hover:bg-secondary"
+                      haptic
+                      className={cn(
+                        "chat-composer-round",
+                        send.scheduledAt && "border-primary/35 bg-primary/12 text-primary"
+                      )}
+                      aria-label="Отложенная отправка"
+                      title={send.scheduledAt ? `Отправить в ${send.scheduledAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Отложить отправку"}
                     >
-                      <Check className={cn("w-4 h-4", !send.scheduledAt && "text-primary")} />
-                      Сейчас
-                    </button>
-                    {[
-                      { label: "В 18:00", getDate: () => { const d = new Date(); d.setHours(18, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d; } },
-                      { label: "В 21:00", getDate: () => { const d = new Date(); d.setHours(21, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d; } },
-                      { label: "Завтра 9:00", getDate: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d; } },
-                    ].map(({ label, getDate }) => (
+                      <Clock className="h-[20px] w-[20px]" strokeWidth={1.75} />
+                    </TapScaleButton>
+                  </PopoverTrigger>
+                  <PopoverContent side="top" align="end" className="w-52 p-1">
+                    <div className="flex flex-col gap-0.5">
                       <button
-                        key={label}
                         type="button"
-                        onClick={() => { send.setScheduledAt(getDate()); }}
+                        onClick={() => { send.setScheduledAt(null); }}
                         className="flex items-center gap-2 px-3 py-2 text-left text-sm rounded-md hover:bg-secondary"
                       >
-                        <Clock className="w-4 h-4 text-muted-foreground" />
-                        {label}
+                        <Check className={cn("w-4 h-4", !send.scheduledAt && "text-primary")} />
+                        Сейчас
                       </button>
-                    ))}
-                    <div className="flex items-center gap-2 px-3 py-2 border-t border-border/50 mt-1 pt-1">
-                      <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      <input
-                        type="datetime-local"
-                        className="flex-1 min-w-0 bg-transparent text-sm outline-none"
-                        min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v) send.setScheduledAt(new Date(v));
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      />
+                      {[
+                        { label: "В 18:00", getDate: () => { const d = new Date(); d.setHours(18, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d; } },
+                        { label: "В 21:00", getDate: () => { const d = new Date(); d.setHours(21, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d; } },
+                        { label: "Завтра 9:00", getDate: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d; } },
+                      ].map(({ label, getDate }) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => { send.setScheduledAt(getDate()); }}
+                          className="flex items-center gap-2 px-3 py-2 text-left text-sm rounded-md hover:bg-secondary"
+                        >
+                          <Clock className="w-4 h-4 text-muted-foreground" />
+                          {label}
+                        </button>
+                      ))}
+                      <div className="flex items-center gap-2 px-3 py-2 border-t border-border/50 mt-1 pt-1">
+                        <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <input
+                          type="datetime-local"
+                          className="flex-1 min-w-0 bg-transparent text-sm outline-none"
+                          min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v) send.setScheduledAt(new Date(v));
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
                     </div>
-                  </div>
-                </PopoverContent>
-              </Popover>
+                  </PopoverContent>
+                </Popover>
+              ) : null}
               <TapScaleButton
                 type="button"
                 onClick={() => {
+                  triggerLightHaptic();
                   if (showCanvasCommandOption) {
                     toast({ title: "Добавь текст после !, чтобы отправить «Холст»" });
                     return;
@@ -2224,7 +3449,7 @@ onClick={() => actions.setForwardingMessage(null)}
               onPointerUp={send.handleMicPointerUp}
               onPointerLeave={send.handleMicPointerLeave}
               onPointerCancel={send.handleMicPointerLeave}
-              disabled={send.sendingVoice || !send.voiceSupported}
+              disabled={!send.voiceSupported}
               haptic
               className={cn(
                 "shrink-0",
@@ -2232,13 +3457,44 @@ onClick={() => actions.setForwardingMessage(null)}
                   ? cn(
                       "flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full border-2 border-red-400/60 bg-red-500 text-white shadow-[0_4px_20px_rgba(239,68,68,0.45)] transition-transform active:scale-95",
                       pulseDmComposerLikeTemplate && "chat-composer-mic-pulse",
+                      composerTransferPulseActive && "chat-composer-mic-heartbeat",
                     )
                   : "chat-composer-round",
               )}
-              title={!send.voiceSupported ? "Запись голоса недоступна в этом браузере" : "Удерживайте для записи голосового"}
-              aria-label={!send.voiceSupported ? "Запись голоса недоступна" : "Удерживайте для записи голосового"}
+              title={
+                composerTransferPulseActive
+                  ? "Пульс передачи"
+                  : !send.voiceSupported
+                    ? "Запись голоса недоступна в этом браузере"
+                    : "Удерживайте для записи голосового"
+              }
+              aria-label={
+                composerTransferPulseActive
+                  ? "Пульс передачи"
+                  : !send.voiceSupported
+                    ? "Запись голоса недоступна"
+                    : "Удерживайте для записи голосового"
+              }
             >
-              {send.sendingVoice ? <span className="text-[10px]">…</span> : <Mic className="h-[22px] w-[22px] stroke-[1.85]" />}
+              {composerTransferPulseActive ? (
+                reducedMotion ? (
+                  <Heart className="h-[22px] w-[22px]" fill="currentColor" strokeWidth={2} stroke="currentColor" />
+                ) : (
+                  <motion.span
+                    className="inline-flex will-change-transform"
+                    animate={{ scale: [1, 1.18, 0.95, 1.12, 1] }}
+                    transition={{
+                      duration: 0.75,
+                      repeat: Infinity,
+                      ease: EASING_OUT_BEZIER,
+                    }}
+                  >
+                    <Heart className="h-[22px] w-[22px]" fill="currentColor" strokeWidth={2} stroke="currentColor" />
+                  </motion.span>
+                )
+              ) : (
+                <Mic className="h-[22px] w-[22px] stroke-[1.85]" />
+              )}
             </TapScaleButton>
           )}
         </div>
@@ -2273,13 +3529,21 @@ onClick={() => actions.setForwardingMessage(null)}
         />
       )}
 
-      {(send.videoNoteState === "recording" || send.videoNoteState === "preview") && !pulseDmMediaActive && (
+      {shouldShowVideoNoteModal(send.videoNoteStage) && getVideoNoteModalPhase(send.videoNoteStage) && (
         <ChatDetailVideoNoteModal
-          phase={send.videoNoteState === "recording" ? "recording" : "preview"}
+          phase={getVideoNoteModalPhase(send.videoNoteStage) ?? "preview"}
           durationSec={send.videoNoteDurationSec}
           locked={send.videoNoteLocked}
+          lockProgress={send.videoNoteLockProgress}
+          cancelProgress={send.videoNoteCancelProgress}
+          facingUser={send.videoNoteFacingUser}
           previewUrl={send.videoNotePreviewUrl}
+          softLightEnabled={send.videoNoteSoftLight}
+          softLightAvailable={getVideoNoteModalPhase(send.videoNoteStage) === "recording" && send.videoNoteFacingUser}
+          liveBackgroundStream={send.videoNoteBackgroundStream}
+          onSoftLightToggle={() => send.setVideoNoteSoftLight((v) => !v)}
           setLiveVideoRef={send.setVideoNoteLiveElement}
+          onFlipCamera={send.flipVideoNoteCamera}
           onCancel={send.cancelVideoNote}
           onStopRecording={() => void send.stopVideoNoteRecording()}
           onRerecord={send.startVideoNoteRecording}
@@ -2292,7 +3556,9 @@ onClick={() => actions.setForwardingMessage(null)}
         onClose={() => setMediaViewer(null)}
         src={mediaViewer?.src ?? ""}
         type={mediaViewer?.type ?? "image"}
+        title={mediaViewer?.title}
       />
+
     </div>
   );
 }
@@ -2304,6 +3570,8 @@ export default function ChatDetail({ params: paramsProp }: { params?: { id?: str
       ? (window.location.pathname.match(/^\/chat\/([^/?#]+)/)?.[1] ?? "")
       : "";
   const chatIdParam = (paramsProp?.id ?? paramsFromRoute?.id ?? fromPath) ?? "";
-  if (chatIdParam === AI_CHAT_ID) return <AiChatView />;
+  if (chatIdParam === AI_CHAT_ID) {
+    return <AiChatView />;
+  }
   return <ChatDetailView params={paramsProp} chatIdParam={chatIdParam} />;
 }

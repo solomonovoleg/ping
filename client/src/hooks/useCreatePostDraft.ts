@@ -1,6 +1,14 @@
 import { useEffect, useRef } from "react";
 
-const DRAFT_KEY = "ping_create_post_draft";
+/** Общий редактор поста (без edgeId). v2 — чтобы не подтягивать старый общий ключ, куда попадали длинные EDGE-тексты. */
+export const CREATE_POST_GENERAL_DRAFT_KEY = "ping_create_post_draft_v2";
+const CREATE_POST_LEGACY_DRAFT_KEY = "ping_create_post_draft";
+
+export function createPostDraftStorageKey(presetEdgeId: string): string {
+  const e = presetEdgeId.trim();
+  if (e) return `ping_create_post_draft_edge_${encodeURIComponent(e)}`;
+  return CREATE_POST_GENERAL_DRAFT_KEY;
+}
 
 type MediaKind = "image" | "video" | "audio";
 type MediaSlot = { type: "done"; url: string; kind: MediaKind } | { type: "uploading"; preview: string; id: number; kind: MediaKind };
@@ -28,15 +36,20 @@ function normalizeDraftMediaUrls(raw: unknown, maxMedia: number): string[] {
 }
 
 export function useCreatePostDraft(
+  storageKey: string,
   maxChars: number,
   maxMedia: number,
   text: string,
   setText: (v: string) => void,
   mediaItems: MediaSlot[],
   setMediaItems: (v: MediaSlot[] | ((prev: MediaSlot[]) => MediaSlot[])) => void,
-  toast: (opts: { title: string }) => void
+  toast: (opts: { title: string }) => void,
+  options?: { skip?: boolean }
 ) {
+  const skip = options?.skip === true;
   const snapshotRef = useRef({ text: "", mediaUrls: [] as string[] });
+  /** После успешной публикации `clearDraft()` — не писать черновик в cleanup unmount (иначе тот же текст/медиа снова попадут в storage). */
+  const skipUnmountPersistRef = useRef(false);
   const validDoneUrls: string[] = [];
   {
     const seen = new Set<string>();
@@ -50,14 +63,31 @@ export function useCreatePostDraft(
   }
   snapshotRef.current = { text, mediaUrls: validDoneUrls };
 
-  /** Только при первом монтировании экрана: иначе при смене зависимостей эффекта состояние (в т.ч. загрузка медиа) могло бы перезаписаться данными из storage. */
+  /** Сброс при смене ключа (общий пост ↔ пост с edgeId), чтобы подтянуть правильный черновик. */
   const didRestoreRef = useRef(false);
   useEffect(() => {
+    if (skip) return;
+    didRestoreRef.current = false;
+  }, [skip, storageKey]);
+
+  useEffect(() => {
+    if (skip) return;
     if (didRestoreRef.current) return;
     didRestoreRef.current = true;
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
+      if (storageKey === CREATE_POST_GENERAL_DRAFT_KEY) {
+        try {
+          localStorage.removeItem(CREATE_POST_LEGACY_DRAFT_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) {
+        setText("");
+        setMediaItems([]);
+        return;
+      }
       const data = JSON.parse(raw) as { text?: string; mediaUrls?: string[] };
       let restored = false;
       if (data.text && typeof data.text === "string") {
@@ -78,26 +108,30 @@ export function useCreatePostDraft(
     } catch {
       /* повреждённый черновик */
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- восстановление один раз при открытии редактора
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- один проход на пару skip+storageKey; set* стабильны
+  }, [skip, storageKey, maxChars, maxMedia]);
 
   /** Только при уходе со страницы: иначе cleanup с [text, mediaUrls] срабатывал каждый рендер (новый массив mediaUrls) и перезаписывал storage устаревшим снимком — в state оставались «восстановленные» слоты, а лимит 10 казался занятым при пустом UI. */
   useEffect(() => {
+    if (skip) return;
     return () => {
+      if (skipUnmountPersistRef.current) return;
       const { text: t, mediaUrls: u } = snapshotRef.current;
       if (!t.trim() && u.length === 0) return;
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ text: t, mediaUrls: u }));
+        localStorage.setItem(storageKey, JSON.stringify({ text: t, mediaUrls: u }));
       } catch {
         /* localStorage переполнен */
       }
     };
-  }, []);
+  }, [skip, storageKey]);
 
   return {
     clearDraft: () => {
+      if (skip) return;
+      skipUnmountPersistRef.current = true;
       try {
-        localStorage.removeItem(DRAFT_KEY);
+        localStorage.removeItem(storageKey);
       } catch {
         /* ignore */
       }

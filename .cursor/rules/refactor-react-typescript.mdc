@@ -1,0 +1,50 @@
+---
+description: Refactoring standards for React + TypeScript components
+globs:
+  - "client/src/**/*.tsx"
+  - "client/src/**/*.ts"
+alwaysApply: true
+---
+
+# React + TypeScript Refactoring Standards
+
+Apply these standards when refactoring existing code. Preserve behavior unless explicitly asked to change it.
+
+## Core Refactor Principles
+- Keep user-facing behavior unchanged by default.
+- Prefer small, reversible steps over large rewrites.
+- Move business logic out of giant components into hooks/services.
+- Keep module boundaries explicit: UI should not own data orchestration and transport details.
+
+## Component and Hook Structure
+- Target component size under ~200-250 lines when practical.
+- Split large screens into composition + focused child sections.
+- Split "god hooks" by concern (data loading, mutations, side effects, derived state).
+- Keep file exports narrow and intentional (avoid accidental deep coupling).
+
+## TypeScript Quality
+- Avoid `any`; prefer `unknown` + explicit narrowing.
+- Model state with unions where states are mutually exclusive.
+- Export reusable contracts near domain boundaries.
+- Keep transformation logic typed (DTO -> view model).
+
+## Error and UX Safety
+- Do not silently swallow critical errors.
+- For user-significant failures: provide feedback (toast/block + retry).
+- Keep loading/success/error/empty states explicit for lists and async UI.
+- Reuse shared UI primitives for consistency (empty/skeleton/error patterns).
+
+## Performance During Refactor
+- Memoize only proven hotspots (`memo`, `useMemo`, `useCallback`).
+- Avoid recreating heavy objects/functions on every render.
+- Keep expensive work outside render where possible.
+- Use lazy loading/code-splitting for heavy route-level chunks.
+
+## Refactor Checklist
+- [ ] Behavior preserved (or intentionally changed and documented)
+- [ ] Duplicate logic reduced
+- [ ] File complexity reduced
+- [ ] Types improved (no new `any`)
+- [ ] Error handling explicit
+- [ ] Loading/error/empty states present where needed
+- [ ] No new cross-feature boundary violations

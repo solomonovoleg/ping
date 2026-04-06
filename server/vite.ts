@@ -5,6 +5,7 @@ import viteConfig from "../vite.config";
 import fs from "fs";
 import path from "path";
 import { nanoid } from "nanoid";
+import { applyReferralSeoToIndexHtml } from "@shared/referral-seo-html";
 
 const viteLogger = createLogger();
 
@@ -48,7 +49,13 @@ export async function setupVite(server: Server, app: Express) {
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
       );
-      const page = await vite.transformIndexHtml(url, template);
+      let page = await vite.transformIndexHtml(url, template);
+      const q = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+      const params = new URLSearchParams(q.startsWith("?") ? q.slice(1) : q);
+      const ref = params.get("ref")?.trim();
+      if (ref) {
+        page = applyReferralSeoToIndexHtml(page);
+      }
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);

@@ -28,6 +28,7 @@ export default function PulseProfileDevPreview() {
   return (
     <div
       className="flex min-h-[100dvh] w-full justify-center text-white"
+      data-pull-refresh-scope
       style={{
         fontFamily: "-apple-system,BlinkMacSystemFont,'Inter',sans-serif",
         background: "#080810",

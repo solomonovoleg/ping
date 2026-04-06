@@ -1,12 +1,22 @@
 /**
- * При возврате на вкладку: обновить данные чата.
- * Прочитанность только через PUT /read с messageId (useMessageReadOnVisible) — иначе «две галочки» врут.
+ * При возврате на вкладку / приложение из фона: обновить данные чата.
+ * Список сообщений в фоне по WS не приходит — его догружает колбэк onResume (useChatMessages).
+ * Прочитанность только через WS mark-chat-read с messageId (useMessageReadOnVisible) при открытом чате.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { API, apiFetch } from "@/lib/api-base";
 import type { ApiChat } from "../types";
+import { mergeChatPreservingNewerOtherLastRead } from "../utils/chat-metadata-merge";
 
-export function useChatVisibilityRefresh(chatId: string, currentChatIdRef: { current: string }, setChat: (c: ApiChat | null) => void) {
+export function useChatVisibilityRefresh(
+  chatId: string,
+  currentChatIdRef: { current: string },
+  setChat: Dispatch<SetStateAction<ApiChat | null>>,
+  onResume?: () => void,
+) {
+  const onResumeRef = useRef(onResume);
+  onResumeRef.current = onResume;
+
   const readAndRefreshRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readAndRefreshRetryScheduledRef = useRef(false);
 
@@ -25,7 +35,11 @@ export function useChatVisibilityRefresh(chatId: string, currentChatIdRef: { cur
       };
       apiFetch(base)
         .then((r) => r.ok ? r.json() : null)
-        .then((data: ApiChat | null) => { if (data && data.id === currentChatIdRef.current) setChat(data); })
+        .then((data: ApiChat | null) => {
+          if (data && data.id === currentChatIdRef.current) {
+            setChat((prev) => mergeChatPreservingNewerOtherLastRead(prev, data));
+          }
+        })
         .catch((err) => {
           warnDev("chat refresh failed on visibilitychange, scheduling retry", err);
           scheduleRetry();
@@ -39,6 +53,7 @@ export function useChatVisibilityRefresh(chatId: string, currentChatIdRef: { cur
       }
       readAndRefreshRetryScheduledRef.current = false;
       doReadAndRefresh(false);
+      onResumeRef.current?.();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {

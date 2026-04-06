@@ -1,6 +1,7 @@
 import type { PresetVerify } from "../../shared/edge-task-preset-config.js";
 import type { CompanionUiPayload } from "./campaign-ui-config.js";
 import type { ResultsLivePayload } from "./build-results-live.js";
+import type { LifeSimulationResolvedConfig } from "../participant/life-simulation.js";
 
 /** Пресеты заданий из конструктора (публично для Companion UI). */
 export type EdgeTaskPresetPublic = {
@@ -9,6 +10,10 @@ export type EdgeTaskPresetPublic = {
   points: number;
   penalty: number;
   deadlineDays: number;
+  /** Раздел конструктора (game / global / commercial). */
+  scope: "game" | "global" | "commercial";
+  /** Явный рейтинг; без поля — по scope. */
+  scoreTarget?: "primary" | "secondary";
   /** Условие выдачи XP (проверка на платформе и/или в EDGE). */
   verify: PresetVerify;
 };
@@ -18,7 +23,13 @@ export type CompanionCampaignConfigPayload = {
   status: "draft" | "published" | "paused" | "ended";
   title: string;
   gifts: { templates: unknown[] };
-  leaderboard: { globalEnabled: boolean };
+  leaderboard: {
+    globalEnabled: boolean;
+    primaryEnabled: boolean;
+    secondaryEnabled: boolean;
+    primaryFrozen: boolean;
+    secondaryFrozen: boolean;
+  };
   followReward: { enabled: boolean };
   edgeId: string;
   edgeType?: string;
@@ -36,4 +47,8 @@ export type CompanionCampaignConfigPayload = {
   taskPresets: EdgeTaskPresetPublic[];
   /** Текст ЛС с кодами приглашения для задания «пригласить»; пустой template — сервер подставит дефолт. */
   pingInviteDm: { template: string; codeExpiresInHours: number };
+  /** Видимость поста с кампанией: только себе | подписчикам | всем в ленте. */
+  displayAudience: "self" | "followers" | "public";
+  /** Параметры «рейтинга жизни» и очереди запросов (для настроек создателя / клиента). */
+  lifeSimulation: LifeSimulationResolvedConfig;
 };

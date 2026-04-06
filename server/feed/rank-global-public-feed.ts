@@ -1,60 +1,28 @@
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
-import {
-  postComments,
-  postReactions,
-  postShares,
-  posts,
-  users,
-} from "@shared/schema";
-import type { PostMediaLayout } from "@shared/post-media-layout";
+import { postComments, postReactions, postShares, posts, users } from "@shared/schema";
 import type { getDb } from "../db";
 import type { FeedAlgoConfig } from "./config";
+import { sqlPostHasUploadedVideo } from "../posts/post-has-uploaded-video-sql";
+import { globalPublicFeedSelectFields, type GlobalPublicFeedRow } from "./global-feed-row";
+
+export type { GlobalPublicFeedRow } from "./global-feed-row";
 
 type AppDb = ReturnType<typeof getDb>;
-
-export type GlobalPublicFeedRow = {
-  id: string;
-  authorId: string;
-  text: string;
-  imageUrl: string | null;
-  mediaUrls: string[] | null;
-  mediaLayout: PostMediaLayout | null;
-  hashtags: string[] | null;
-  isDraft: boolean;
-  visibility: string;
-  edgeId: string | null;
-  createdAt: Date;
-  authorDisplayName: string | null;
-  authorSurname: string | null;
-  authorAvatarUrl: string | null;
-  authorPublicId: number;
-};
-
-const selectFields = {
-  id: posts.id,
-  authorId: posts.authorId,
-  text: posts.text,
-  imageUrl: posts.imageUrl,
-  mediaUrls: posts.mediaUrls,
-  mediaLayout: posts.mediaLayout,
-  hashtags: posts.hashtags,
-  isDraft: posts.isDraft,
-  visibility: posts.visibility,
-  edgeId: posts.edgeId,
-  createdAt: posts.createdAt,
-  authorDisplayName: users.displayName,
-  authorSurname: users.surname,
-  authorAvatarUrl: users.avatarUrl,
-  authorPublicId: users.publicId,
-};
 
 export async function loadGlobalPublicCandidateRows(
   db: AppDb,
   rankingCandidateLimit: number,
+  opts?: { videoOnly?: boolean },
 ): Promise<GlobalPublicFeedRow[]> {
-  const baseWhere = and(eq(posts.isDraft, false), sql`coalesce(${posts.visibility}, 'public') = 'public'`);
+  const parts = [
+    eq(posts.isDraft, false),
+    sql`coalesce(${posts.visibility}, 'public') = 'public'`,
+    eq(posts.showOnAuthorWall, true),
+  ];
+  if (opts?.videoOnly) parts.push(sqlPostHasUploadedVideo());
+  const baseWhere = and(...parts);
   return db
-    .select(selectFields)
+    .select(globalPublicFeedSelectFields)
     .from(posts)
     .innerJoin(users, eq(posts.authorId, users.id))
     .where(baseWhere)
@@ -142,7 +110,7 @@ export async function rankGlobalPublicCandidateRows(
       const effectiveScore = createdAtMs + (boostMinutes - agePenaltyMinutes) * 60 * 1000;
       return { row: r, effectiveScore, createdAtMs };
     })
-    .sort((a, b) => (b.effectiveScore - a.effectiveScore) || (b.createdAtMs - a.createdAtMs));
+    .sort((a, b) => b.effectiveScore - a.effectiveScore || b.createdAtMs - a.createdAtMs);
 
   return rankedRows.map((x) => x.row);
 }

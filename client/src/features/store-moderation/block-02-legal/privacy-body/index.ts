@@ -1,0 +1,1 @@
+export { PrivacyBody } from "./PrivacyBody";

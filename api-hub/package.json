@@ -1,0 +1,35 @@
+{
+  "name": "@ping-moot/api-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1010.0",
+    "@aws-sdk/s3-request-presigner": "^3.1010.0",
+    "dotenv": "^16.4.5",
+    "express": "^5.0.1",
+    "multer": "^1.4.5-lts.2",
+    "redis": "^4.7.0",
+    "pg": "^8.16.3",
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^20.19.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.20.5",
+    "typescript": "5.6.3"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "check": "tsc -p tsconfig.json",
+    "test": "node --test --import tsx tests/bridge.test.ts tests/integration.test.ts tests/sdk-contract.test.ts tests/realtime-load.test.ts",
+    "openapi:print": "tsx src/openapi/generate.ts",
+    "db:migrate": "tsx src/infra/db/migrate.ts",
+    "db:seed": "tsx src/infra/db/seed.ts"
+  }
+}

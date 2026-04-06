@@ -63,7 +63,7 @@ export function PingokDmScheduledCallBanner({ chatId }: Props) {
         if (sessionStorage.getItem(k)) return;
         sessionStorage.setItem(k, "1");
         toast({
-          title: "Скоро звонок",
+          title: "Запланированный звонок",
           description: `${active.title} · ${new Date(active.fireAt).toLocaleString("ru-RU", {
             dateStyle: "short",
             timeStyle: "short",

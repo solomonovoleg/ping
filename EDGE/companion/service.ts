@@ -6,8 +6,21 @@ import { fetchLatestPrizeDrawWinners } from "./prize-results-repo.js";
 import { ensureEdgeCampaign, findCampaignByPublicId } from "./repo.js";
 import { computeInteractLocked } from "./interact-lock.js";
 import { listTaskPresetsFromConfig } from "../tasks/preset-tasks-parse.js";
+import { effectiveLeaderboardXpFrozen } from "../participant/leaderboard-draw-freeze.js";
+import { parseLifeSimulationConfig } from "../participant/life-simulation.js";
 
 const ALLOWED_STATUS = new Set(["draft", "published", "paused", "ended"]);
+
+function parseDisplayAudience(configJson: unknown): "self" | "followers" | "public" {
+  const root =
+    configJson && typeof configJson === "object" && !Array.isArray(configJson)
+      ? (configJson as Record<string, unknown>)
+      : {};
+  const raw = root.displayAudience;
+  const s = typeof raw === "string" ? raw.toLowerCase().trim() : "public";
+  if (s === "self" || s === "followers") return s;
+  return "public";
+}
 
 function parsePingInviteDm(configJson: unknown): { template: string; codeExpiresInHours: number } {
   const root =
@@ -65,11 +78,18 @@ export async function getCampaignConfigByEdgeId(
   const interactLocked = computeInteractLocked(row);
   const taskPresets = listTaskPresetsFromConfig(row.config_json);
   const pingInviteDm = parsePingInviteDm(row.config_json);
+  const now = new Date();
   return {
     status: normalizeStatus(row.status),
     title: row.title.trim() || "Кампания EDGE",
     gifts: { templates: defaultTemplates(row.gifts_json) },
-    leaderboard: { globalEnabled: row.leaderboard_global_enabled },
+    leaderboard: {
+      globalEnabled: row.leaderboard_global_enabled,
+      primaryEnabled: row.leaderboard_primary_enabled,
+      secondaryEnabled: row.leaderboard_secondary_enabled,
+      primaryFrozen: effectiveLeaderboardXpFrozen(row, "primary", now),
+      secondaryFrozen: effectiveLeaderboardXpFrozen(row, "secondary", now),
+    },
     followReward: { enabled: row.follow_reward_enabled },
     edgeId,
     edgeType: row.edge_type || "character",
@@ -80,5 +100,7 @@ export async function getCampaignConfigByEdgeId(
     creatorPlatformUserId: row.creator_platform_user_id?.trim() || null,
     taskPresets,
     pingInviteDm,
+    displayAudience: parseDisplayAudience(row.config_json),
+    lifeSimulation: parseLifeSimulationConfig(row.config_json),
   };
 }

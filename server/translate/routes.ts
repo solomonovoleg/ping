@@ -12,6 +12,11 @@ import {
   translate,
   getPref,
   setCachedPref,
+  getDmMultilingualEnabledForChat,
+  invalidateDmMultilingualCacheForChat,
+  clearCachedTranslatePrefsForChat,
+  clearCachedTranslatePrefsForUser,
+  normalizeMessageTranslateLang,
   type TranslatePref,
   type TranslateOptions,
 } from "./provider";
@@ -80,10 +85,10 @@ export function registerTranslateRoutes(app: Express): void {
     const chatId = req.params.chatId as string;
     if (!(await assertChatMemberOr403(userId, chatId, res))) return;
 
+    const dmMultilingual = await getDmMultilingualEnabledForChat(chatId);
     const pref = await getPref(userId, chatId);
-    if (pref) return res.json(pref);
-
-    res.json({ enabled: false, targetLang: "ru" });
+    const body = pref ?? { enabled: false, targetLang: "ru" };
+    res.json({ ...body, dmMultilingual });
   });
 
   app.put("/api/chats/:chatId/translate-prefs", requireAuth, async (req, res) => {
@@ -120,10 +125,10 @@ export function registerTranslateRoutes(app: Express): void {
     const userId = getUserId(req)!;
     const chatId = req.params.chatId as string;
     if (!(await assertChatMemberOr403(userId, chatId, res))) return;
-    const targetLang = typeof req.query.targetLang === "string" ? req.query.targetLang : "ru";
-
     const pref = await getPref(userId, chatId);
     if (!pref?.enabled) return res.json({ translations: {} });
+
+    const targetLang = pref.targetLang;
 
     if (!process.env.DATABASE_URL) return res.json({ translations: {} });
 
@@ -157,5 +162,55 @@ export function registerTranslateRoutes(app: Express): void {
     } catch {
       res.json({ translations: {} });
     }
+  });
+
+  /** Сохранить язык входящих переводов для пользователя (мультиязычный DM и обычный режим). */
+  app.put("/api/me/message-translate-locale", requireAuth, async (req, res) => {
+    const userId = getUserId(req)!;
+    const raw = typeof req.body?.locale === "string" ? req.body.locale : "";
+    const locale = normalizeMessageTranslateLang(raw);
+    if (!locale) {
+      return res.status(400).json({ message: "Неподдерживаемый код языка" });
+    }
+    clearCachedTranslatePrefsForUser(userId);
+    if (!process.env.DATABASE_URL) {
+      return res.json({ ok: true, locale });
+    }
+    try {
+      const { getDb } = await import("../db");
+      const { users } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = getDb();
+      await db.update(users).set({ messageTranslateLocale: locale }).where(eq(users.id, userId));
+      res.json({ ok: true, locale });
+    } catch {
+      res.status(500).json({ message: "Не удалось сохранить" });
+    }
+  });
+
+  /** Включить/выключить мультиязычный режим в личке (ровно 2 участника). */
+  app.put("/api/chats/:chatId/dm-multilingual", requireAuth, async (req, res) => {
+    const userId = getUserId(req)!;
+    const chatId = req.params.chatId as string;
+    if (!(await assertChatMemberOr403(userId, chatId, res))) return;
+
+    const enabled = req.body?.enabled === true;
+    const chat = await storage.getChatById(chatId);
+    if (!chat || chat.type !== "dm") {
+      return res.status(400).json({ message: "Только для личных чатов" });
+    }
+    const memberIds = await storage.getChatMemberIds(chatId);
+    if (memberIds.length !== 2) {
+      return res.status(400).json({ message: "Мультиязычный режим только для диалога двух человек" });
+    }
+
+    await storage.updateChat(chatId, { dmMultilingualEnabled: enabled });
+    invalidateDmMultilingualCacheForChat(chatId);
+    clearCachedTranslatePrefsForChat(chatId);
+
+    const pref = await getPref(userId, chatId);
+    const dmMultilingual = await getDmMultilingualEnabledForChat(chatId);
+    const body = pref ?? { enabled: false, targetLang: "ru" };
+    res.json({ ...body, dmMultilingual });
   });
 }

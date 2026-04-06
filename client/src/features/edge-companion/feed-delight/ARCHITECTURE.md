@@ -13,7 +13,7 @@
 | Файл | Роль |
 |------|------|
 | `build-swipe-hint.ts` | Чистая функция: текст подсказки «куда свайпать» из списка `visible` surfaces. |
-| `EdgeFeedSwipeHintRow.tsx` | Строка под точками пейджера (лента **и** полноэкранный Companion — один текст). |
+| `EdgeFeedSwipeHintRow.tsx` | Строка под рейкой табов — только в **полноэкранном** `CompanionSurfacePager`; в ленте подсказка свайпа — полупрозрачные края в `EdgeFeedSurfacePager`. |
 | `EdgeFeedCardEntrance.tsx` | Разовое появление карточки при входе во вьюпорт (`whileInView`, `once`). |
 
 Стили ауры персонажа и акцента CTA — в `client/src/index.css` (классы `edge-feed-*`). **Аура и покачивание иконки подарка** намеренно только при `EdgeFeedCharacterSlide variant="feed"` (карточка в ленте), полный companion без этого шума.

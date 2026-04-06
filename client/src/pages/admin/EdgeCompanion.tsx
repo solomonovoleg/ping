@@ -7,15 +7,21 @@ import { useToast } from "@/hooks/use-toast";
 import { fetchEdgeCompanionCampaignConfig } from "@/lib/edge-gamification";
 import { adminSaveEdgeCompanionConfig } from "@/lib/admin-edge-companion";
 import { DEFAULT_COMPANION_UI } from "@/features/edge-companion/companion-surfaces/default-ui";
+import { AdminPageHeader, AdminPanelCard, adminPageStackClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import type { CompanionUiPayload } from "@/features/edge-companion/companion-surfaces/types";
 
 function companionObjectForEditor(ui: CompanionUiPayload) {
-  return {
+  const o: Record<string, unknown> = {
     surfaceOrder: ui.surfaceOrder,
     infoArticle: ui.infoArticle,
     results: ui.results,
     character: ui.character ?? { assetUrl: "", displayName: "" },
   };
+  if (ui.onlySurfaces?.length) {
+    o.onlySurfaces = ui.onlySurfaces;
+  }
+  return o;
 }
 
 export default function AdminEdgeCompanion() {
@@ -83,45 +89,50 @@ export default function AdminEdgeCompanion() {
   };
 
   return (
-    <div className="w-full min-w-0 space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">EDGE · Companion UI</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Редактирование <span className="font-mono text-xs">config_json.companion</span> (порядок экранов,
-          статья, статичные итоги). Живые победители подтягиваются из розыгрыша автоматически.
-        </p>
-      </div>
+    <div className={cn(adminPageStackClass(), "w-full min-w-0 space-y-6")}>
+      <AdminPageHeader
+        title="EDGE · Companion UI"
+        description={
+          <>
+            Редактирование <span className="font-mono text-xs">config_json.companion</span> (порядок экранов,
+            опционально <span className="font-mono text-xs">onlySurfaces</span>, статья, статичные итоги). Живые
+            победители подтягиваются из розыгрыша автоматически.
+          </>
+        }
+      />
 
-      <div className="space-y-2">
-        <Label htmlFor="edge-id">edgeId кампании (как в посте)</Label>
-        <div className="flex flex-wrap gap-2">
-          <Input
-            id="edge-id"
-            value={edgeId}
-            onChange={(e) => setEdgeId(e.target.value)}
-            placeholder="uuid кампании"
-            className="min-w-[200px] flex-1 font-mono text-sm"
-          />
-          <Button type="button" variant="secondary" onClick={() => void load()} disabled={loading}>
-            {loading ? "Загрузка…" : "Загрузить с EDGE"}
-          </Button>
+      <AdminPanelCard className="space-y-4 p-5 sm:p-6">
+        <div className="space-y-2">
+          <Label htmlFor="edge-id">edgeId кампании (как в посте)</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              id="edge-id"
+              value={edgeId}
+              onChange={(e) => setEdgeId(e.target.value)}
+              placeholder="uuid кампании"
+              className="min-w-[200px] flex-1 font-mono text-sm"
+            />
+            <Button type="button" variant="secondary" onClick={() => void load()} disabled={loading}>
+              {loading ? "Загрузка…" : "Загрузить с EDGE"}
+            </Button>
+          </div>
         </div>
-      </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="companion-json">JSON объекта companion</Label>
-        <Textarea
-          id="companion-json"
-          value={jsonText}
-          onChange={(e) => setJsonText(e.target.value)}
-          className="min-h-[280px] font-mono text-xs leading-relaxed"
-          spellCheck={false}
-        />
-      </div>
+        <div className="space-y-2">
+          <Label htmlFor="companion-json">JSON объекта companion</Label>
+          <Textarea
+            id="companion-json"
+            value={jsonText}
+            onChange={(e) => setJsonText(e.target.value)}
+            className="min-h-[280px] font-mono text-xs leading-relaxed"
+            spellCheck={false}
+          />
+        </div>
 
-      <Button type="button" onClick={() => void save()} disabled={saving}>
-        {saving ? "Сохранение…" : "Сохранить в EDGE"}
-      </Button>
+        <Button type="button" onClick={() => void save()} disabled={saving}>
+          {saving ? "Сохранение…" : "Сохранить в EDGE"}
+        </Button>
+      </AdminPanelCard>
     </div>
   );
 }

@@ -70,3 +70,9 @@
 В **PULSE mobile DM** порядок композера как в `MobileChatDark.tsx`: скрепка → капсула (поле + кнопка эмодзи) → отдельный круг **`chat-composer-video-round`** (видеокружок) → круг **«Голос в текст»** (`ChatComposerSttButton`, иконка `Speech`) → микрофон/отправка.
 
 Запись голоса / предпросмотр голоса / запись и превью видеокружка в этом режиме — **`PulseDmComposerMedia`** внутри `chat-composer-bar` (без старых полноэкранных модалок); отправка только через **`send.*`** (`discardVoiceRecording`, `handleMicClick`, `cancelVoicePreview`, `sendRecordedVoice`, `startVideoNoteRecording`, `stopVideoNoteRecording`, `cancelVideoNote`, `sendRecordedVideoNote`). Исходящий видеокружок в ленте при **`pulseMobileDm` + isMe** — **`PulseDmSentVideoNote`**: как `video-circle-snippet.tsx` — один тап за **320ms** переключает **140↔230** и **play/pause**, **3+ тапа** → полноэкранный оверлей с **autoplay**, дуга прогресса по `timeupdate`, кольцо **`pulse-dm-ringPulseVideo`** в compact. У успешно отправленного видеокружка футер времени/галочек перенесён в кружок (`footerLabel`), стандартный футер строки для этого случая отключается в `ChatDetail`.
+
+---
+
+## 7. Вынесенные хелперы `useChatMessages`
+
+Не-хук логика (разбор ошибок API, merge хвоста) живёт в `client/src/features/chat/hooks/chat-messages/`. Публичный контракт `useChatMessages` для `ChatDetail` не меняется.

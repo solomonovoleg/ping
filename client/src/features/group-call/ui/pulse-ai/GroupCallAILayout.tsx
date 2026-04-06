@@ -8,12 +8,10 @@ import {
   Brain,
   Captions,
   ChevronRight,
-  Circle,
   Eye,
   EyeOff,
   Grid,
   Hand,
-  Heart,
   Maximize2,
   MessageSquare,
   Mic,
@@ -23,12 +21,10 @@ import {
   Moon,
   MoreHorizontal,
   PhoneOff,
-  PictureInPicture2,
   RefreshCcw,
   Sparkles,
   Subtitles,
   Sun,
-  UserPlus,
   Users,
   Video,
   VideoOff,
@@ -137,6 +133,8 @@ export type GroupCallAILayoutSession = {
   handRaisedUserIds: string[]
   setHandRaised: (raised: boolean) => void
   sendGroupReaction: (emoji: string, label: string) => void
+  /** Лимит mesh-участников (с сервера). */
+  maxMeshPeers: number
 }
 
 type LayoutP = {
@@ -853,14 +851,13 @@ function AIPanel({
                     ? "Для этой комнаты распознавание речи недоступно — список тем из разговора не заполняется."
                     : !captionsEnabled
                       ? "Включите субтитры в панели звонка: тогда сюда попадут распознанные фрагменты речи (по спикеру и времени)."
-                      : "Пока нет распознанных фраз. Заговорите — фрагменты появятся здесь. Отдельное AI-резюме по темам — в планах."}
+                      : "Пока нет распознанных фраз. Заговорите — фрагменты появятся здесь."}
                 </p>
               </div>
             ) : (
               <>
                 <p className="px-0.5 text-[8px] leading-relaxed" style={{ color: th.textFaint }}>
-                  Ниже — последние фразы из субтитров (не сгруппированные темы). Автоматическое резюме диалога по темам —
-                  позже.
+                  Ниже — последние фразы из субтитров по спикеру и времени (без группировки по темам).
                 </p>
                 <div className="overflow-hidden rounded-xl border" style={{ borderColor: th.cardBorder }}>
                   {topicRows.map((seg, i, arr) => {
@@ -1267,9 +1264,15 @@ export function GroupCallAILayout({
                 <span style={{ fontSize: 10, color: th.topBarText, fontWeight: 500 }}>{chatTitle}</span>
               </div>
               <div className="h-3 w-px" style={{ background: th.topBarDivider }} />
-              <div className="flex items-center gap-1" style={{ fontSize: 9, color: th.topBarTextFaint }}>
+              <div className="flex flex-wrap items-center gap-1" style={{ fontSize: 9, color: th.topBarTextFaint }}>
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
                 {participantCountLabelRu(session.participants.length)}
+                <span style={{ color: th.topBarTextFaint }}>· mesh до {session.maxMeshPeers}</span>
+                {session.participants.length >= Math.max(2, session.maxMeshPeers - 2) ? (
+                  <span style={{ color: "#fbbf24", fontWeight: 600 }} title="Групповой созвон без SFU: при полной комнате нагрузка на сеть растёт">
+                    · близко к лимиту
+                  </span>
+                ) : null}
               </div>
               <div className="h-3 w-px" style={{ background: th.topBarDivider }} />
               <div className="flex items-center gap-1" style={{ fontSize: 9, color: "#a78bfa" }}>
@@ -1722,18 +1725,7 @@ export function GroupCallAILayout({
                       ))}
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-1">
-                    <button
-                      type="button"
-                      className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
-                      style={{ color: th.textMuted }}
-                      onClick={() =>
-                        toast({ title: "Картинка в картинке", description: "Скоро: вынос видео в PiP." })
-                      }
-                    >
-                      <PictureInPicture2 style={{ width: 16, height: 16 }} />
-                      PiP
-                    </button>
+                  <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
                     <button
                       type="button"
                       className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
@@ -1775,33 +1767,6 @@ export function GroupCallAILayout({
                       type="button"
                       className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
                       style={{ color: th.textMuted }}
-                      onClick={() => toast({ title: "Запись", description: "Запись звонка пока не подключена." })}
-                    >
-                      <Circle style={{ width: 16, height: 16 }} />
-                      Запись
-                    </button>
-                    <button
-                      type="button"
-                      className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
-                      style={{ color: th.textMuted }}
-                      onClick={() => toast({ title: "Избранное", description: "Скоро." })}
-                    >
-                      <Heart style={{ width: 16, height: 16 }} />
-                      Лайк
-                    </button>
-                    <button
-                      type="button"
-                      className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
-                      style={{ color: th.textMuted }}
-                      onClick={() => toast({ title: "Улучшение", description: "Скоро: фильтры и ретушь." })}
-                    >
-                      <Sparkles style={{ width: 16, height: 16 }} />
-                      Красота
-                    </button>
-                    <button
-                      type="button"
-                      className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
-                      style={{ color: th.textMuted }}
                       onClick={() => {
                         if (session.canToggleTranscripts && session.phase === "active") session.toggleCaptions()
                       }}
@@ -1809,15 +1774,6 @@ export function GroupCallAILayout({
                     >
                       <Subtitles style={{ width: 16, height: 16 }} />
                       Субтитры
-                    </button>
-                    <button
-                      type="button"
-                      className="flex flex-col items-center gap-0.5 rounded-lg py-2 text-[9px] transition-colors hover:bg-white/10"
-                      style={{ color: th.textMuted }}
-                      onClick={() => toast({ title: "Участник", description: "Приглашение в звонок скоро." })}
-                    >
-                      <UserPlus style={{ width: 16, height: 16 }} />
-                      Добавить
                     </button>
                   </div>
                 </PopoverContent>

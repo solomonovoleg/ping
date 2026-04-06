@@ -3,12 +3,21 @@
  * Без миграций — только JSON.
  */
 
-export type CompanionSurfaceId = "character" | "info" | "leaderboard" | "results" | "prizes";
+export type CompanionSurfaceId =
+  | "tasks"
+  | "character"
+  | "info"
+  | "leaderboard"
+  | "leaderboardSecondary"
+  | "results"
+  | "prizes";
 
 const ALL_SURFACES: CompanionSurfaceId[] = [
+  "tasks",
   "character",
   "info",
   "leaderboard",
+  "leaderboardSecondary",
   "results",
   "prizes",
 ];
@@ -37,6 +46,11 @@ export type CompanionCharacterConfig = {
 
 export type CompanionUiPayload = {
   surfaceOrder: CompanionSurfaceId[];
+  /**
+   * Если задан непустой массив — в игре видны только эти экраны (в этом порядке).
+   * Иначе действует прежняя логика: `surfaceOrder` переупорядочивает, недостающие id дописываются.
+   */
+  onlySurfaces: CompanionSurfaceId[] | null;
   infoArticle: CompanionInfoArticle | null;
   results: CompanionResultsConfig | null;
   character: CompanionCharacterConfig | null;
@@ -44,6 +58,17 @@ export type CompanionUiPayload = {
 
 function isSurfaceId(s: string): s is CompanionSurfaceId {
   return (ALL_SURFACES as string[]).includes(s);
+}
+
+/** Задания — сразу слева от персонажа (свайп с экрана персонажа). */
+function normalizeTasksBeforeCharacter(order: CompanionSurfaceId[]): CompanionSurfaceId[] {
+  if (!order.includes("character")) return order;
+  const rest: CompanionSurfaceId[] = order.filter((id) => id !== "tasks");
+  const ci = rest.indexOf("character");
+  if (ci < 0) return order;
+  const out: CompanionSurfaceId[] = [...rest];
+  out.splice(ci, 0, "tasks");
+  return out;
 }
 
 function parseBlocks(raw: unknown): CompanionInfoBlock[] {
@@ -100,17 +125,33 @@ export function mapCompanionUiFromConfig(configJson: unknown): CompanionUiPayloa
   const comp = root.companion;
   const c = comp && typeof comp === "object" && !Array.isArray(comp) ? (comp as Record<string, unknown>) : {};
 
-  const orderRaw = c.surfaceOrder;
-  let surfaceOrder: CompanionSurfaceId[] = [...ALL_SURFACES];
-  if (Array.isArray(orderRaw)) {
+  const onlyRaw = c.onlySurfaces;
+  let onlyParsed: CompanionSurfaceId[] | null = null;
+  if (Array.isArray(onlyRaw) && onlyRaw.length > 0) {
     const next: CompanionSurfaceId[] = [];
-    for (const x of orderRaw) {
+    for (const x of onlyRaw) {
       if (typeof x === "string" && isSurfaceId(x) && !next.includes(x)) next.push(x);
     }
-    for (const id of ALL_SURFACES) {
-      if (!next.includes(id)) next.push(id);
+    onlyParsed = next.length ? next : null;
+  }
+
+  let surfaceOrder: CompanionSurfaceId[];
+  if (onlyParsed) {
+    surfaceOrder = normalizeTasksBeforeCharacter(onlyParsed);
+  } else {
+    surfaceOrder = [...ALL_SURFACES];
+    const orderRaw = c.surfaceOrder;
+    if (Array.isArray(orderRaw)) {
+      const next: CompanionSurfaceId[] = [];
+      for (const x of orderRaw) {
+        if (typeof x === "string" && isSurfaceId(x) && !next.includes(x)) next.push(x);
+      }
+      for (const id of ALL_SURFACES) {
+        if (!next.includes(id)) next.push(id);
+      }
+      surfaceOrder = next;
     }
-    surfaceOrder = next;
+    surfaceOrder = normalizeTasksBeforeCharacter(surfaceOrder);
   }
 
   const art = c.infoArticle;
@@ -137,5 +178,11 @@ export function mapCompanionUiFromConfig(configJson: unknown): CompanionUiPayloa
     }
   }
 
-  return { surfaceOrder, infoArticle, results, character };
+  return {
+    surfaceOrder,
+    onlySurfaces: onlyParsed,
+    infoArticle,
+    results,
+    character,
+  };
 }

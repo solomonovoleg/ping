@@ -1,0 +1,101 @@
+/* Универсальная тёмная оболочка админки (макет: сайдбар + контент). Токены только внутри [data-admin-shell]. */
+[data-admin-shell] {
+  --admin-bg: 222 47% 7%;
+  --admin-sidebar: 222 38% 11%;
+  --admin-elevated: 222 32% 14%;
+  --admin-elevated-strong: 222 28% 17%;
+  --admin-border: 222 22% 22%;
+  --admin-accent: 262 72% 58%;
+  --admin-accent-foreground: 0 0% 98%;
+  --admin-muted: 215 16% 52%;
+  --admin-radius-lg: 1rem;
+  --admin-radius-md: 0.75rem;
+  --admin-shadow-card: 0 1px 0 hsl(0 0% 100% / 0.04) inset;
+}
+
+[data-admin-shell] .admin-surface-page {
+  background-color: hsl(var(--admin-bg));
+  color: hsl(210 20% 98%);
+}
+
+[data-admin-shell] .admin-surface-sidebar {
+  background-color: hsl(var(--admin-sidebar));
+  border-color: hsl(var(--admin-border) / 0.45);
+}
+
+[data-admin-shell] .admin-surface-main {
+  background-color: hsl(var(--admin-bg));
+}
+
+[data-admin-shell] .admin-surface-card {
+  background-color: hsl(var(--admin-elevated) / 0.92);
+  border: 1px solid hsl(var(--admin-border) / 0.45);
+  border-radius: var(--admin-radius-lg);
+  box-shadow: var(--admin-shadow-card);
+}
+
+[data-admin-shell] .admin-text-muted {
+  color: hsl(var(--admin-muted));
+}
+
+[data-admin-shell] .admin-nav-item {
+  border-radius: var(--admin-radius-md);
+  color: hsl(var(--admin-muted));
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+[data-admin-shell] .admin-nav-item:hover {
+  background-color: hsl(var(--admin-elevated-strong) / 0.55);
+  color: hsl(210 20% 96%);
+}
+
+[data-admin-shell] .admin-nav-item:focus-visible {
+  outline: 2px solid hsl(var(--admin-accent) / 0.65);
+  outline-offset: 1px;
+}
+
+[data-admin-shell] .admin-nav-item-active {
+  background: linear-gradient(
+    105deg,
+    hsl(var(--admin-accent) / 0.38) 0%,
+    hsl(var(--admin-accent) / 0.12) 100%
+  );
+  border: 1px solid hsl(var(--admin-accent) / 0.45);
+  color: hsl(var(--admin-accent-foreground));
+}
+
+[data-admin-shell] .admin-header-bar {
+  background-color: hsl(var(--admin-bg) / 0.85);
+  border-bottom: 1px solid hsl(var(--admin-border) / 0.35);
+  backdrop-filter: blur(12px);
+}
+
+[data-admin-shell] .admin-surface-main {
+  scrollbar-gutter: stable both-edges;
+}
+
+[data-admin-shell] .admin-logout-btn {
+  color: hsl(0 72% 62%);
+}
+
+[data-admin-shell] .admin-logout-btn:hover {
+  background-color: hsl(0 62% 42% / 0.15);
+  color: hsl(0 80% 72%);
+}
+
+/*
+ * Модалки рендерятся в portal на document.body (вне [data-admin-shell]),
+ * поэтому токены сюда продублированы теми же числами, что --admin-elevated / --admin-border.
+ */
+.admin-dialog-surface {
+  background-color: hsl(222 32% 14%) !important;
+  border-color: hsl(222 22% 22% / 0.55) !important;
+  color: hsl(210 20% 98%);
+}
+
+.admin-skeleton-shimmer {
+  background-color: hsl(222 28% 20%) !important;
+}

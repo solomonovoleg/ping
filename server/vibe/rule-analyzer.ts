@@ -132,9 +132,19 @@ export function analyzeMessageBatch(texts: string[]): VibeBatchResult {
   const emDens = emojiDensity(texts);
   const exclRate = exclamationRate(texts);
   const ywRatio = youWeRatio(texts);
+  const romanticStrongSignal =
+    romanticHits >= 2 ||
+    (romanticHits >= 1 && emDens > 0.08 && ywRatio >= 2 && businessHits === 0);
+  let romanticScore = romanticStrongSignal
+    ? romanticHits * 3 + (emDens > 0.15 ? 2 : 0)
+    : Math.min(2, romanticHits);
+  // Рабочий контекст гасит ложную «романтику» от единичных слов/эмодзи.
+  if (businessHits >= 2 && romanticHits <= 2) {
+    romanticScore = Math.min(romanticScore, 2);
+  }
 
   const scores: ThemeScore[] = [
-    { theme: "romantic", score: romanticHits * 3 + (emDens > 0.15 ? 2 : 0) },
+    { theme: "romantic", score: romanticScore },
     { theme: "conflict", score: conflictHits * 4 + (exclRate > 0.5 ? 3 : 0) },
     { theme: "fun", score: funHits * 3 + (emDens > 0.1 ? 1 : 0) },
     { theme: "business", score: businessHits * 3 + (avgLen > 80 ? 2 : 0) },

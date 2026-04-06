@@ -78,23 +78,57 @@ export async function pickPhotoFromGallery(): Promise<string | null> {
   }
 }
 
-/** Запросить разрешение на пуш-уведомления и вернуть FCM token (или null в вебе). */
+const PUSH_TOKEN_WAIT_MS = 25_000;
+
+/** Запросить разрешение на пуш-уведомления и вернуть FCM token (в вебе — см. requestWebPushAndGetToken). */
 export async function requestPushAndGetToken(): Promise<string | null> {
   if (!isNative()) return null;
   try {
     const { PushNotifications } = await import("@capacitor/push-notifications");
     const perm = await PushNotifications.requestPermissions();
     if (perm.receive !== "granted") return null;
-    await PushNotifications.register();
-    return new Promise((resolve) => {
-      PushNotifications.addListener(
-        "registration",
-        (ev: { value: string }) => resolve(ev.value)
-      );
-      PushNotifications.addListener("registrationError", () => resolve(null));
-      setTimeout(() => resolve(null), 10000);
+
+    return await new Promise<string | null>((resolve) => {
+      let settled = false;
+      let regHandle: { remove: () => Promise<void> } | undefined;
+      let errHandle: { remove: () => Promise<void> } | undefined;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (value: string | null) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        void regHandle?.remove();
+        void errHandle?.remove();
+        resolve(value);
+      };
+
+      void (async () => {
+        try {
+          regHandle = await PushNotifications.addListener("registration", (ev: { value: string }) => {
+            const t = typeof ev?.value === "string" ? ev.value.trim() : "";
+            finish(t || null);
+          });
+          errHandle = await PushNotifications.addListener("registrationError", (err: unknown) => {
+            if (import.meta.env.DEV) {
+              console.warn("[push] registrationError", err);
+            }
+            finish(null);
+          });
+          timeoutId = setTimeout(() => finish(null), PUSH_TOKEN_WAIT_MS);
+          await PushNotifications.register();
+        } catch (e) {
+          if (import.meta.env.DEV) {
+            console.warn("[push] register failed", e);
+          }
+          finish(null);
+        }
+      })();
     });
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) {
+      console.warn("[push] requestPushAndGetToken", e);
+    }
     return null;
   }
 }
@@ -104,6 +138,14 @@ export function triggerLightHaptic(): void {
   if (!isNative()) return;
   import("@capacitor/haptics")
     .then((mod) => mod.Haptics.impact({ style: mod.ImpactStyle.Light }))
+    .catch(() => {});
+}
+
+/** Средняя отдача — удержание «ускорение» в рилсах, заметнее чем Light. */
+export function triggerMediumHaptic(): void {
+  if (!isNative()) return;
+  import("@capacitor/haptics")
+    .then((mod) => mod.Haptics.impact({ style: mod.ImpactStyle.Medium }))
     .catch(() => {});
 }
 
@@ -222,5 +264,51 @@ export async function openDialer(phoneNumber: string): Promise<void> {
     }
   } else {
     window.location.href = url;
+  }
+}
+
+/** Подсветка лица при записи видеокружка: только в нативном приложении (плагин яркости). */
+export function isNativeScreenBrightnessControlAvailable(): boolean {
+  return isNative();
+}
+
+let videoNoteBrightnessRestore: number | "android-system" | null = null;
+
+/** Временно поднять яркость экрана (iOS/Android). Повторные вызовы не перезаписывают сохранённое значение. */
+export async function boostScreenBrightnessForVideoNote(): Promise<void> {
+  if (!isNative()) return;
+  try {
+    const { ScreenBrightness } = await import("@capacitor-community/screen-brightness");
+    const { Capacitor } = await import("@capacitor/core");
+    if (videoNoteBrightnessRestore === null) {
+      const { brightness } = await ScreenBrightness.getBrightness();
+      if (Capacitor.getPlatform() === "android" && brightness === -1) {
+        videoNoteBrightnessRestore = "android-system";
+      } else if (typeof brightness === "number" && brightness >= 0 && brightness <= 1) {
+        videoNoteBrightnessRestore = brightness;
+      } else {
+        videoNoteBrightnessRestore = 0.65;
+      }
+    }
+    await ScreenBrightness.setBrightness({ brightness: 1 });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Вернуть яркость после записи / отмены. */
+export async function restoreScreenBrightnessAfterVideoNote(): Promise<void> {
+  if (!isNative() || videoNoteBrightnessRestore === null) return;
+  const saved = videoNoteBrightnessRestore;
+  videoNoteBrightnessRestore = null;
+  try {
+    const { ScreenBrightness } = await import("@capacitor-community/screen-brightness");
+    if (saved === "android-system") {
+      await ScreenBrightness.setBrightness({ brightness: -1 });
+    } else {
+      await ScreenBrightness.setBrightness({ brightness: saved });
+    }
+  } catch {
+    /* ignore */
   }
 }

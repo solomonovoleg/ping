@@ -1,0 +1,44 @@
+---
+description: Performance-focused refactoring patterns for React + Vite
+globs:
+  - "client/src/**/*.tsx"
+  - "client/src/**/*.ts"
+alwaysApply: false
+---
+
+# Performance Optimization (Refactor Mode)
+
+Use these patterns when asked to optimize performance or when profiling indicates hot paths.
+
+## Rendering Efficiency
+- Use `React.memo` for expensive pure rows/items.
+- Use `useMemo` for expensive derived values.
+- Use `useCallback` only for stable function identity needs.
+- Prefer stable keys from IDs, never array index for dynamic lists.
+
+## Large Lists and Media
+- Virtualize long lists where rendering volume is high.
+- Defer offscreen media and use lazy image loading where appropriate.
+- Keep image/video components lightweight on first paint.
+
+## Code Splitting and Load Cost
+- Split heavy route-level and modal-level code paths.
+- Dynamically import heavy optional libraries.
+- Keep the critical path free from nonessential dependencies.
+
+## Data and Realtime Paths
+- Avoid repeated refetch bursts from multiple effects.
+- Batch or coalesce repeated requests where possible.
+- Prevent N+1 style API usage from the client side.
+
+## Optimization Guardrails
+- Measure first (profiler, timings, bundle stats), then optimize.
+- Do not add memoization everywhere by default.
+- Do not trade readability for negligible gains.
+
+## Performance Checklist
+- [ ] Hot path identified and measured
+- [ ] Optimization scoped to bottleneck
+- [ ] No behavior regression
+- [ ] Render count or latency improved
+- [ ] Cleanup applied (no leftover experimental code)

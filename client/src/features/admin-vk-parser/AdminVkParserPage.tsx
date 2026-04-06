@@ -9,6 +9,7 @@ import { VkParserDialogs } from "./VkParserDialogs";
 import { VkParserQueueCard } from "./VkParserQueueCard";
 import { useVkParserData } from "./useVkParserData";
 import { useVkParserMutations } from "./useVkParserMutations";
+import { AdminPageHeader, adminPageStackClass } from "@/features/admin-shell";
 
 export default function AdminVkParserPage() {
   const [createOpen, setCreateOpen] = useState(false);
@@ -44,53 +45,60 @@ export default function AdminVkParserPage() {
   };
 
   return (
-    <div className="w-full max-w-full min-w-0 space-y-8">
-      <header className="flex w-full max-w-full min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-        <div className="min-w-0 w-full flex-1 space-y-1 sm:pr-2">
-          <h1 className="text-2xl font-bold flex items-center gap-2" id="vk-parser-page-title">
-            <Download className="w-7 h-7 shrink-0 opacity-80" aria-hidden />
+    <div className={cn(adminPageStackClass(), "w-full max-w-full min-w-0 space-y-8")}>
+      <AdminPageHeader
+        title={
+          <>
+            <Download className="h-7 w-7 shrink-0 opacity-80" aria-hidden />
             Парсер ВК
-          </h1>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Посты из стены сообщества ВКонтакте публикуются от имени выбранного пользователя PING. Чтобы раздел работал,
-            на сервере должен быть запущен отдельный сервис импорта — его настраивает администратор; если он выключен,
-            списки ниже не загрузятся (это не ошибка в ваших токенах).
-          </p>
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Привязок может быть сколько угодно: для разных людей — отдельно; одному человеку — несколько разных стен (разный{" "}
-            <span className="font-mono">owner_id</span>). Одну и ту же пару «автор + стена» дублировать нельзя. Токен ВК в
-            базе хранится в зашифрованном виде; фото сохраняются на ваш сервер или в S3.
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row flex-wrap gap-2 shrink-0 w-full sm:w-auto">
-          <TapScaleButton
-            type="button"
-            haptic
-            className={cn(
-              buttonVariants({ variant: "secondary", size: "default" }),
-              "min-h-[var(--uix-touch-min)] w-full sm:w-auto justify-center",
-            )}
-            onClick={handleOpenCreate}
-          >
-            Новая привязка
-          </TapScaleButton>
-          <TapScaleButton
-            type="button"
-            haptic
-            disabled={m.runAllMut.isPending}
-            className={cn(
-              buttonVariants({ variant: "outline", size: "default" }),
-              "min-h-[var(--uix-touch-min)] w-full sm:w-auto justify-center",
-            )}
-            onClick={() => m.runAllMut.mutate()}
-          >
-            {m.runAllMut.isPending ? <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden /> : null}
-            Запустить все
-          </TapScaleButton>
-        </div>
-      </header>
+          </>
+        }
+        description={
+          <>
+            <p>
+              Посты из стены сообщества ВКонтакте публикуются от имени выбранного пользователя PING. Список пользователей для
+              автора постов берётся из основной базы сайта (как в разделе «Пользователи»). Отдельный сервис импорта на сервере
+              нужен для опроса ВК, привязок и очереди — если он выключен, не загрузятся привязки и очередь (это не ошибка в
+              ваших токенах).
+            </p>
+            <p className="mt-2">
+              Привязок может быть сколько угодно: для разных людей — отдельно; одному человеку — несколько разных стен (разный{" "}
+              <span className="font-mono">owner_id</span>). Одну и ту же пару «автор + стена» дублировать нельзя. Токен ВК в
+              базе хранится в зашифрованном виде; фото сохраняются на ваш сервер или в S3.
+            </p>
+          </>
+        }
+        actions={
+          <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+            <TapScaleButton
+              type="button"
+              haptic
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "default" }),
+                "min-h-[var(--uix-touch-min)] w-full justify-center sm:w-auto",
+              )}
+              onClick={handleOpenCreate}
+            >
+              Новая привязка
+            </TapScaleButton>
+            <TapScaleButton
+              type="button"
+              haptic
+              disabled={m.runAllMut.isPending}
+              className={cn(
+                buttonVariants({ variant: "outline", size: "default" }),
+                "min-h-[var(--uix-touch-min)] w-full justify-center sm:w-auto",
+              )}
+              onClick={() => m.runAllMut.mutate()}
+            >
+              {m.runAllMut.isPending ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden /> : null}
+              Запустить все
+            </TapScaleButton>
+          </div>
+        }
+      />
 
-      <section className="space-y-8" aria-labelledby="vk-parser-page-title">
+      <section className="space-y-8" aria-label="Парсер ВК: привязки и очередь">
         <VkParserBindingsCard
           bindings={d.bindings}
           loading={d.bindingsLoading}
@@ -158,6 +166,9 @@ export default function AdminVkParserPage() {
         createMut={m.createMut}
         updateMut={m.updateMut}
         testTokenMut={m.testTokenMut}
+        usersFetching={d.usersFetching}
+        usersError={d.usersError}
+        onRetryUsers={() => void d.refetchUsers()}
       />
     </div>
   );

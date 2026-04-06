@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdminMetricTile, AdminPageHeader, AdminPanelCard, adminPageStackClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { HardDrive, AlertTriangle, Cpu } from "lucide-react";
 import { fetchOpsDisk } from "@/features/admin-ops/api";
 
@@ -51,35 +52,31 @@ export default function AdminDiskPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-56" />
-        <Card>
-          <CardHeader>
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-4 w-full max-w-xl mt-2" />
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </CardContent>
-        </Card>
+      <div className={cn(adminPageStackClass(), "space-y-6")}>
+        <Skeleton className="h-10 w-56 rounded-lg bg-[hsl(var(--admin-elevated))]" />
+        <div className="admin-surface-card space-y-3 p-5 sm:p-6">
+          <Skeleton className="h-5 w-48 bg-[hsl(var(--admin-elevated-strong))]" />
+          <Skeleton className="mt-2 h-4 w-full max-w-xl bg-[hsl(var(--admin-elevated-strong))]" />
+          <div className="space-y-2 pt-2">
+            <Skeleton className="h-12 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+            <Skeleton className="h-12 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+            <Skeleton className="h-12 w-full bg-[hsl(var(--admin-elevated-strong))]" />
+          </div>
+        </div>
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="space-y-4">
-        <h1 className="text-2xl font-bold">Диск</h1>
-        <Card>
-          <CardContent className="py-6 space-y-3">
-            <p className="text-sm text-destructive">Не удалось загрузить статистику.</p>
-            <Button size="sm" variant="outline" onClick={() => refetch()}>
-              Повторить
-            </Button>
-          </CardContent>
-        </Card>
+      <div className={cn(adminPageStackClass(), "space-y-4")}>
+        <AdminPageHeader title="Диск" description="Статистика тома, uploads и нагрузка сервера." showUserChrome={false} />
+        <AdminPanelCard className="space-y-3 p-5 sm:p-6">
+          <p className="text-sm text-[hsl(0_72%_62%)]">Не удалось загрузить статистику.</p>
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            Повторить
+          </Button>
+        </AdminPanelCard>
       </div>
     );
   }
@@ -91,50 +88,81 @@ export default function AdminDiskPage() {
   const uploadsTotalBytes = uploadRows.reduce((a, r) => a + r.bytes, 0);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <HardDrive className="w-7 h-7 opacity-90" aria-hidden />
+    <div className={cn(adminPageStackClass(), "space-y-6")}>
+      <AdminPageHeader
+        title={
+          <>
+            <HardDrive className="h-7 w-7 shrink-0 opacity-90" aria-hidden />
             Диск
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Объём по типам контента, том диска (statfs), нагрузка сервера и размер папки проекта — с долями от тома и
-            от каталога приложения. Том: <span className="font-mono text-xs">{data.statfsPath}</span>
-            {data.cwd !== data.statfsPath ? (
-              <span className="block text-xs mt-0.5">cwd процесса: {data.cwd}</span>
-            ) : null}
+          </>
+        }
+        description={
+          <>
+            Объём по типам контента, том (statfs), нагрузка и папка проекта. Том:{" "}
+            <span className="font-mono text-xs">{data.statfsPath}</span>
+            {data.cwd !== data.statfsPath ? <span className="mt-0.5 block text-xs">cwd процесса: {data.cwd}</span> : null}
             {data.projectPath !== data.cwd ? (
-              <span className="block text-xs mt-0.5">
-                Папка проекта (DISK_PROJECT_PATH): <span className="font-mono">{data.projectPath}</span>
+              <span className="mt-0.5 block text-xs">
+                Папка проекта: <span className="font-mono">{data.projectPath}</span>
               </span>
             ) : null}
+          </>
+        }
+        actions={
+          <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+            <span className="text-xs admin-text-muted">
+              Обновлено: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("ru-RU") : "—"}
+              {isFetching ? " …" : ""}
+            </span>
+            <Button size="sm" variant="outline" className="h-8" onClick={() => refetch()}>
+              Обновить
+            </Button>
+          </div>
+        }
+      />
+
+      <div
+        className={cn(
+          "flex gap-2 rounded-md border px-3 py-2 text-sm",
+          data.mediaStorageMode === "s3"
+            ? "border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-100"
+            : "border-border/60 bg-muted/30 text-foreground",
+        )}
+        role="status"
+      >
+        {data.mediaStorageMode === "s3" ? (
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+        ) : (
+          <HardDrive className="w-4 h-4 shrink-0 mt-0.5 opacity-80" aria-hidden />
+        )}
+        <div className="min-w-0 space-y-1">
+          <p className="font-medium">
+            Медиа: {data.mediaStorageMode === "s3" ? "объектное хранилище (S3)" : "локально на диске сервера"}
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>
-            Обновлено:{" "}
-            {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString("ru-RU") : "—"}
-            {isFetching ? " …" : ""}
-          </span>
-          <Button size="sm" variant="outline" className="h-8" onClick={() => refetch()}>
-            Обновить
-          </Button>
+          <p className="text-xs opacity-90">
+            {data.mediaStorageMode === "s3"
+              ? "Новые загрузки могут уходить в бакет. Каталог uploads/ на VPS часто меньше полного объёма медиа."
+              : "Основной объём файлов в uploads/ на том же томе, что и отчёт ниже."}
+          </p>
+          {data.s3BucketProbe.ran ? (
+            <p
+              className={cn(
+                "text-xs font-medium",
+                data.s3BucketProbe.ok ? "text-emerald-700 dark:text-emerald-300" : "text-destructive",
+              )}
+            >
+              {data.s3BucketProbe.ok
+                ? "Проверка бакета (HeadBucket): OK"
+                : `Проверка бакета: ошибка — ${data.s3BucketProbe.error}`}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Проверка бакета не запускалась. Для HeadBucket при открытии отчёта:{" "}
+              <span className="font-mono">OPS_DISK_S3_HEAD_BUCKET=1</span> на сервере.
+            </p>
+          )}
         </div>
       </div>
-
-      {data.s3Configured ? (
-        <div
-          className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100"
-          role="status"
-        >
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
-          <span>
-            Включён S3: новые файлы могут уходить в объектное хранилище. Локальные папки{" "}
-            <span className="font-mono">uploads/</span> могут не отражать весь объём медиа.
-          </span>
-        </div>
-      ) : null}
 
       {data.mountError ? (
         <p className="text-sm text-destructive">
@@ -142,18 +170,18 @@ export default function AdminDiskPage() {
         </p>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Cpu className="w-4 h-4" aria-hidden />
+      <AdminPanelCard className="space-y-4 p-5 text-sm sm:p-6">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-[hsl(210_20%_98%)]">
+            <Cpu className="h-4 w-4" aria-hidden />
             Сервер и проект
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            RAM и CPU — хост целиком (процесс Node — строка RSS). Диск проекта — относительно размера тома и каталога
-            приложения; папка <span className="font-mono">uploads/</span> — доля внутри измеренного дерева проекта.
+          </h2>
+          <p className="mt-1 text-sm admin-text-muted">
+            RAM и CPU — хост целиком (процесс Node — RSS). Диск проекта и <span className="font-mono">uploads/</span> — доли
+            от тома и дерева проекта.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+        </div>
+        <div className="space-y-4">
           <div className="rounded-lg border bg-muted/30 px-3 py-2 space-y-1">
             <div className="font-mono text-xs break-all text-muted-foreground">{data.host.projectPath}</div>
             <div className="text-xs text-muted-foreground">{projectMeasureLabel(data.host.projectDiskSource)}</div>
@@ -219,57 +247,48 @@ export default function AdminDiskPage() {
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
 
       {mount ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Том: всего</CardTitle>
-            </CardHeader>
-            <CardContent className="text-lg font-semibold tabular-nums">{fmtBytes(mount.totalBytes)}</CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Свободно</CardTitle>
-            </CardHeader>
-            <CardContent className="text-lg font-semibold tabular-nums">{fmtBytes(mount.freeBytes)}</CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Занято (том)</CardTitle>
-            </CardHeader>
-            <CardContent className="text-lg font-semibold tabular-nums">
+          <AdminMetricTile>
+            <p className="text-xs font-medium admin-text-muted">Том: всего</p>
+            <p className="text-lg font-semibold tabular-nums text-[hsl(210_20%_98%)]">{fmtBytes(mount.totalBytes)}</p>
+          </AdminMetricTile>
+          <AdminMetricTile>
+            <p className="text-xs font-medium admin-text-muted">Свободно</p>
+            <p className="text-lg font-semibold tabular-nums text-[hsl(210_20%_98%)]">{fmtBytes(mount.freeBytes)}</p>
+          </AdminMetricTile>
+          <AdminMetricTile>
+            <p className="text-xs font-medium admin-text-muted">Занято (том)</p>
+            <p className="text-lg font-semibold tabular-nums text-[hsl(210_20%_98%)]">
               {fmtBytes(mount.usedBytes)}
-              <span className="text-sm font-normal text-muted-foreground ml-2">
+              <span className="ml-2 text-sm font-normal admin-text-muted">
                 ({fmtPct((mount.usedBytes / mount.totalBytes) * 100)})
               </span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Сумма uploads/ (оценка)</CardTitle>
-            </CardHeader>
-            <CardContent className="text-lg font-semibold tabular-nums">
+            </p>
+          </AdminMetricTile>
+          <AdminMetricTile>
+            <p className="text-xs font-medium admin-text-muted">Сумма uploads/ (оценка)</p>
+            <p className="text-lg font-semibold tabular-nums text-[hsl(210_20%_98%)]">
               {fmtBytes(uploadsTotalBytes)}
-              <span className="text-sm font-normal text-muted-foreground ml-2">
+              <span className="ml-2 text-sm font-normal admin-text-muted">
                 ({fmtPct((uploadsTotalBytes / mount.totalBytes) * 100)} тома)
               </span>
-            </CardContent>
-          </Card>
+            </p>
+          </AdminMetricTile>
         </div>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Разбивка</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            «% тома» — доля от общего размера файловой системы. «% свободно» — насколько строка велика относительно
-            оставшегося свободного места (если свободно мало, процент может быть больше 100%).
+      <AdminPanelCard className="space-y-8 p-5 sm:p-6">
+        <div>
+          <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Разбивка</h2>
+          <p className="mt-1 text-sm admin-text-muted">
+            «% тома» — доля от размера ФС. «% свободно» — относительно оставшегося места (может быть &gt;100%).
           </p>
-        </CardHeader>
-        <CardContent className="space-y-8">
+        </div>
+        <div className="space-y-8">
           {(["uploads", "database", "disk"] as const).map((section) => {
             const rows = data.rows.filter((r) => r.section === section);
             if (rows.length === 0) return null;
@@ -319,8 +338,8 @@ export default function AdminDiskPage() {
               </div>
             );
           })}
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
     </div>
   );
 }

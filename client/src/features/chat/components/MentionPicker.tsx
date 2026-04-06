@@ -97,6 +97,7 @@ function MentionPickerInner({
           seed={m.id}
           size={28}
           className="flex-shrink-0"
+          pointerEventsNone
         />
         <span className="min-w-0 truncate">{memberDisplayName(m)}</span>
         {m.publicId != null ? (

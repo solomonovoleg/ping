@@ -6,6 +6,7 @@ import { sendChatMessage } from "../messages/service";
 import { generateReferralCode, normalizeReferralCodeInput } from "../referrals/code-generator";
 import { storage } from "../storage";
 import { fetchUpstreamCampaignConfig } from "./upstream-client";
+import { verifyPresetOnPlatform } from "./verify-preset-platform";
 
 const RATE_MS = 45_000;
 const lastPackAt = new Map<string, number>();
@@ -18,8 +19,74 @@ const DEFAULT_DM_TEMPLATE = `Привет! Вот твои {{count}} персо�
 
 Это личное сообщение от автора кампании — вкладка «Чаты» внизу экрана.`;
 
+const DEFAULT_DM_TEMPLATE_MULTI_USE = `Привет! Общий код приглашения в PING по этой кампании (до {{maxUses}} регистраций на один и тот же код):
+
+{{codes}}
+
+Друзья вводят этот код при регистрации. Когда лимит исчерпан, запросите новый код в игре.
+
+Это личное сообщение от автора кампании — вкладка «Чаты» внизу экрана.`;
+
+const DEFAULT_DM_TEMPLATE_SINGLE = `Привет! Твой одноразовый код приглашения в PING по этой кампании:
+
+{{codes}}
+
+Отправь другу — при регистрации вводят код в поле приглашения. Новый код можно запросить в игре снова (с небольшой паузой).
+
+Это личное сообщение от автора кампании — вкладка «Чаты» внизу экрана.`;
+
+type PingInviteIssueMode = "batch_min_count" | "single_per_request" | "one_multi_use";
+
+function parsePingInviteIssue(pi: Record<string, unknown>): {
+  issueMode: PingInviteIssueMode;
+  multiUseRegistrations: number;
+} {
+  const raw = pi.inviteIssueMode ?? pi.issueMode;
+  const s = typeof raw === "string" ? raw.trim() : "";
+  const issueMode: PingInviteIssueMode =
+    s === "single_per_request" || s === "one_multi_use" ? s : "batch_min_count";
+  const mu = pi.multiUseRegistrations ?? pi.multiUseMax;
+  let multiUseRegistrations =
+    typeof mu === "number" && Number.isFinite(mu) ? Math.floor(mu) : 50;
+  multiUseRegistrations = Math.min(10_000, Math.max(2, multiUseRegistrations));
+  return { issueMode, multiUseRegistrations };
+}
+
 function rateKey(userId: string, edgeId: string, taskKey: string): string {
   return `${userId}\n${edgeId}\n${taskKey}`;
+}
+
+/** Коды кампании привязаны к участнику: регистрация → `users.invited_by_id` = этот user. `maxUses` как в `referral_codes`. */
+async function createOneDigitsInviteCode(
+  inviterUserId: string,
+  expiresAt: Date,
+  maxUses: number,
+): Promise<string> {
+  let uses = Math.floor(maxUses);
+  if (!Number.isFinite(uses) || uses < 1) uses = 1;
+  if (uses > 10_000) uses = 10_000;
+  for (let attempt = 0; attempt < 24; attempt++) {
+    let code = generateReferralCode();
+    let inner = 0;
+    while (inner < 8) {
+      const clash = await storage.getReferralCodeByCode(normalizeReferralCodeInput(code));
+      if (!clash) break;
+      code = generateReferralCode();
+      inner += 1;
+    }
+    try {
+      await storage.createReferralCode(inviterUserId, code, expiresAt, {
+        maxUses: uses,
+        bypassInviterLimit: true,
+      });
+      return code;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/unique|duplicate|23505/i.test(msg)) continue;
+      throw e;
+    }
+  }
+  throw new Error("Не удалось сгенерировать уникальный код приглашения");
 }
 
 /** Как в EDGE `listTaskPresetsFromConfig`: плоский массив или вложенность по scope. */
@@ -37,8 +104,8 @@ function flattenTaskPresets(root: Record<string, unknown>): unknown[] {
 }
 
 /**
- * Генерирует N одноразовых реферальных кодов (не расходуют лимит пригласившего при регистрации)
- * и шлёт их участнику в ЛС от создателя кампании.
+ * Генерирует N одноразовых кодов (inviter = участник; `bypassInviterLimit` — не тратит лимит из Настроек)
+ * и шлёт текст в ЛС от имени создателя кампании.
  */
 export async function handlePostPingInvitePack(req: Request, res: Response): Promise<void> {
   const userId = getUserId(req);
@@ -65,110 +132,146 @@ export async function handlePostPingInvitePack(req: Request, res: Response): Pro
     return;
   }
 
-  const cfgUp = await fetchUpstreamCampaignConfig(edgeId);
-  if (!cfgUp.ok || cfgUp.status < 200 || cfgUp.status >= 300) {
-    res.status(503).json({ error: "edge_companion_unavailable" });
-    return;
-  }
-
-  let root: Record<string, unknown>;
   try {
-    root = JSON.parse(cfgUp.body) as Record<string, unknown>;
-  } catch {
-    res.status(503).json({ error: "edge_companion_invalid" });
-    return;
-  }
+    const cfgUp = await fetchUpstreamCampaignConfig(edgeId, req.requestId);
+    if (!cfgUp.ok || cfgUp.status < 200 || cfgUp.status >= 300) {
+      res.status(503).json({ error: "edge_companion_unavailable" });
+      return;
+    }
 
-  const creatorId = typeof root.creatorPlatformUserId === "string" ? root.creatorPlatformUserId.trim() : "";
-  if (!creatorId) {
-    res.status(400).json({ error: "campaign_creator_unknown" });
-    return;
-  }
+    let root: Record<string, unknown>;
+    try {
+      root = JSON.parse(cfgUp.body) as Record<string, unknown>;
+    } catch {
+      res.status(503).json({ error: "edge_companion_invalid" });
+      return;
+    }
 
-  const taskPresets = flattenTaskPresets(root);
-  let verify: ReturnType<typeof parsePresetVerify> | null = null;
-  for (const raw of taskPresets) {
-    if (!raw || typeof raw !== "object") continue;
-    const o = raw as Record<string, unknown>;
-    if (typeof o.key !== "string" || o.key.trim() !== taskKey) continue;
-    verify = parsePresetVerify(o.verify);
-    break;
-  }
+    const creatorId = typeof root.creatorPlatformUserId === "string" ? root.creatorPlatformUserId.trim() : "";
+    if (!creatorId) {
+      res.status(400).json({ error: "campaign_creator_unknown" });
+      return;
+    }
 
-  if (!verify || verify.type !== "ping_invited_users") {
-    res.status(400).json({ error: "task_not_ping_invite" });
-    return;
-  }
+    const taskPresets = flattenTaskPresets(root);
+    let verify: ReturnType<typeof parsePresetVerify> | null = null;
+    for (const raw of taskPresets) {
+      if (!raw || typeof raw !== "object") continue;
+      const o = raw as Record<string, unknown>;
+      if (typeof o.key !== "string" || o.key.trim() !== taskKey) continue;
+      verify = parsePresetVerify(o.verify);
+      break;
+    }
 
-  const n = Math.min(50, Math.max(1, verify.minCount));
-  const pingRaw = root.pingInviteDm;
-  let template = DEFAULT_DM_TEMPLATE;
-  let hours = 168;
-  if (pingRaw && typeof pingRaw === "object" && !Array.isArray(pingRaw)) {
-    const pi = pingRaw as Record<string, unknown>;
-    const t = typeof pi.template === "string" ? pi.template.trim() : "";
-    if (t) template = t;
-    const h = pi.codeExpiresInHours;
+    if (!verify || verify.type !== "ping_invited_users") {
+      res.status(400).json({ error: "task_not_ping_invite" });
+      return;
+    }
+
+    const gate = await verifyPresetOnPlatform({
+      userId,
+      edgeId,
+      creatorPlatformUserId: creatorId,
+      verify,
+    });
+    if (!gate.ok) {
+      res.status(403).json({ error: "preset_verification_failed", reason: gate.reason });
+      return;
+    }
+
+    const pingRaw = root.pingInviteDm;
+    const piObj =
+      pingRaw && typeof pingRaw === "object" && !Array.isArray(pingRaw)
+        ? (pingRaw as Record<string, unknown>)
+        : {};
+    const { issueMode, multiUseRegistrations } = parsePingInviteIssue(piObj);
+
+    let template =
+      issueMode === "one_multi_use"
+        ? DEFAULT_DM_TEMPLATE_MULTI_USE
+        : issueMode === "single_per_request"
+          ? DEFAULT_DM_TEMPLATE_SINGLE
+          : DEFAULT_DM_TEMPLATE;
+    let hours = 168;
+    const tCustom = typeof piObj.template === "string" ? piObj.template.trim() : "";
+    if (tCustom) template = tCustom;
+    const h = piObj.codeExpiresInHours;
     if (typeof h === "number" && Number.isFinite(h)) {
       hours = Math.min(720, Math.max(1, Math.floor(h)));
     }
-  }
 
-  const expiresAt = new Date();
-  expiresAt.setTime(expiresAt.getTime() + hours * 3_600_000);
+    const expiresAt = new Date();
+    expiresAt.setTime(expiresAt.getTime() + hours * 3_600_000);
 
-  const codes: string[] = [];
-  for (let i = 0; i < n; i++) {
-    let code = generateReferralCode("phrase");
-    let attempts = 0;
-    while (attempts < 8) {
-      const clash = await storage.getReferralCodeByCode(normalizeReferralCodeInput(code));
-      if (!clash) break;
-      code = generateReferralCode("phrase");
-      attempts += 1;
+    /** Сколько строк в сообщении и какой maxUses у каждой создаваемой записи в БД. */
+    let codeSpecs: { maxUses: number }[] = [];
+    if (issueMode === "single_per_request") {
+      codeSpecs = [{ maxUses: 1 }];
+    } else if (issueMode === "one_multi_use") {
+      codeSpecs = [{ maxUses: multiUseRegistrations }];
+    } else {
+      const n = Math.min(50, Math.max(1, verify.minCount));
+      codeSpecs = Array.from({ length: n }, () => ({ maxUses: 1 }));
     }
-    await storage.createReferralCode(creatorId, code, expiresAt, {
-      maxUses: 1,
-      bypassInviterLimit: true,
-    });
-    codes.push(code);
-  }
 
-  const codesBlock = codes.map((c, idx) => `${idx + 1}. ${c}`).join("\n");
-  const appLink = (process.env.PING_INVITE_APP_URL ?? "").trim();
-  const hadCodesPlaceholder = /\{\{\s*codes\s*\}\}/i.test(template);
-  let text = template
-    .replace(/\{\{\s*count\s*\}\}/gi, String(n))
-    .replace(/\{\{\s*codes\s*\}\}/gi, codesBlock)
-    .replace(/\{\{\s*appLink\s*\}\}/gi, appLink)
-    .trim();
+    const codes: string[] = [];
+    for (const spec of codeSpecs) {
+      codes.push(await createOneDigitsInviteCode(userId, expiresAt, spec.maxUses));
+    }
 
-  if (!hadCodesPlaceholder) {
-    const head =
-      n === 1
-        ? "Вот твой персональный код приглашения (один новый пользователь):"
-        : `Вот твои ${n} персональных кода приглашения (каждый на одного нового пользователя):`;
-    text = text.length > 0 ? `${text}\n\n${head}\n\n${codesBlock}` : `${head}\n\n${codesBlock}`;
-  }
+    const n = codes.length;
+    const primaryMaxUses = codeSpecs[0]?.maxUses ?? 1;
+    const codesBlock = codes.map((c, idx) => `${idx + 1}. ${c}`).join("\n");
+    const appLink = (process.env.PING_INVITE_APP_URL ?? "").trim();
+    const hadCodesPlaceholder = /\{\{\s*codes\s*\}\}/i.test(template);
+    let text = template
+      .replace(/\{\{\s*count\s*\}\}/gi, String(n))
+      .replace(/\{\{\s*maxUses\s*\}\}/gi, String(primaryMaxUses))
+      .replace(/\{\{\s*codes\s*\}\}/gi, codesBlock)
+      .replace(/\{\{\s*appLink\s*\}\}/gi, appLink)
+      .trim();
 
-  try {
-    const chat = await storage.getOrCreateDmChat(creatorId, userId);
-    await sendChatMessage({
-      userId: creatorId,
-      chatId: chat.id,
-      content: text,
-      type: "text",
-    });
-    notifyChatListUpdate(userId);
-    lastPackAt.set(rk, Date.now());
-    res.json({
-      ok: true,
-      chatId: chat.id,
-      codesCount: n,
-      hint: "Откройте вкладку «Чаты» внизу экрана — сообщение от автора кампании.",
-    });
+    if (!hadCodesPlaceholder) {
+      let head: string;
+      if (issueMode === "one_multi_use") {
+        head =
+          primaryMaxUses <= 1
+            ? "Код приглашения:"
+            : `Общий код (до ${primaryMaxUses} регистраций):`;
+      } else if (n === 1) {
+        head = "Вот твой персональный код приглашения (один новый пользователь):";
+      } else {
+        head = `Вот твои ${n} персональных кода приглашения (каждый на одного нового пользователя):`;
+      }
+      text = text.length > 0 ? `${text}\n\n${head}\n\n${codesBlock}` : `${head}\n\n${codesBlock}`;
+    }
+
+    try {
+      const chat = await storage.getOrCreateDmChat(creatorId, userId);
+      await sendChatMessage({
+        userId: creatorId,
+        chatId: chat.id,
+        content: text,
+        type: "text",
+      });
+      notifyChatListUpdate(userId);
+      lastPackAt.set(rk, Date.now());
+      res.json({
+        ok: true,
+        chatId: chat.id,
+        codesCount: n,
+        inviteIssueMode: issueMode,
+        maxUses: primaryMaxUses,
+        hint: "Откройте вкладку «Чаты» внизу экрана — сообщение от автора кампании.",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "send_failed";
+      res.status(500).json({ error: "dm_failed", message: msg });
+    }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "send_failed";
-    res.status(500).json({ error: "dm_failed", message: msg });
+    if (res.headersSent) return;
+    console.error("[edge/ping-invite-pack]", e);
+    const msg = e instanceof Error ? e.message : "invite_pack_failed";
+    res.status(500).json({ error: "invite_pack_failed", message: msg });
   }
 }

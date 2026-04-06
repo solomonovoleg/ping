@@ -36,6 +36,8 @@ async function countUserReactions(userId: string): Promise<number> {
 
 /**
  * Проверка пресет-задания по данным платформы (подписка, реакция, комментарий к посту кампании).
+ * Посты / приглашения / реакции / профиль — запросы к нашей БД в момент «Забрать награду» (источник истины).
+ * Тип `honor` сюда не должен попадать: маршрут отсекает раньше.
  */
 export async function verifyPresetOnPlatform(opts: {
   userId: string;
@@ -45,7 +47,9 @@ export async function verifyPresetOnPlatform(opts: {
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
   const { userId, edgeId, creatorPlatformUserId, verify } = opts;
 
-  if (verify.type === "honor") return { ok: true };
+  if (verify.type === "honor") {
+    return { ok: false, reason: "honor_task_disabled" };
+  }
 
   if (verify.type === "follow_creator") {
     const creator = creatorPlatformUserId?.trim() ?? "";
@@ -137,5 +141,5 @@ export async function verifyPresetOnPlatform(opts: {
     return { ok: true };
   }
 
-  return { ok: true };
+  return { ok: false, reason: "platform_verify_unhandled" };
 }

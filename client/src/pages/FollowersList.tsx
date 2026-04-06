@@ -1,6 +1,6 @@
 /**
  * Список подписчиков или подписок пользователя.
- * Маршрут: /profile/:id/followers | /profile/:id/following
+ * Маршрут: /u/:id/followers | /u/:id/following
  */
 import { useState } from "react";
 import { ChevronLeft, Search, UserPlus, UserMinus, Check, Users } from "lucide-react";
@@ -89,8 +89,8 @@ export default function FollowersList() {
         await followUser(targetId);
         toast({ title: "Вы подписались", duration: 2000 });
       }
-      void queryClient.invalidateQueries({ queryKey: ["followers"] });
-      void queryClient.invalidateQueries({ queryKey: ["following"] });
+      await queryClient.invalidateQueries({ queryKey: ["followers"] });
+      await queryClient.invalidateQueries({ queryKey: ["following"] });
       void queryClient.invalidateQueries({ queryKey: ["contacts"] });
       void queryClient.invalidateQueries({ queryKey: ["posts"] });
     } catch (e) {
@@ -112,8 +112,8 @@ export default function FollowersList() {
     try {
       await removeMyFollower(followerId);
       toast({ title: "Подписчик убран", duration: 2000 });
-      void queryClient.invalidateQueries({ queryKey: ["followers"] });
-      void queryClient.invalidateQueries({ queryKey: ["following"] });
+      await queryClient.invalidateQueries({ queryKey: ["followers"] });
+      await queryClient.invalidateQueries({ queryKey: ["following"] });
       void queryClient.invalidateQueries({ queryKey: ["posts"] });
       void queryClient.invalidateQueries({ queryKey: ["profile"] });
     } catch (e) {
@@ -124,7 +124,7 @@ export default function FollowersList() {
   };
 
   const title = mode === "followers" ? "Подписчики" : "Подписки";
-  const backPath = isMe ? "/profile/me" : (id ? `/profile/${encodeURIComponent(id)}` : "/posts");
+  const backPath = isMe ? "/u/me" : (id ? `/u/${encodeURIComponent(id)}` : "/posts");
   const emptyDescription = searchQuery
     ? "Измените поиск"
     : mode === "followers"
@@ -133,7 +133,7 @@ export default function FollowersList() {
 
   return (
     <div className="flex h-full w-full max-w-full min-w-0 overflow-x-hidden justify-center bg-background">
-      <div className="w-full h-full max-w-[480px] min-w-0 flex flex-col bg-background relative shadow-2xl overflow-hidden">
+      <div className="w-full h-full uix-responsive-max-w min-w-0 flex flex-col bg-background relative shadow-2xl overflow-hidden">
         <div className="uix-content-x py-4 glass z-10 sticky top-0 relative flex items-center justify-between">
           <TapScaleButton
             type="button"
@@ -245,6 +245,7 @@ function FollowerRow({
           seed={user.id}
           size={48}
           className="w-12 h-12 rounded-full flex-shrink-0"
+          pointerEventsNone
         />
         <div className="flex flex-col min-w-0">
           <span className="font-semibold text-[15px] truncate">{displayName}</span>
@@ -254,14 +255,15 @@ function FollowerRow({
       {!isMe && currentUserId ? (
         <div className="flex flex-shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center">
           {showRemoveFollower ? (
-            <button
+            <TapScaleButton
               type="button"
+              subtle
               onClick={(e) => {
                 e.stopPropagation();
                 onRemoveFollower(user.id, displayName);
               }}
               disabled={removeLoading}
-              className="px-3 py-1.5 rounded-full text-[12px] font-medium transition-all active:scale-95 flex items-center gap-1 border border-destructive/40 text-destructive hover:bg-destructive/10 min-h-[var(--uix-touch-min)]"
+              className="px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors flex items-center gap-1 border border-destructive/40 text-destructive hover:bg-destructive/10 min-h-[var(--uix-touch-min)]"
               aria-label={`Убрать ${displayName} из подписчиков`}
             >
               {removeLoading ? (
@@ -272,17 +274,18 @@ function FollowerRow({
                   <span>Убрать</span>
                 </>
               )}
-            </button>
+            </TapScaleButton>
           ) : null}
-          <button
+          <TapScaleButton
             type="button"
+            subtle
             onClick={(e) => {
               e.stopPropagation();
               onToggleFollow(user.id, iFollowThem);
             }}
             disabled={followLoading}
             className={cn(
-              "px-4 py-1.5 rounded-full text-[13px] font-medium transition-all active:scale-95 flex items-center gap-1.5 min-h-[var(--uix-touch-min)]",
+              "px-4 py-1.5 rounded-full text-[13px] font-medium transition-colors flex items-center gap-1.5 min-h-[var(--uix-touch-min)]",
               iFollowThem
                 ? "bg-secondary text-foreground hover:bg-secondary/80"
                 : "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -300,7 +303,7 @@ function FollowerRow({
                 <span>Подписаться</span>
               </>
             )}
-          </button>
+          </TapScaleButton>
         </div>
       ) : null}
     </TapScaleDiv>

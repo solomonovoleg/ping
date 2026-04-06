@@ -1,6 +1,13 @@
 /** Синхронно с `EDGE/companion/campaign-ui-config.ts` и ответом campaign-config. */
 
-export type CompanionSurfaceId = "character" | "info" | "leaderboard" | "results" | "prizes";
+export type CompanionSurfaceId =
+  | "tasks"
+  | "character"
+  | "info"
+  | "leaderboard"
+  | "leaderboardSecondary"
+  | "results"
+  | "prizes";
 
 export type CompanionInfoBlock =
   | { type: "paragraph"; text: string }
@@ -25,6 +32,11 @@ export type CompanionCharacterConfig = {
 
 export type CompanionUiPayload = {
   surfaceOrder: CompanionSurfaceId[];
+  /**
+   * Непустой массив — только эти экраны и в этом порядке (вкл/выкл из админки).
+   * Иначе: прежний режим, `surfaceOrder` переупорядочивает, остальные id дописываются на EDGE.
+   */
+  onlySurfaces?: CompanionSurfaceId[] | null;
   infoArticle: CompanionInfoArticle | null;
   results: CompanionResultsConfig | null;
   /** PNG персонажа и имя для людей — с Борда или админки. */

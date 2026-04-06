@@ -177,6 +177,19 @@ callActiveRef.current = ["calling", "ringing", "connecting", "in-call"].includes
 
 ---
 
+## Recovery pipeline (production)
+
+Для деградации связи в активном звонке используем ступени:
+
+1. `ICE restart` (`createOffer({ iceRestart: true })` / `call.resume-request`).
+2. Повторная renegotiation в рамках текущей сессии (без полного redial).
+3. Для видео: **audio-only fallback** при persistent `reconnecting` timeout.
+4. Только после этого — `failed` и завершение звонка.
+
+Почему это важно: на LTE/VPN плохие сети часто не выдерживают видео, но аудио продолжается стабильно; авто-переход в audio-only заметно снижает drop rate.
+
+---
+
 ## Связанные документы
 
 - `docs/CALLS_MODULE_AUDIT.md` — прежний аудит модуля звонков.

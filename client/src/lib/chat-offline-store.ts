@@ -16,6 +16,7 @@ const CHAT_DETAILS_STORE = "chat_details";
 const CHAT_MESSAGES_STORE = "chat_messages";
 
 const MAX_MESSAGES_PER_BUCKET = 140;
+const MAX_CHAT_MESSAGE_BUCKETS = 24;
 
 type ChatListScope = "all" | "hidden";
 
@@ -88,6 +89,21 @@ function normalizeMessages(messages: ApiMessage[]): ApiMessage[] {
     .slice(-MAX_MESSAGES_PER_BUCKET);
 }
 
+async function pruneMessageBuckets(db: IDBDatabase): Promise<void> {
+  const readTx = db.transaction(CHAT_MESSAGES_STORE, "readonly");
+  const all = await idbReq(readTx.objectStore(CHAT_MESSAGES_STORE).getAll());
+  if (!Array.isArray(all)) return;
+  const rows = all as ChatMessagesRow[];
+  if (rows.length <= MAX_CHAT_MESSAGE_BUCKETS) return;
+  const toDelete = rows
+    .sort((a, b) => a.updatedAtMs - b.updatedAtMs)
+    .slice(0, Math.max(0, rows.length - MAX_CHAT_MESSAGE_BUCKETS));
+  for (const row of toDelete) {
+    const tx = db.transaction(CHAT_MESSAGES_STORE, "readwrite");
+    await idbReq(tx.objectStore(CHAT_MESSAGES_STORE).delete(row.key));
+  }
+}
+
 export async function saveOfflineChatList(scope: ChatListScope, chats: ApiChat[]): Promise<void> {
   const db = await openDb();
   if (!db) return;
@@ -158,6 +174,7 @@ export async function saveOfflineMessages(
   };
   const tx = db.transaction(CHAT_MESSAGES_STORE, "readwrite");
   await idbReq(tx.objectStore(CHAT_MESSAGES_STORE).put(row));
+  await pruneMessageBuckets(db);
 }
 
 export async function getOfflineMessages(
@@ -187,4 +204,25 @@ export async function getOfflineChatSnapshot(
     currentFolderId: details.currentFolderId,
     messages,
   };
+}
+
+/** Полная очистка локального кеша чатов (выход из аккаунта). */
+export async function clearAllChatOfflineStores(): Promise<boolean> {
+  const db = await openDb();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(
+        [CHAT_LISTS_STORE, CHAT_DETAILS_STORE, CHAT_MESSAGES_STORE],
+        "readwrite",
+      );
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.objectStore(CHAT_LISTS_STORE).clear();
+      tx.objectStore(CHAT_DETAILS_STORE).clear();
+      tx.objectStore(CHAT_MESSAGES_STORE).clear();
+    } catch {
+      resolve(false);
+    }
+  });
 }

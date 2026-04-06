@@ -1,16 +1,21 @@
 import type { UseMutationResult } from "@tanstack/react-query";
+import type { PatchPinnedPostResult } from "@/lib/profile-pinned-post";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { buildReelsPostPath } from "@/lib/profile-route";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bookmark,
   Copy,
   Edit3,
   Eye,
+  Heart,
   Link2,
+  FolderPlus,
   MessageSquare,
   MoreHorizontal,
   PenSquare,
+  PinOff,
   Play,
   Pin,
   Plus,
@@ -18,25 +23,33 @@ import {
   SmilePlus,
   Tag,
   Trash2,
+  Flag,
 } from "lucide-react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { cn } from "@/lib/utils";
-import type { FeedPost } from "@/lib/posts";
-import { formatPostTime } from "@/lib/posts";
-import { fetchSavedPosts, sharePostToUser } from "@/lib/posts";
+import type { EdgeDisplayAudience, FeedPost } from "@/lib/posts";
+import { PostLastCommentTeaser, pickNewestCommentPreview } from "@/features/comments/post-comments/PostLastCommentTeaser";
+import { fetchSavedPosts, formatPostTime, sharePostToUser, updatePost } from "@/lib/posts";
+import { edgeCreatorDestructiveToast } from "@/lib/edge-creator";
 import { useAuth } from "@/contexts/AuthContext";
 import { DURATION_NORMAL_S, EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
+import { DOUBLE_TAP_LIKE_EMOJI } from "@/lib/double-tap-like-reaction";
+import { postHasUploadedVideo } from "@/lib/feed-video-post";
 import { buildProfilePostPath } from "@/lib/profile-route";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { PostMedia } from "@/components/PostMedia";
+import { FeedDoubleTapImageLayer } from "@/lib/reels-video";
 import { PostExternalVideoEmbed } from "@/components/PostExternalVideoEmbed";
 import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
 import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
+import { EdgePostAudienceSubmenu } from "@/features/edge-companion/components/EdgePostAudienceSubmenu";
 import { buildEdgeCompanionOpenHref } from "@/features/edge-companion/edge-companion-navigation";
 import { extractFirstExternalVideoUrl, isExternalVideoOnlyCaption } from "@/lib/post-external-video";
 import { parseExternalVideoUrl } from "@/lib/external-video";
 import { ListEmptyState, ErrorWithRetry } from "@/components/ui/empty";
-import { LoadingProgress } from "@/components/ui/loading-progress";
+import { PostsFeedSkeleton } from "@/features/posts/posts-feed-skeleton/PostsFeedSkeleton";
+import { ProfilePostsAuthorPendingSkeleton, ProfilePostsGridSkeleton } from "./ProfilePostsTabSkeleton";
+import { MotionBottomSheetPanel, MotionBottomSheetScrollArea } from "@/components/ui/motion-bottom-sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,34 +73,44 @@ const tToast = userProfileRu.toast;
 
 type TabKey = "posts" | "saved" | "tagged";
 
-function profilePostHref(isMe: boolean, normalizedRouteId: string, postId: string) {
-  return isMe
-    ? `/profile/me/post/${postId}`
-    : `/profile/${encodeURIComponent(normalizedRouteId)}/post/${postId}`;
+function profilePostHref(post: FeedPost, wallIsMe: boolean) {
+  return buildProfilePostPath({
+    postId: post.id,
+    linkCode: post.linkCode,
+    isMe: wallIsMe,
+    publicId: post.author?.publicId,
+    userId: post.authorId,
+    fallbackPath: "/posts",
+  });
 }
 
-function profilePostPublicUrl(isMe: boolean, normalizedRouteId: string, postId: string) {
+function profilePostPublicUrl(post: FeedPost, wallIsMe: boolean) {
   const base = typeof window !== "undefined" ? window.location.origin : "";
-  const seg = isMe ? "me" : encodeURIComponent(normalizedRouteId);
-  return `${base}/profile/${seg}/post/${postId}`;
+  return `${base}${profilePostHref(post, wallIsMe)}`;
 }
 
 /** Публичная ссылка на пост по данным автора (для «Сохранено» и чужих постов). */
 function postPublicUrl(post: FeedPost, viewerId: string | undefined) {
   const base = typeof window !== "undefined" ? window.location.origin : "";
-  const seg =
-    viewerId && post.authorId === viewerId
-      ? "me"
-      : post.author?.publicId != null
-        ? String(post.author.publicId)
-        : post.authorId;
-  return `${base}/profile/${encodeURIComponent(seg)}/post/${post.id}`;
+  return `${base}${buildProfilePostPath({
+    postId: post.id,
+    linkCode: post.linkCode,
+    isMe: viewerId != null && post.authorId === viewerId,
+    publicId: post.author?.publicId,
+    userId: post.authorId,
+    fallbackPath: "/posts",
+  })}`;
 }
 
 function postDetailPath(post: FeedPost, viewerId: string | undefined) {
-  if (viewerId && post.authorId === viewerId) return `/profile/me/post/${post.id}`;
-  const token = post.author?.publicId != null ? String(post.author.publicId) : post.authorId;
-  return `/profile/${encodeURIComponent(token)}/post/${post.id}`;
+  return buildProfilePostPath({
+    postId: post.id,
+    linkCode: post.linkCode,
+    isMe: viewerId != null && post.authorId === viewerId,
+    publicId: post.author?.publicId,
+    userId: post.authorId,
+    fallbackPath: "/posts",
+  });
 }
 
 export function UserProfilePostsContent({
@@ -113,6 +136,9 @@ export function UserProfilePostsContent({
   setShowReactionPicker,
   setActiveCommentPostId,
   onOpenPinPost,
+  pinnedPostId = null,
+  pinProfilePostMutation,
+  onReportForeignPost,
 }: {
   activeTab: TabKey;
   postViewMode: "list" | "grid";
@@ -136,6 +162,10 @@ export function UserProfilePostsContent({
   setShowReactionPicker: (id: string | null) => void;
   setActiveCommentPostId: (id: string | null) => void;
   onOpenPinPost?: (post: FeedPost) => void;
+  pinnedPostId?: string | null;
+  pinProfilePostMutation: UseMutationResult<PatchPinnedPostResult, Error, string | null, unknown>;
+  /** Чужая стена: жалоба на пост (store-moderation block-01). */
+  onReportForeignPost?: (postId: string) => void;
 }) {
   const { th } = usePulseProfileTheme();
   const { toast } = useToast();
@@ -144,6 +174,23 @@ export function UserProfilePostsContent({
   const prefersReducedMotion = usePrefersReducedMotion();
   const [savedOverride, setSavedOverride] = useState<Record<string, boolean>>({});
   const [sharePostId, setSharePostId] = useState<string | null>(null);
+  const [doubleTapHeartPostId, setDoubleTapHeartPostId] = useState<string | null>(null);
+  const doubleTapHeartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (doubleTapHeartTimerRef.current) clearTimeout(doubleTapHeartTimerRef.current);
+    };
+  }, []);
+
+  const triggerDoubleTapHeart = useCallback((postId: string) => {
+    if (doubleTapHeartTimerRef.current) clearTimeout(doubleTapHeartTimerRef.current);
+    setDoubleTapHeartPostId(postId);
+    doubleTapHeartTimerRef.current = setTimeout(() => {
+      setDoubleTapHeartPostId((cur) => (cur === postId ? null : cur));
+      doubleTapHeartTimerRef.current = null;
+    }, 460);
+  }, []);
 
   const showSavedTab = activeTab === "saved";
   const {
@@ -157,6 +204,13 @@ export function UserProfilePostsContent({
     queryFn: () => fetchSavedPosts(50),
     enabled: isMe && showSavedTab,
   });
+
+  const isSavedTabMe = showSavedTab && isMe;
+  const displayPosts = isSavedTabMe ? savedPosts : profilePosts;
+  const displayFetching = isSavedTabMe ? savedFetching : postsFetching;
+  const displayError = isSavedTabMe ? savedError : postsError;
+  const displayErrorDetail = isSavedTabMe ? savedErrorDetail : postsErrorDetail;
+  const refetchDisplay = isSavedTabMe ? () => void refetchSaved() : () => void refetchPosts();
 
   const { data: contactsForShare = [] } = useQuery<ContactUser[]>({
     queryKey: ["contacts", "list"],
@@ -176,6 +230,34 @@ export function UserProfilePostsContent({
       toast({ title: e instanceof Error ? e.message : "Не удалось отправить", variant: "destructive" }),
   });
 
+  const edgeAudienceMutation = useMutation({
+    mutationFn: ({ postId, edgeDisplayAudience }: { postId: string; edgeDisplayAudience: EdgeDisplayAudience }) =>
+      updatePost(postId, { edgeDisplayAudience }),
+    onMutate: async ({ postId, edgeDisplayAudience }) => {
+      if (!isMe || !authorId) return {};
+      await queryClient.cancelQueries({ queryKey: ["posts", "author", authorId] });
+      const previous = queryClient.getQueryData<FeedPost[]>(["posts", "author", authorId]);
+      if (previous) {
+        queryClient.setQueryData(
+          ["posts", "author", authorId],
+          previous.map((p) => (p.id === postId ? { ...p, edgeDisplayAudience } : p)),
+        );
+      }
+      return { previous };
+    },
+    onSuccess: () => {
+      toast({ title: "Кому виден EDGE обновлено" });
+      void queryClient.invalidateQueries({ queryKey: ["posts"] });
+    },
+    onError: (e, _vars, ctx) => {
+      if (isMe && authorId && ctx?.previous) {
+        queryClient.setQueryData(["posts", "author", authorId], ctx.previous);
+      }
+      const t = edgeCreatorDestructiveToast(e);
+      toast({ title: t.title, description: t.description, variant: "destructive" });
+    },
+  });
+
   const isPostSaved = useCallback(
     (post: FeedPost) => {
       if (isMe) return post.isSaved === true;
@@ -188,7 +270,7 @@ export function UserProfilePostsContent({
 
   const copyPostLinkForPost = useCallback(
     (post: FeedPost) => {
-      const url = showSavedTab ? postPublicUrl(post, user?.id) : profilePostPublicUrl(isMe, normalizedRouteId, post.id);
+      const url = showSavedTab ? postPublicUrl(post, user?.id) : profilePostPublicUrl(post, isMe);
       if (!navigator.clipboard?.writeText) {
         toast({ title: tToast.copyUnavailable, variant: "destructive" });
         return;
@@ -232,15 +314,21 @@ export function UserProfilePostsContent({
           transition={{ duration: DURATION_NORMAL_S * 0.85, ease: EASING_OUT_BEZIER }}
           onClick={() => !shareToUserMutation.isPending && setSharePostId(null)}
         >
-          <motion.div
-            className="mx-auto flex max-h-[min(72vh,640px)] w-full max-w-[480px] flex-col overflow-hidden rounded-t-[24px] border border-border/60 bg-background shadow-2xl"
+          <MotionBottomSheetPanel
+            className="flex max-h-[min(72vh,640px)] w-full min-h-0 flex-col overflow-hidden rounded-t-[24px] border border-border/60 bg-background shadow-2xl uix-responsive-max-w"
             initial={prefersReducedMotion ? false : { y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ duration: DURATION_NORMAL_S, ease: EASING_OUT_BEZIER }}
             onClick={(e) => e.stopPropagation()}
+            disableSwipeDismiss={prefersReducedMotion}
+            onDismiss={() => !shareToUserMutation.isPending && setSharePostId(null)}
+            dragHandle={
+              <div className="flex w-full shrink-0 justify-center pt-3 pb-2" aria-hidden>
+                <div className="h-1 w-10 rounded-full bg-border" />
+              </div>
+            }
           >
-            <div className="mx-auto mb-2 mt-3 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
             <div className="flex items-center justify-between border-b border-border/40 px-4 pb-3 pt-1">
               <p className="text-base font-bold">Поделиться</p>
               <button
@@ -253,13 +341,14 @@ export function UserProfilePostsContent({
                 <span className="text-lg leading-none">×</span>
               </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(12px,calc(env(safe-area-inset-bottom,0px)+12px))]">
+            <MotionBottomSheetScrollArea className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 pb-[max(12px,calc(env(safe-area-inset-bottom,0px)+12px))]">
               {(() => {
                 const sp = shareTargetPost;
                 const shareUrl =
                   sp != null
                     ? `${window.location.origin}${buildProfilePostPath({
                         postId: sp.id,
+                        linkCode: sp.linkCode,
                         isMe: sp.authorId === user?.id,
                         publicId: sp.author?.publicId,
                         userId: sp.authorId,
@@ -356,6 +445,7 @@ export function UserProfilePostsContent({
                                   seed={c.id}
                                   size={40}
                                   className="h-10 w-10 rounded-xl"
+                                  pointerEventsNone
                                 />
                                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                                   {[c.displayName, c.surname].filter(Boolean).join(" ") || `ID ${c.publicId}`}
@@ -368,8 +458,8 @@ export function UserProfilePostsContent({
                   </div>
                 );
               })()}
-            </div>
-          </motion.div>
+            </MotionBottomSheetScrollArea>
+          </MotionBottomSheetPanel>
         </motion.div>
       ) : null}
     </AnimatePresence>
@@ -379,11 +469,7 @@ export function UserProfilePostsContent({
     return (
       <>
         <div className="px-2 py-6">
-          <ListEmptyState
-            icon={Tag}
-            title="Отметки"
-            description="Раздел в разработке — скоро здесь будут публикации, где вас отметили."
-          />
+          <ListEmptyState icon={Tag} title={u.taggedTitle} description={u.taggedDesc} />
         </div>
         {shareSheet}
       </>
@@ -399,23 +485,76 @@ export function UserProfilePostsContent({
       </>
     );
   }
+  if (activeTab === "posts" && !authorId && authorIdReady === false) {
+    return postViewMode === "grid" ? <ProfilePostsGridSkeleton /> : <ProfilePostsAuthorPendingSkeleton />;
+  }
+  if (displayError) {
+    return (
+      <ErrorWithRetry
+        title={isSavedTabMe ? u.savedLoadErrorTitle : u.loadErrorTitle}
+        description={displayErrorDetail instanceof Error ? displayErrorDetail.message : u.loadErrorDesc}
+        retryLabel={u.retry}
+        onRetry={refetchDisplay}
+        className="min-h-[200px]"
+      />
+    );
+  }
+  if (displayPosts.length === 0 && !displayFetching) {
+    if (isSavedTabMe) {
+      return (
+        <ListEmptyState
+          icon={Bookmark}
+          title={u.savedEmptyTitle}
+          description={u.savedDesc}
+          actionLabel="К ленте"
+          onAction={() => setLocation("/posts")}
+          secondaryActionLabel={u.refreshPosts}
+          onSecondaryAction={refetchDisplay}
+        />
+      );
+    }
+    return (
+      <ListEmptyState
+        icon={PenSquare}
+        title={u.emptyTitle}
+        description={isMe ? u.emptyDescMe : u.emptyDescOther}
+        actionLabel={isMe ? u.writePost : undefined}
+        onAction={isMe ? () => setLocation("/create-post") : undefined}
+        secondaryActionLabel={activeTab === "posts" ? u.refreshPosts : undefined}
+        onSecondaryAction={activeTab === "posts" ? () => void refetchPosts() : undefined}
+      />
+    );
+  }
+  if (displayFetching && displayPosts.length === 0) {
+    return activeTab === "posts" && postViewMode === "grid" ? (
+      <ProfilePostsGridSkeleton />
+    ) : (
+      <PostsFeedSkeleton count={3} />
+    );
+  }
   if (activeTab === "posts" && postViewMode === "grid") {
     return (
-      <div className="grid grid-cols-3 gap-0.5">
-        {profilePosts.map((post: FeedPost) => {
+      <div className="grid grid-cols-3 gap-px">
+        {displayPosts.map((post: FeedPost) => {
           const thumbUrl = firstPostMediaUrl(post);
           const video = thumbUrl && isVideoMediaUrl(thumbUrl);
-          const postHref = profilePostHref(isMe, normalizedRouteId, post.id);
+          const postHref = profilePostHref(post, isMe);
           return (
             <button
               key={post.id}
               type="button"
               onClick={() => setLocation(postHref)}
-              className="relative aspect-square overflow-hidden bg-black/25 min-h-[var(--uix-touch-min)]"
+              className="relative w-full aspect-square overflow-hidden bg-black/25"
               aria-label={u.openPost}
             >
               {thumbUrl ? (
-                <img src={thumbUrl} alt="" className="h-full w-full object-cover" />
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover [aspect-ratio:1/1]"
+                />
               ) : (
                 <div className="flex h-full items-center justify-center text-white/40">
                   <PenSquare className="w-6 h-6" />
@@ -434,60 +573,46 @@ export function UserProfilePostsContent({
       </div>
     );
   }
-  if (!authorId && authorIdReady === false) {
-    return (
-      <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
-        <div className="min-h-[160px]" />
-      </LoadingProgress>
-    );
-  }
-  if (postsError) {
-    return (
-      <ErrorWithRetry
-        title={u.loadErrorTitle}
-        description={postsErrorDetail?.message ?? u.loadErrorDesc}
-        retryLabel={u.retry}
-        onRetry={() => refetchPosts()}
-        className="min-h-[200px]"
-      />
-    );
-  }
-  if (profilePosts.length === 0 && !postsFetching) {
-    return (
-      <ListEmptyState
-        icon={PenSquare}
-        title={u.emptyTitle}
-        description={isMe ? u.emptyDescMe : u.emptyDescOther}
-        actionLabel={isMe ? u.writePost : undefined}
-        onAction={isMe ? () => setLocation("/create-post") : undefined}
-      />
-    );
-  }
-  if (postsFetching && profilePosts.length === 0) {
-    return (
-      <LoadingProgress loading minHeight="160px" className="min-h-[160px]">
-        <div className="min-h-[160px]" />
-      </LoadingProgress>
-    );
-  }
   return (
     <div className="flex w-full min-w-0 flex-col">
-      {profilePosts.map((post: FeedPost) => {
+      {displayPosts.map((post: FeedPost) => {
         const caption = post.text ?? "";
-        const primaryExternalVideoUrl = extractFirstExternalVideoUrl(caption);
+        const linkEmbedOn = post.linkEmbedEnabled !== false;
+        const primaryExternalVideoUrl = linkEmbedOn ? extractFirstExternalVideoUrl(caption) : null;
         const maskExternalEmbed = primaryExternalVideoUrl ? parseExternalVideoUrl(primaryExternalVideoUrl) : null;
-        const hasCaption = caption.trim().length > 0 && !isExternalVideoOnlyCaption(caption, primaryExternalVideoUrl);
+        const hasCaption =
+          caption.trim().length > 0 && !(linkEmbedOn && isExternalVideoOnlyCaption(caption, primaryExternalVideoUrl));
         const meta = pulseProfilePostMetaParts(post);
+        const viewerId = user?.id != null ? String(user.id) : "";
+        const postAuthorId = post.authorId != null ? String(post.authorId) : "";
+        const isPostMine = viewerId.length > 0 && postAuthorId === viewerId;
+        const cardDisplayName = isSavedTabMe
+          ? [post.author?.displayName, post.author?.surname].filter(Boolean).join(" ") ||
+            `ID ${post.author?.publicId ?? ""}`
+          : displayName;
+        const cardAvatarUrl = isSavedTabMe ? post.author?.avatarUrl ?? null : avatarUrl;
+        const cardAuthorSeed = isSavedTabMe ? post.authorId : (authorId ?? "");
         const sortedReactions = [...(post.reactions ?? [])].sort((a, b) => b.count - a.count);
         const topEmojis = sortedReactions.slice(0, 3);
         const extraTypes = Math.max(0, sortedReactions.length - 3);
         const reactionTotal = sortedReactions.reduce((s, r) => s + r.count, 0);
         const saved = isPostSaved(post);
         const sharesCount = post.sharesCount ?? 0;
-        const latestComments = Array.isArray(post.latestComments) ? post.latestComments : [];
-        const lastComment = [...latestComments].sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        )[0];
+        const lastComment = pickNewestCommentPreview(post.latestComments);
+        const postPrimaryMedia = firstPostMediaUrl(post);
+        const postHasVideo = postHasUploadedVideo(post);
+
+        const fireDoubleTapLikeOnPost = () => {
+          if (!user) return;
+          void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+          playLikeActionSound();
+          triggerDoubleTapHeart(post.id);
+          const mine = post.myReaction;
+          reactionMutation.mutate({
+            postId: post.id,
+            emoji: mine === DOUBLE_TAP_LIKE_EMOJI ? null : DOUBLE_TAP_LIKE_EMOJI,
+          });
+        };
 
         const menu = (
           <DropdownMenu>
@@ -506,19 +631,58 @@ export function UserProfilePostsContent({
                 <Copy className="h-4 w-4" />
                 {u.copyPostLink}
               </DropdownMenuItem>
-              {isMe ? (
+              {user && onReportForeignPost && !isPostMine ? (
+                <DropdownMenuItem
+                  className="min-h-[var(--uix-touch-min)]"
+                  onClick={() => onReportForeignPost(post.id)}
+                >
+                  <Flag className="h-4 w-4" />
+                  {u.reportPost}
+                </DropdownMenuItem>
+              ) : null}
+              {isPostMine ? (
                 <>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      const isPinned = pinnedPostId === post.id;
+                      pinProfilePostMutation.mutate(isPinned ? null : post.id);
+                    }}
+                    disabled={pinProfilePostMutation.isPending}
+                  >
+                    {pinnedPostId === post.id ? (
+                      <PinOff className="h-4 w-4" />
+                    ) : (
+                      <Pin className="h-4 w-4" />
+                    )}
+                    {pinnedPostId === post.id ? u.unpinFromProfile : u.pinToProfile}
+                  </DropdownMenuItem>
                   {onOpenPinPost ? (
                     <DropdownMenuItem
                       onClick={() => {
                         onOpenPinPost(post);
                       }}
                     >
-                      <Pin className="h-4 w-4" />
-                      В закреплённое
+                      <FolderPlus className="h-4 w-4" />
+                      {u.addToPinFolder}
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem onClick={() => setLocation(profilePostHref(isMe, normalizedRouteId, post.id))}>
+                  {post.edgeId ? (
+                    <EdgePostAudienceSubmenu
+                      current={post.edgeDisplayAudience}
+                      disabled={
+                        edgeAudienceMutation.isPending && edgeAudienceMutation.variables?.postId === post.id
+                      }
+                      onPick={(edgeDisplayAudience) => {
+                        void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) =>
+                          triggerLightHaptic(),
+                        );
+                        edgeAudienceMutation.mutate({ postId: post.id, edgeDisplayAudience });
+                      }}
+                    />
+                  ) : null}
+                  <DropdownMenuItem
+                    onClick={() => setLocation(`/create-post?edit=${encodeURIComponent(post.id)}`)}
+                  >
                     <Edit3 className="h-4 w-4" />
                     {u.editPost}
                   </DropdownMenuItem>
@@ -541,37 +705,37 @@ export function UserProfilePostsContent({
         return (
           <PulseProfileThemedPostCard
             key={post.id}
-            displayName={displayName}
-            avatarUrl={avatarUrl}
-            authorSeed={authorId ?? ""}
+            displayName={cardDisplayName}
+            avatarUrl={cardAvatarUrl}
+            authorSeed={cardAuthorSeed}
             showVerified
             metaKind={meta.kind}
             metaTime={meta.timeShort}
             headerRight={menu}
           >
-            {hasCaption || primaryExternalVideoUrl ? (
-              <div className="space-y-2 px-3 pb-2">
-                {hasCaption ? (
-                  <p
-                    className="whitespace-pre-wrap text-[15px] font-normal leading-snug tracking-[-0.01em]"
-                    style={{ color: th.text }}
-                  >
-                    <PostCaptionInlineParts
-                      text={caption}
-                      maskExternalEmbed={maskExternalEmbed}
-                      onHashtagClick={() => setLocation("/posts")}
-                      linkClassName="font-semibold text-primary underline decoration-primary/50 underline-offset-[3px] break-all"
-                      hashtagClassName="font-semibold text-primary hover:underline underline-offset-2"
-                    />
-                  </p>
-                ) : null}
-                {primaryExternalVideoUrl ? (
-                  <PostExternalVideoEmbed
-                    url={primaryExternalVideoUrl}
-                    className="overflow-hidden rounded-xl border border-border/40"
-                    autoplayInViewport
-                  />
-                ) : null}
+            {post.edgeId ? (
+              <div className="px-3 pb-2">
+                <EdgeCompanionFeedCard
+                  variant="feed"
+                  userId={user?.id ?? "guest"}
+                  edgeId={post.edgeId}
+                  onOpen={() => {
+                    if (!user?.id) {
+                      toast({
+                        title: "Войдите в аккаунт",
+                        description: "Чтобы участвовать в кампании EDGE",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    setLocation(
+                      buildEdgeCompanionOpenHref(
+                        post.edgeId!,
+                        isMe ? "/profile/me" : `/profile/${encodeURIComponent(normalizedRouteId)}`,
+                      ),
+                    );
+                  }}
+                />
               </div>
             ) : null}
 
@@ -603,31 +767,85 @@ export function UserProfilePostsContent({
                 mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
                 layout={post.mediaLayout ?? null}
                 edgeToEdge
+                feedEagerImages
+                feedVideoAutoplay
+                feedReelsInteraction={user ? { onDoubleTapFire: fireDoubleTapLikeOnPost } : null}
+                feedReelsDeferredOpen={
+                  user && postHasVideo
+                    ? () =>
+                        setLocation(
+                          buildReelsPostPath({
+                            postId: post.id,
+                            linkCode: post.linkCode,
+                            isMe: post.authorId === user?.id,
+                            publicId: post.author?.publicId,
+                            userId: post.authorId,
+                          }),
+                        )
+                    : undefined
+                }
               />
+              <AnimatePresence>
+                {doubleTapHeartPostId === post.id ? (
+                  <motion.div
+                    key={`profile-double-tap-heart-${post.id}`}
+                    initial={{ opacity: 0, scale: 0.72, y: 8 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 1.06, y: -6 }}
+                    transition={{ duration: prefersReducedMotion ? 0.12 : 0.22, ease: EASING_OUT_BEZIER }}
+                    className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+                    aria-hidden
+                  >
+                    <Heart className="h-16 w-16 fill-rose-500 text-rose-500/95 drop-shadow-[0_8px_24px_rgba(244,63,94,0.55)]" />
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
             </div>
-            {post.edgeId ? (
-              <div className="px-3 pb-2">
-                <EdgeCompanionFeedCard
-                  variant="feed"
-                  userId={user?.id ?? "guest"}
-                  edgeId={post.edgeId}
-                  onOpen={() => {
-                    if (!user?.id) {
-                      toast({
-                        title: "Войдите в аккаунт",
-                        description: "Чтобы участвовать в кампании EDGE",
-                        variant: "destructive",
-                      });
-                      return;
-                    }
-                    setLocation(
-                      buildEdgeCompanionOpenHref(
-                        post.edgeId!,
-                        isMe ? "/profile/me" : `/profile/${encodeURIComponent(normalizedRouteId)}`,
-                      ),
-                    );
-                  }}
-                />
+
+            {hasCaption || primaryExternalVideoUrl ? (
+              <div className="space-y-2 px-3 pb-2 pt-2">
+                {hasCaption ? (
+                  user ? (
+                    <FeedDoubleTapImageLayer
+                      className="min-w-0"
+                      onDoubleTap={fireDoubleTapLikeOnPost}
+                      pulseOnDoubleTap={false}
+                    >
+                      <p
+                        className="whitespace-pre-wrap text-[15px] font-normal leading-snug tracking-[-0.01em]"
+                        style={{ color: th.text }}
+                      >
+                        <PostCaptionInlineParts
+                          text={caption}
+                          maskExternalEmbed={maskExternalEmbed}
+                          onHashtagClick={() => setLocation("/posts")}
+                          linkClassName="font-semibold text-primary underline decoration-primary/50 underline-offset-[3px] break-all"
+                          hashtagClassName="font-semibold text-primary hover:underline underline-offset-2"
+                        />
+                      </p>
+                    </FeedDoubleTapImageLayer>
+                  ) : (
+                    <p
+                      className="whitespace-pre-wrap text-[15px] font-normal leading-snug tracking-[-0.01em]"
+                      style={{ color: th.text }}
+                    >
+                      <PostCaptionInlineParts
+                        text={caption}
+                        maskExternalEmbed={maskExternalEmbed}
+                        onHashtagClick={() => setLocation("/posts")}
+                        linkClassName="font-semibold text-primary underline decoration-primary/50 underline-offset-[3px] break-all"
+                        hashtagClassName="font-semibold text-primary hover:underline underline-offset-2"
+                      />
+                    </p>
+                  )
+                ) : null}
+                {primaryExternalVideoUrl ? (
+                  <PostExternalVideoEmbed
+                    url={primaryExternalVideoUrl}
+                    className="overflow-hidden rounded-xl border border-border/40"
+                    autoplayInViewport
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -773,28 +991,16 @@ export function UserProfilePostsContent({
             </div>
 
             {lastComment ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setActiveCommentPostId(post.id);
-                }}
-                className="mx-3 mb-2 mt-0 max-w-[calc(100%-1.5rem)] rounded-xl border px-3 py-2.5 text-left transition-opacity active:opacity-80"
-                style={{ borderColor: th.border, background: th.surface }}
-                aria-label={`${u.lastCommentPreview}: ${lastComment.user}`}
-              >
-                <span className="text-[11px] font-medium opacity-70" style={{ color: th.text }}>
-                  {lastComment.user} · {formatPostTime(lastComment.createdAt)}
-                </span>
-                <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug" style={{ color: th.text }}>
-                  {lastComment.text}
-                </p>
-                {post.commentsCount > 1 ? (
-                  <span className="mt-1 inline-block text-[11px] font-medium text-primary">
-                    {u.allCommentsCount(post.commentsCount)}
-                  </span>
-                ) : null}
-              </button>
+              <div className="mx-3 mb-2 mt-0 max-w-[calc(100%-1.5rem)]">
+                <PostLastCommentTeaser
+                  comment={lastComment}
+                  commentsCount={post.commentsCount}
+                  onOpen={() => setActiveCommentPostId(post.id)}
+                  ariaLabel={u.commentTeaserAria(lastComment.user, post.commentsCount > 1)}
+                  style={{ color: th.text }}
+                  moreHint={u.commentTeaserMoreHint}
+                />
+              </div>
             ) : null}
           </PulseProfileThemedPostCard>
         );

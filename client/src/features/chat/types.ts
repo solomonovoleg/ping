@@ -2,6 +2,8 @@
  * Типы для фичи «Чат». Макс. 300 строк на файл.
  */
 
+import type { ClientOutgoingSendStatus } from "@shared/message-delivery-status";
+
 export type ApiChatMember = {
   id: string;
   publicId?: number;
@@ -14,14 +16,19 @@ export type ApiChatMember = {
 export type ApiChat = {
   id: string;
   type: string;
+  /** Личка 1:1: мультиязычный режим (входящие каждого на своём языке). */
+  dmMultilingualEnabled?: boolean;
   name: string | null;
   avatarUrl?: string | null;
+  shortCode?: string | null;
+  /** Код ссылки /invite/{code} для группы; выдаётся участникам чата. */
+  inviteCode?: string | null;
   createdAt: string;
   /** Закреплён в списке (сервер). */
   pinnedAt?: string | null;
   /** Полка: general | friends | work | promo | invitations */
   listSection?: string;
-  lastMessage?: { type: string; content: string; createdAt: string } | null;
+  lastMessage?: { type: string; content: string; createdAt: string; senderId?: string | null } | null;
   /** Метка прочитанности текущего пользователя (для скролла к первому непрочитанному). */
   myLastReadAt?: string | null;
   hasUnread?: boolean;
@@ -76,11 +83,17 @@ export type ApiMessage = {
   /** Эмодзи реакции текущего пользователя (одна на сообщение). */
   myReaction?: string | null;
   createdAt: string;
-  sendStatus?: "sending" | "sent" | "failed";
+  sendStatus?: ClientOutgoingSendStatus;
   /** Server-provided translation (when per-chat translation is enabled). */
   translatedText?: string | null;
+  /** Язык, в который переведён translatedText (совпадает с prefs при доставке по WS). */
+  translateTargetLang?: string | null;
   /** Detected source language of the translation. */
   detectedLang?: string | null;
+  /** Для video_note: URL постера (статичный кадр до загрузки видео). */
+  videoPosterUrl?: string | null;
+  /** Только клиент: прогресс загрузки исходящего вложения (0–100), убирается после отправки. */
+  localUploadProgress?: number | null;
 };
 
 export type MessageListItem =

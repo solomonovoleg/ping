@@ -1,5 +1,6 @@
 import type { MutableRefObject } from "react";
 import { getCallToken, openCallRealtimeWebSocket, CallTokenUnauthorizedError } from "@/lib/calls";
+import { toast } from "@/hooks/use-toast";
 import {
   emitChatListUpdate,
   emitChatRead,
@@ -8,6 +9,9 @@ import {
   emitMessageEdited,
   emitMessageReaction,
   emitChatVibeUpdate,
+  emitChatVibeTensionPulse,
+  emitComposerTransferPulse,
+  emitRealtimeSocketConnected,
 } from "@/features/chat/realtime-events";
 
 export type ChatMessagePayload = {
@@ -19,8 +23,10 @@ export type ChatMessagePayload = {
   createdAt: string;
   folderId?: string | null;
   transcript?: string | null;
+  videoPosterUrl?: string | null;
   translatedText?: string;
   detectedLang?: string;
+  translateTargetLang?: string;
 };
 
 type RawIncomingMessage = Record<string, unknown> & {
@@ -31,11 +37,15 @@ type RawIncomingMessage = Record<string, unknown> & {
   fromDisplayName?: string;
 };
 
+export type RealtimeLinkState = "idle" | "connecting" | "open" | "closed";
+
 type TransportParams = {
   wsRef: MutableRefObject<WebSocket | null>;
   callMessageHandlerRef: MutableRefObject<(raw: Record<string, unknown>) => void>;
   onSocketDisconnectedRef: MutableRefObject<() => void>;
   onSocketConnectedRef: MutableRefObject<() => void>;
+  /** UI: индикатор подключения / reconnect без лишних подписок на ws */
+  linkStateNotifierRef: MutableRefObject<(state: RealtimeLinkState) => void>;
 };
 
 type SendJsonOptions = {
@@ -53,6 +63,8 @@ const RECONNECT_JITTER_RATIO = 0.3;
 const RECONNECT_WINDOW_MS = 60_000;
 const RECONNECT_WINDOW_LIMIT = 12;
 const RECONNECT_CIRCUIT_BREAKER_MS = 20_000;
+/** Если WS завис в CONNECTING после возврата на вкладку — сброс и новый коннект */
+const STUCK_CONNECTING_MS = 14_000;
 
 type QueuedOutgoingItem = {
   payload: string;
@@ -60,22 +72,37 @@ type QueuedOutgoingItem = {
   queuedAt: number;
 };
 
+let realtimeRefetchAuthToastShown = false;
+
 export class RealtimeSocketTransport {
   private readonly wsRef: MutableRefObject<WebSocket | null>;
   private readonly callMessageHandlerRef: MutableRefObject<(raw: Record<string, unknown>) => void>;
   private readonly onSocketDisconnectedRef: MutableRefObject<() => void>;
   private readonly onSocketConnectedRef: MutableRefObject<() => void>;
+  private readonly linkStateNotifierRef: MutableRefObject<(state: RealtimeLinkState) => void>;
+  private connectingStartedAt = 0;
   private readonly chatListenersRef = new Map<string, Set<(msg: ChatMessagePayload) => void>>();
   private readonly messageDeletedListenersRef = new Map<string, Set<(messageId: string) => void>>();
-  private readonly typingListenersRef = new Map<string, Set<(userId: string, displayName: string | null) => void>>();
+  private readonly typingListenersRef = new Map<
+    string,
+    Set<(userId: string, displayName: string | null, active: boolean) => void>
+  >();
   private readonly voiceRecordingListenersRef = new Map<
     string,
     Set<(userId: string, displayName: string | null, recording: boolean) => void>
   >();
+  private readonly composerPulseListenersRef = new Map<
+    string,
+    Set<(userId: string, displayName: string | null, at: number) => void>
+  >();
+  /** chatId с открытой страницей диалога — сервер разрешает mark-chat-read только для них */
+  private readonly threadOpenChatIdsRef = new Set<string>();
   private scheduleReconnect: (() => void) | null = null;
   private outgoingQueue: QueuedOutgoingItem[] = [];
   /** Один одновременный коннект: иначе два параллельных `ensureOpenWs` (звонок + фон) открывают два WS → лишняя нагрузка на сервер. */
   private wsOpenInflight: Promise<WebSocket> | null = null;
+  /** Инкремент при принудительном сбросе (зависший CONNECTING) — старый `openWsWithNewToken` не должен затирать ref. */
+  private ensureOpenJobId = 0;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimestamps: number[] = [];
@@ -86,16 +113,43 @@ export class RealtimeSocketTransport {
     this.callMessageHandlerRef = params.callMessageHandlerRef;
     this.onSocketDisconnectedRef = params.onSocketDisconnectedRef;
     this.onSocketConnectedRef = params.onSocketConnectedRef;
+    this.linkStateNotifierRef = params.linkStateNotifierRef;
+  }
+
+  private notifyLinkState(state: RealtimeLinkState): void {
+    if (state === "connecting") {
+      this.connectingStartedAt = Date.now();
+    } else {
+      this.connectingStartedAt = 0;
+    }
+    try {
+      this.linkStateNotifierRef.current(state);
+    } catch {
+      /* ignore */
+    }
   }
 
   closeWs = (): void => {
-    this.wsRef.current?.close();
+    this.notifyLinkState("closed");
+    const prev = this.wsRef.current;
     this.wsRef.current = null;
+    if (prev) {
+      try {
+        prev.close();
+      } catch {
+        /* ignore */
+      }
+    }
     this.outgoingQueue = [];
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  };
+
+  /** Сброс при выходе из аккаунта — иначе id чата «висит» до следующего входа */
+  clearOpenThreadChatIds = (): void => {
+    this.threadOpenChatIdsRef.clear();
   };
 
   sendJson = (data: Record<string, unknown>, opts?: SendJsonOptions): boolean => {
@@ -113,6 +167,24 @@ export class RealtimeSocketTransport {
     if (!queueOnDisconnect) return false;
     this.enqueueOutgoing(payload, opts?.dedupeKey);
     this.scheduleReconnect?.();
+    /**
+     * Дожимаем /calls только по «крупным» событиям звонка. Для call.ice-candidate нельзя —
+     * при обрыве WS десятки кандидатов вызывали бы лишние параллельные попытки открытия.
+     */
+    if (
+      typeof data.type === "string" &&
+      (data.type === "call.invite" ||
+        data.type === "call.accept" ||
+        data.type === "call.offer" ||
+        data.type === "call.answer" ||
+        data.type === "call.cancel" ||
+        data.type === "call.hangup" ||
+        data.type === "call.reject" ||
+        data.type === "call.resume-check" ||
+        data.type === "call.resume-request")
+    ) {
+      void this.ensureOpenWs().catch(() => {});
+    }
     return false;
   };
 
@@ -165,6 +237,36 @@ export class RealtimeSocketTransport {
     }
   };
 
+  private sendSubscribeChatThreadPacket = (ws: WebSocket, chatId: string): void => {
+    if (ws.readyState !== 1) return;
+    try {
+      ws.send(JSON.stringify({ type: "subscribe-chat-thread", chatId }));
+    } catch (e) {
+      console.error("[realtime] send subscribe-chat-thread failed", chatId, e);
+    }
+  };
+
+  /** Страница чата открыта — сервер вносит сокет в множество для mark-chat-read */
+  sendSubscribeChatThread = (chatId: string): void => {
+    if (!chatId) return;
+    this.threadOpenChatIdsRef.add(chatId);
+    const ws = this.wsRef.current;
+    if (ws) this.sendSubscribeChatThreadPacket(ws, chatId);
+    else {
+      this.sendJson(
+        { type: "subscribe-chat-thread", chatId },
+        { dedupeKey: `thread-open:${chatId}`, queueOnDisconnect: true },
+      );
+    }
+  };
+
+  /** Уход со страницы чата — сразу снимаем «диалог открыт» на сервере */
+  sendUnsubscribeChatThread = (chatId: string): void => {
+    if (!chatId) return;
+    this.threadOpenChatIdsRef.delete(chatId);
+    this.sendJson({ type: "unsubscribe-chat-thread", chatId }, { queueOnDisconnect: false });
+  };
+
   subscribeChat = (chatId: string, onMessage: (msg: ChatMessagePayload) => void): (() => void) => {
     let set = this.chatListenersRef.get(chatId);
     if (!set) {
@@ -199,12 +301,19 @@ export class RealtimeSocketTransport {
     };
   };
 
-  sendTyping = (chatId: string, displayName?: string | null): void => {
-    const ok = this.sendJson({ type: "typing", chatId, displayName: displayName ?? null }, { queueOnDisconnect: false });
+  /** `active: false` — собеседнику сразу убрать «печатает» (без ожидания TTL). */
+  sendTyping = (chatId: string, displayName?: string | null, active = true): void => {
+    const ok = this.sendJson(
+      { type: "typing", chatId, displayName: displayName ?? null, active },
+      { queueOnDisconnect: false },
+    );
     if (!ok) return;
   };
 
-  subscribeTyping = (chatId: string, onTyping: (userId: string, displayName: string | null) => void): (() => void) => {
+  subscribeTyping = (
+    chatId: string,
+    onTyping: (userId: string, displayName: string | null, active: boolean) => void,
+  ): (() => void) => {
     let set = this.typingListenersRef.get(chatId);
     if (!set) {
       set = new Set();
@@ -220,9 +329,21 @@ export class RealtimeSocketTransport {
   sendVoiceRecording = (chatId: string, displayName: string | null, recording: boolean): void => {
     const ok = this.sendJson(
       { type: "voice-recording", chatId, displayName, recording },
-      { queueOnDisconnect: false }
+      { queueOnDisconnect: recording === false },
     );
     if (!ok) return;
+  };
+
+  /**
+   * Курсор «прочитано до messageId»: сервер принимает только при subscribe-chat-thread (открыт экран диалога).
+   * Список чатов шлёт лишь subscribe-chat — без этого статусы не двигаются.
+   */
+  sendMarkChatRead = (chatId: string, messageId: string): void => {
+    if (!chatId || !messageId) return;
+    this.sendJson(
+      { type: "mark-chat-read", chatId, messageId },
+      { dedupeKey: `read:${chatId}:${messageId}`, queueOnDisconnect: true },
+    );
   };
 
   subscribeVoiceRecording = (
@@ -238,6 +359,30 @@ export class RealtimeSocketTransport {
     return () => {
       set!.delete(onRecording);
       if (set!.size === 0) this.voiceRecordingListenersRef.delete(chatId);
+    };
+  };
+
+  sendComposerPulse = (chatId: string, displayName?: string | null): void => {
+    const ok = this.sendJson(
+      { type: "composer-pulse", chatId, displayName: displayName ?? null },
+      { queueOnDisconnect: false },
+    );
+    if (!ok) return;
+  };
+
+  subscribeComposerPulse = (
+    chatId: string,
+    onPulse: (userId: string, displayName: string | null, at: number) => void,
+  ): (() => void) => {
+    let set = this.composerPulseListenersRef.get(chatId);
+    if (!set) {
+      set = new Set();
+      this.composerPulseListenersRef.set(chatId, set);
+    }
+    set.add(onPulse);
+    return () => {
+      set!.delete(onPulse);
+      if (set!.size === 0) this.composerPulseListenersRef.delete(chatId);
     };
   };
 
@@ -284,9 +429,9 @@ export class RealtimeSocketTransport {
           }
           return;
         }
-        if (raw.type === "chat-read" && raw.chatId && raw.lastReadAt) {
+        if (raw.type === "chat-read" && raw.chatId) {
           emitChatRead({
-            chatId: raw.chatId,
+            chatId: raw.chatId as string,
             readerId: typeof raw.readerId === "string" ? raw.readerId : undefined,
             lastReadAt: typeof raw.lastReadAt === "string" ? raw.lastReadAt : undefined,
           });
@@ -327,9 +472,32 @@ export class RealtimeSocketTransport {
           });
           return;
         }
+        if (raw.type === "chat-vibe-tension-pulse" && raw.chatId && typeof raw.senderId === "string") {
+          emitChatVibeTensionPulse({
+            chatId: raw.chatId as string,
+            senderId: raw.senderId,
+            at: typeof raw.at === "number" ? raw.at : Date.now(),
+          });
+          return;
+        }
         if (raw.type === "typing" && raw.chatId && typeof raw.userId === "string") {
           const set = this.typingListenersRef.get(raw.chatId as string);
-          if (set) set.forEach((cb) => cb(raw.userId as string, (raw.displayName as string) ?? null));
+          const active = raw.active !== false;
+          if (set) {
+            set.forEach((cb) =>
+              cb(raw.userId as string, (raw.displayName as string | null | undefined) ?? null, active),
+            );
+          }
+          return;
+        }
+        if (raw.type === "composer-pulse" && raw.chatId && typeof raw.userId === "string") {
+          const cid = raw.chatId as string;
+          const uid = raw.userId as string;
+          const dn = (raw.displayName as string | null | undefined) ?? null;
+          const at = typeof raw.at === "number" ? raw.at : Date.now();
+          const set = this.composerPulseListenersRef.get(cid);
+          if (set) set.forEach((cb) => cb(uid, dn, at));
+          emitComposerTransferPulse({ chatId: cid, userId: uid, displayName: dn, at });
           return;
         }
         if (raw.type === "voice-recording" && raw.chatId && typeof raw.userId === "string") {
@@ -345,6 +513,7 @@ export class RealtimeSocketTransport {
     ws.onclose = (event: CloseEvent) => {
       /** Не трогаем ref, если это уже другой сокет — иначе «хвост» старого WS обнуляет активный. */
       if (this.wsRef.current !== ws) return;
+      this.notifyLinkState("closed");
       this.wsRef.current = null;
       this.onSocketDisconnectedRef.current();
       const superseded =
@@ -362,6 +531,7 @@ export class RealtimeSocketTransport {
     };
     const sendAllChatSubscriptions = () => {
       Array.from(this.chatListenersRef.keys()).forEach((id) => this.sendSubscribeChat(ws, id));
+      Array.from(this.threadOpenChatIdsRef).forEach((chatId) => this.sendSubscribeChatThreadPacket(ws, chatId));
       this.flushOutgoingQueue();
     };
     ws.onopen = () => {
@@ -372,8 +542,10 @@ export class RealtimeSocketTransport {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
+      this.notifyLinkState("open");
       sendAllChatSubscriptions();
       this.onSocketConnectedRef.current();
+      emitRealtimeSocketConnected();
     };
   };
 
@@ -400,7 +572,7 @@ export class RealtimeSocketTransport {
     return Math.max(350, Math.round(withJitter));
   }
 
-  private openWsWithNewToken = async (): Promise<WebSocket> => {
+  private openWsWithNewToken = async (jobId?: number): Promise<WebSocket> => {
     const token = await getCallToken();
     const socket = openCallRealtimeWebSocket(token);
     const prev = this.wsRef.current;
@@ -417,6 +589,7 @@ export class RealtimeSocketTransport {
     this.attachWsHandlers(socket);
     await new Promise<void>((resolve, reject) => {
       if (socket.readyState === 1) {
+        this.notifyLinkState("open");
         resolve();
         return;
       }
@@ -454,29 +627,45 @@ export class RealtimeSocketTransport {
         done(new Error("Соединение закрыто"));
       };
     });
+    if (jobId != null && this.ensureOpenJobId !== jobId) {
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+      throw new Error("aborted");
+    }
     return socket;
   };
 
   ensureOpenWs = async (): Promise<WebSocket> => {
     const existing = this.wsRef.current;
-    if (existing?.readyState === 1) return existing;
+    if (existing?.readyState === 1) {
+      this.notifyLinkState("open");
+      return existing;
+    }
 
     if (!this.wsOpenInflight) {
+      const jobId = ++this.ensureOpenJobId;
+      this.notifyLinkState("connecting");
       this.wsOpenInflight = (async () => {
         try {
           try {
-            return await this.openWsWithNewToken();
+            return await this.openWsWithNewToken(jobId);
           } catch (firstErr) {
+            if (firstErr instanceof Error && firstErr.message === "aborted") throw firstErr;
             const isQuickClose =
               firstErr instanceof Error &&
               (firstErr.message === "Соединение закрыто" || firstErr.message === "Ошибка соединения");
             if (!isQuickClose) throw firstErr;
             this.wsRef.current?.close();
             this.wsRef.current = null;
-            return await this.openWsWithNewToken();
+            return await this.openWsWithNewToken(jobId);
           }
         } finally {
-          this.wsOpenInflight = null;
+          if (this.ensureOpenJobId === jobId) {
+            this.wsOpenInflight = null;
+          }
         }
       })();
     }
@@ -532,7 +721,17 @@ export class RealtimeSocketTransport {
               connect(retryCount + 1);
             }, delay);
           } else {
-            refetchAuth().catch(() => {});
+            void refetchAuth().catch((e: unknown) => {
+              console.warn("[realtime] refetchAuth after call token failures failed", e);
+              if (!realtimeRefetchAuthToastShown) {
+                realtimeRefetchAuthToastShown = true;
+                toast({
+                  title: "Не удалось обновить сессию",
+                  description: "Проверьте сеть и перезайдите в аккаунт при необходимости.",
+                  variant: "destructive",
+                });
+              }
+            });
           }
           return;
         }
@@ -561,14 +760,47 @@ export class RealtimeSocketTransport {
     /** Сразу после входа — иначе call.incoming приходит в пустоту, пока ждали 1.5s. */
     const connectTimer = setTimeout(connect, 0);
 
+    let focusDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const kickReconnectSoon = () => {
+      if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
+      focusDebounceTimer = setTimeout(() => {
+        focusDebounceTimer = null;
+        connect(0);
+      }, 500);
+    };
+
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible" || !mounted || !userId) return;
       const ws = this.wsRef.current;
       if (!ws || ws.readyState === 2 || ws.readyState === 3) {
-        setTimeout(() => connect(0), 500);
+        kickReconnectSoon();
+        return;
+      }
+      if (ws.readyState === WebSocket.CONNECTING && this.connectingStartedAt > 0) {
+        const age = Date.now() - this.connectingStartedAt;
+        if (age >= STUCK_CONNECTING_MS) {
+          console.warn("[realtime] ws stuck in CONNECTING after visibility; forcing reconnect", { ageMs: age });
+          this.ensureOpenJobId += 1;
+          this.wsOpenInflight = null;
+          const stuckWs = ws;
+          this.wsRef.current = null;
+          try {
+            stuckWs.close();
+          } catch {
+            /* ignore */
+          }
+          this.notifyLinkState("closed");
+          kickReconnectSoon();
+        }
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
+
+    const onWindowFocus = () => {
+      if (document.visibilityState !== "visible" || !mounted || !userId) return;
+      onVisibilityChange();
+    };
+    window.addEventListener("focus", onWindowFocus);
 
     return () => {
       mounted = false;
@@ -579,6 +811,8 @@ export class RealtimeSocketTransport {
         this.reconnectTimer = null;
       }
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onWindowFocus);
+      if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
       this.closeWs();
     };
   };

@@ -4,6 +4,9 @@ import { randomUUID } from "crypto";
 export interface MessagesStore {
   getByChatId(chatId: string, limit?: number, beforeMessageId?: string, folderId?: string | null): Message[];
   get(chatId: string, messageId: string): Message | undefined;
+  /** Несколько сообщений одного чата по id (in-memory N+1 guard). */
+  getManyInChat(chatId: string, messageIds: string[]): Map<string, Message>;
+  getById(messageId: string): Message | undefined;
   create(data: InsertMessage): Message;
   delete(chatId: string, messageId: string): boolean;
   /** Удалить все сообщения чата (при удалении чата целиком). */
@@ -40,6 +43,22 @@ export function createMessagesStore(): MessagesStore {
       const list = byChat.get(chatId) ?? [];
       return list.find((m) => m.id === messageId);
     },
+    getManyInChat(chatId: string, messageIds: string[]) {
+      const out = new Map<string, Message>();
+      const list = byChat.get(chatId) ?? [];
+      const set = new Set(messageIds.filter(Boolean));
+      for (const m of list) {
+        if (set.has(m.id)) out.set(m.id, m);
+      }
+      return out;
+    },
+    getById(messageId: string) {
+      for (const list of byChat.values()) {
+        const m = list.find((x) => x.id === messageId);
+        if (m) return m;
+      }
+      return undefined;
+    },
     create(data: InsertMessage) {
       const id = randomUUID();
       const d = data as {
@@ -59,8 +78,10 @@ export function createMessagesStore(): MessagesStore {
         : d.type === "image" ? "image"
         : d.type === "video" ? "video"
         : d.type === "video_note" ? "video_note"
+        : d.type === "file" ? "file"
         : d.type === "missed_call" ? "missed_call"
         : d.type === "post_share" ? "post_share"
+        : d.type === "comment_share" ? "comment_share"
         : d.type === "story_reply" ? "story_reply"
         : "text";
       const message: Message = {

@@ -1,11 +1,30 @@
 import "dotenv/config";
 import "./admin/telemetry/express-request";
-import express, { type Request, Response, NextFunction } from "express";
+import compression from "compression";
+import express, { type Request } from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import { registerRoutes } from "./routes";
 import { hasExplicitParserUpstreamEnv } from "./parser/proxy";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { randomUUID } from "crypto";
+import { requestTimeoutMiddleware } from "./middleware/network/request-timeout-middleware";
+import { errorHandlerMiddleware } from "./middleware/network/error-handler-middleware";
+import { apiNotFoundMiddleware } from "./middleware/network/api-not-found-middleware";
+import { securityHeadersMiddleware } from "./middleware/security/security-headers-middleware";
+
+// Normalize CWD so `process.cwd()`-based paths (e.g. `/uploads`) are stable even
+// when the process is started from `dist/` or another directory.
+try {
+  // ESM dev (tsx): import.meta.url; production bundle (dist/index.cjs): __filename.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  const thisFile = typeof __filename !== "undefined" ? __filename : fileURLToPath(import.meta.url);
+  const projectRoot = path.resolve(path.dirname(thisFile), "..");
+  process.chdir(projectRoot);
+} catch {
+  /* ignore */
+}
 
 const app = express();
 app.set("trust proxy", 1);
@@ -33,6 +52,11 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+/** Сжатие JSON/HTML при прямом доступе к Node. За nginx с gzip — не включать (двойное сжатие): оставить выкл. */
+if (process.env.EXPRESS_COMPRESSION === "1") {
+  app.use(compression({ threshold: 1024 }));
+}
+app.use(securityHeadersMiddleware);
 
 app.use((req, res, next) => {
   const incomingRequestId =
@@ -45,18 +69,67 @@ app.use((req, res, next) => {
   next();
 });
 
-// CORS с credentials: чтобы куки сессии отправлялись при запросах с другого origin (поддомен или мобильное приложение).
-// iOS/Android Capacitor иногда не шлют Origin; при запросе с Bearer считаем нативным приложением и разрешаем capacitor://localhost.
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  let allowOrigin: string | undefined;
-  if (origin && typeof origin === "string") {
-    allowOrigin = origin;
-  } else if (req.headers.authorization?.startsWith?.("Bearer ")) {
-    allowOrigin = "capacitor://localhost";
+function resolveCorsAllowOrigin(req: Request): string | undefined {
+  const parseOrigins = (raw: string | undefined): Set<string> =>
+    new Set(
+      String(raw || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    );
+  const allowedOrigins = parseOrigins(process.env.CORS_ALLOWED_ORIGINS);
+  allowedOrigins.add("capacitor://localhost");
+  allowedOrigins.add("http://localhost");
+  allowedOrigins.add("http://127.0.0.1");
+  allowedOrigins.add("http://localhost:5173");
+  allowedOrigins.add("http://127.0.0.1:5173");
+  allowedOrigins.add("http://localhost:3000");
+  allowedOrigins.add("http://127.0.0.1:3000");
+
+  const isAllowedOrigin = (value: string): boolean => {
+    if (allowedOrigins.has(value)) return true;
+    // Optional compatibility mode for staged rollout.
+    return process.env.CORS_REFLECT_ORIGIN_COMPAT === "1";
+  };
+
+  const raw = req.headers.origin;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    // Некоторые WebView шлют буквально "null" при загрузке файлов.
+    if (t.length > 0 && t.toLowerCase() !== "null" && isAllowedOrigin(t)) {
+      return t;
+    }
   }
+  if (!req.headers.authorization?.startsWith?.("Bearer ")) {
+    return undefined;
+  }
+  const referer = req.headers.referer;
+  if (typeof referer === "string" && referer.length > 0) {
+    try {
+      const u = new URL(referer);
+      // Только оболочка приложения (не прод-домен API), иначе Allow-Origin не совпадёт с реальным Origin WebView.
+      if (u.protocol === "capacitor:" || u.protocol === "ionic:") {
+        if (isAllowedOrigin(u.origin)) return u.origin;
+      }
+      if (
+        (u.protocol === "http:" || u.protocol === "https:") &&
+        (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+      ) {
+        if (isAllowedOrigin(u.origin)) return u.origin;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return isAllowedOrigin("capacitor://localhost") ? "capacitor://localhost" : undefined;
+}
+
+// CORS с credentials: куки с другого origin; нативное приложение — Bearer + иногда пустой/«null» Origin при multipart.
+app.use((req, res, next) => {
+  const allowOrigin = resolveCorsAllowOrigin(req);
   if (allowOrigin) {
     res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Id");
@@ -67,6 +140,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use(requestTimeoutMiddleware);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -127,13 +202,15 @@ function payloadToLogString(payload: unknown): string {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
+  const LOG_API_RESPONSE_BODY = process.env.LOG_API_RESPONSE_BODY === "1";
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+  if (LOG_API_RESPONSE_BODY) {
+    const originalResJson = res.json;
+    res.json = function (bodyJson, ...args) {
+      capturedJsonResponse = bodyJson;
+      return originalResJson.apply(res, [bodyJson, ...args]);
+    };
+  }
 
   res.on("finish", () => {
     const duration = Date.now() - start;
@@ -150,25 +227,25 @@ app.use((req, res, next) => {
   next();
 });
 
+/**
+ * Публикация кампаний медиа-студии в том же процессе, что и API (посты с `scheduled_at <= now`).
+ * Без этого при `npm run dev` без `dev:feed-worker` очередь не двигается, пока не нажать «Обработать сейчас».
+ * `MEDIA_STUDIO_CAMPAIGN_TICK_SEC=0` — отключить (останутся feed-worker и ручной tick).
+ */
+function mediaStudioCampaignTickIntervalMs(): number | null {
+  const raw = process.env.MEDIA_STUDIO_CAMPAIGN_TICK_SEC?.trim();
+  if (raw === "0") return null;
+  const sec = raw ? Number(raw) : 60;
+  if (!Number.isFinite(sec) || sec < 0) return 60_000;
+  if (sec === 0) return null;
+  return Math.max(15, sec) * 1000;
+}
+
 (async () => {
   await registerRoutes(httpServer, app);
 
-  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    if (typeof message === "string" && message.length > 0) {
-      req.telemetryErrorDetail = message.slice(0, 500);
-    }
-
-    return res.status(status).json({ message });
-  });
+  app.use(apiNotFoundMiddleware);
+  app.use(errorHandlerMiddleware);
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
@@ -199,24 +276,40 @@ app.use((req, res, next) => {
         );
       }
       if (process.env.DATABASE_URL) {
-        const { processScheduledMessages } = require("./messages/service");
-        const { processServiceChatWorker } = require("./service-chat/worker");
-        setInterval(async () => {
-          try {
-            const n = await processScheduledMessages();
-            if (n > 0) log(`[scheduled] sent ${n} message(s)`);
-          } catch (e) {
-            console.warn("[scheduled] worker error:", e);
+        void (async () => {
+          const { processScheduledMessages } = await import("./messages/service");
+          const { processServiceChatWorker } = await import("./service-chat/worker");
+          setInterval(async () => {
+            try {
+              const n = await processScheduledMessages();
+              if (n > 0) log(`[scheduled] sent ${n} message(s)`);
+            } catch (e) {
+              console.warn("[scheduled] worker error:", e);
+            }
+          }, 60_000);
+          setInterval(async () => {
+            try {
+              const n = await processServiceChatWorker();
+              if (n > 0) log(`[service-chat] sent ${n} step(s)`);
+            } catch (e) {
+              console.warn("[service-chat] worker error:", e);
+            }
+          }, 10_000);
+          const mediaStudioMs = mediaStudioCampaignTickIntervalMs();
+          if (mediaStudioMs != null) {
+            setInterval(async () => {
+              try {
+                const { processRunningMediaStudioCampaigns } = await import("./admin/media-studio/campaign-service");
+                const r = await processRunningMediaStudioCampaigns();
+                if (r.published > 0 || r.failed > 0) {
+                  log(`[media-studio campaigns] published ${r.published}, failed ${r.failed}`);
+                }
+              } catch (e) {
+                console.warn("[media-studio campaigns] tick error:", e);
+              }
+            }, mediaStudioMs);
           }
-        }, 60_000);
-        setInterval(async () => {
-          try {
-            const n = await processServiceChatWorker();
-            if (n > 0) log(`[service-chat] sent ${n} step(s)`);
-          } catch (e) {
-            console.warn("[service-chat] worker error:", e);
-          }
-        }, 10_000);
+        })();
       }
     },
   );

@@ -1,6 +1,10 @@
 /**
  * Превью ссылок: извлечение og:image, og:title, og:description.
- * GET /api/link-preview?url=...
+ * GET /api/link-preview?url=...  (короткие URL)
+ * POST /api/link-preview  body: { "url": "..." }  (длинные ссылки без лимита query в nginx)
+ *
+ * Ошибки загрузки целевой страницы → 200 и пустые поля (не 502), чтобы не засорять консоль
+ * и не считать «нет og-тегов» серверной поломкой.
  */
 import type { Request, Response } from "express";
 import { linkPreviewLimiter } from "../auth/rate-limit";
@@ -10,6 +14,14 @@ import { isSsrfRiskUrl } from "../security/ssrf-guard";
 const URL_RE = /^https?:\/\/[^\s<>"{}|\\^`[\]]+$/i;
 const FETCH_TIMEOUT_MS = 5000;
 const MAX_BODY_LENGTH = 100_000;
+const MAX_URL_CHARS = 12_000;
+
+const emptyPreview = () => ({
+  image: null as string | null,
+  title: null as string | null,
+  description: null as string | null,
+  embedUrl: null as string | null,
+});
 
 function extractOgMeta(html: string): { image?: string; title?: string; description?: string } {
   const result: { image?: string; title?: string; description?: string } = {};
@@ -48,55 +60,82 @@ function extractVkEmbedUrl(html: string): string | null {
   return null;
 }
 
-export function registerLinkPreviewRoutes(app: import("express").Express): void {
-  app.get("/api/link-preview", requireAuth, linkPreviewLimiter, async (req: Request, res: Response) => {
-    const url = typeof req.query.url === "string" ? req.query.url.trim() : "";
-    if (!url || !URL_RE.test(url)) {
-      return res.status(400).json({ message: "Некорректный URL" });
+function readUrlFromRequest(req: Request): string {
+  const fromQuery = typeof req.query.url === "string" ? req.query.url.trim() : "";
+  if (fromQuery) return fromQuery;
+  const body = req.body as { url?: unknown } | undefined;
+  return typeof body?.url === "string" ? body.url.trim() : "";
+}
+
+async function handleLinkPreview(req: Request, res: Response): Promise<void> {
+  res.setHeader("Cache-Control", "no-store, private");
+  const url = readUrlFromRequest(req);
+  if (!url || url.length > MAX_URL_CHARS || !URL_RE.test(url)) {
+    res.status(400).json({ message: "Некорректный URL" });
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      res.status(400).json({ message: "Некорректный URL" });
+      return;
     }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return res.status(400).json({ message: "Некорректный URL" });
-      }
-      if (isSsrfRiskUrl(parsed)) {
-        return res.status(400).json({ message: "URL недоступен для превью" });
-      }
-    } catch {
-      return res.status(400).json({ message: "Некорректный URL" });
+    if (isSsrfRiskUrl(parsed)) {
+      res.status(400).json({ message: "URL недоступен для превью" });
+      return;
     }
+  } catch {
+    res.status(400).json({ message: "Некорректный URL" });
+    return;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let resp: globalThis.Response;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      const resp = await fetch(url, {
+      resp = await fetch(url, {
         signal: controller.signal,
         headers: { "User-Agent": "Mozilla/5.0 (compatible; PING-MOOT/1.0)" },
       });
+    } finally {
       clearTimeout(timeout);
-      if (!resp.ok) {
-        return res.status(502).json({ message: "Не удалось загрузить страницу" });
-      }
-      const text = await resp.text();
-      const body = text.slice(0, MAX_BODY_LENGTH);
-      const meta = extractOgMeta(body);
-      const host = parsed.hostname.replace(/^www\./i, "").replace(/^m\./i, "").toLowerCase();
-      const isVkHost = host === "vk.com" || host === "vk.ru";
-      const embedUrl = isVkHost ? extractVkEmbedUrl(body) : null;
-      if (!meta.image && !meta.title && !meta.description && !embedUrl) {
-        return res.json({ image: null, title: null, description: null, embedUrl: null });
-      }
-      res.json({
-        image: meta.image ?? null,
-        title: meta.title ?? null,
-        description: meta.description ?? null,
-        embedUrl: embedUrl ?? null,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        return res.status(504).json({ message: "Таймаут" });
-      }
-      res.status(502).json({ message: "Ошибка загрузки" });
     }
+    if (!resp.ok) {
+      res.json(emptyPreview());
+      return;
+    }
+    const text = await resp.text();
+    const body = text.slice(0, MAX_BODY_LENGTH);
+    const meta = extractOgMeta(body);
+    const host = parsed.hostname.replace(/^www\./i, "").replace(/^m\./i, "").toLowerCase();
+    const isVkHost = host === "vk.com" || host === "vk.ru";
+    const embedUrl = isVkHost ? extractVkEmbedUrl(body) : null;
+    if (!meta.image && !meta.title && !meta.description && !embedUrl) {
+      res.json(emptyPreview());
+      return;
+    }
+    res.json({
+      image: meta.image ?? null,
+      title: meta.title ?? null,
+      description: meta.description ?? null,
+      embedUrl: embedUrl ?? null,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      res.json(emptyPreview());
+      return;
+    }
+    res.json(emptyPreview());
+  }
+}
+
+export function registerLinkPreviewRoutes(app: import("express").Express): void {
+  app.get("/api/link-preview", requireAuth, linkPreviewLimiter, (req: Request, res: Response) => {
+    void handleLinkPreview(req, res);
+  });
+  app.post("/api/link-preview", requireAuth, linkPreviewLimiter, (req: Request, res: Response) => {
+    void handleLinkPreview(req, res);
   });
 }

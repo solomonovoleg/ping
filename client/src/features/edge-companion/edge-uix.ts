@@ -3,9 +3,20 @@
  * Используйте вместо произвольных градиентов и «чужих» палитр на экране кампании.
  */
 
-/** Внешняя карточка блока (персонаж, лидерборд, скелетоны). */
+/**
+ * Карточка блока companion — лёгкий градиент и акцент primary (не «серый пластилин»).
+ * Единая тональность с вкладками и лидербордом.
+ */
 export const EDGE_CARD =
-  "relative overflow-hidden rounded-3xl border border-border/60 bg-card p-[var(--uix-space-5)] shadow-sm";
+  "relative overflow-hidden rounded-3xl border border-primary/18 bg-gradient-to-br from-card via-primary/[0.05] to-card p-[var(--uix-space-5)] shadow-sm dark:border-primary/24 dark:via-primary/[0.07]";
+
+/** Верхняя зона вкладок + подсказка свайпа. */
+export const EDGE_COMPANION_CHROME =
+  "border-b border-primary/15 bg-gradient-to-b from-primary/[0.14] via-primary/[0.06] to-transparent dark:from-primary/[0.12] dark:via-primary/[0.05]";
+
+/** Фон области слайдов — мягкий «воздух» под контент. */
+export const EDGE_COMPANION_VIEWPORT =
+  "bg-gradient-to-b from-primary/[0.07] via-background to-background dark:from-primary/[0.09]";
 
 /** Внутренний блок (статы, врезка в герое). */
 export const EDGE_INSET =

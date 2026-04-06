@@ -42,12 +42,15 @@ async function main() {
     await client.connect();
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS fcm_token TEXT");
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS ios_voip_token TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by_id TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_url TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_link TEXT");
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_enabled BOOLEAN NOT NULL DEFAULT true");
-    console.log("Колонки users (last_seen_at, fcm_token, bio, invited_by_id, cover_url, profile_link, push_enabled) готовы.");
+    console.log(
+      "Колонки users (last_seen_at, fcm_token, ios_voip_token, bio, invited_by_id, cover_url, profile_link, push_enabled) готовы.",
+    );
   } catch (e) {
     console.error("Ошибка миграции user columns:", e.message);
     process.exit(1);

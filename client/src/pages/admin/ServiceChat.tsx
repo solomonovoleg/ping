@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPageHeader, AdminPanelCard, adminPageStackClass } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
-import { MessageSquareText, Plus, Send, Trash2 } from "lucide-react";
+import { MessageSquareText, Plus, Send, Trash2, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { uploadChatMedia } from "@/lib/chat";
 import {
   fetchAdminUsers,
   fetchServiceChatState,
@@ -30,6 +32,27 @@ export default function AdminServiceChat() {
   const [targetRaw, setTargetRaw] = useState("");
   const [campaignContent, setCampaignContent] = useState("");
   const [campaignMediaUrls, setCampaignMediaUrls] = useState("");
+  /** Загрузка медиа на сервер (шаг цепочки или рассылка) */
+  const [mediaUploadBusy, setMediaUploadBusy] = useState<null | { kind: "step"; index: number } | { kind: "campaign" }>(
+    null,
+  );
+
+  const appendLines = (prev: string, lines: string[]) => {
+    const next = [...prev.split(/\r?\n/).map((x) => x.trim()).filter(Boolean), ...lines];
+    return next.join("\n");
+  };
+
+  const uploadFilesToUrls = useCallback(
+    async (files: FileList | null): Promise<string[]> => {
+      if (!files?.length) return [];
+      const urls: string[] = [];
+      for (const file of Array.from(files)) {
+        urls.push(await uploadChatMedia(file));
+      }
+      return urls;
+    },
+    [],
+  );
 
   const stateQuery = useQuery({ queryKey: ["admin", "service-chat", "state"], queryFn: fetchServiceChatState });
   const usersQuery = useQuery({
@@ -129,22 +152,46 @@ export default function AdminServiceChat() {
   });
 
   if (stateQuery.isLoading || usersQuery.isLoading) {
-    return <div className="text-sm text-muted-foreground">Загрузка service-chat...</div>;
+    return (
+      <div className={cn(adminPageStackClass(), "text-sm admin-text-muted")}>Загрузка service-chat…</div>
+    );
   }
   if (stateQuery.isError || usersQuery.isError) {
-    return <ErrorWithRetry title="Не удалось загрузить service-chat" description="Проверьте сеть и повторите" onRetry={() => { void stateQuery.refetch(); void usersQuery.refetch(); }} />;
+    return (
+      <div className={adminPageStackClass()}>
+        <ErrorWithRetry
+          title="Не удалось загрузить service-chat"
+          description="Проверьте сеть и повторите"
+          onRetry={() => {
+            void stateQuery.refetch();
+            void usersQuery.refetch();
+          }}
+        />
+      </div>
+    );
   }
   const users = usersQuery.data?.users ?? [];
   if (users.length === 0) {
-    return <ListEmptyState icon={MessageSquareText} title="Нет пользователей" description="Создайте или зарегистрируйте пользователей для выбора хоста" />;
+    return (
+      <div className={adminPageStackClass()}>
+        <ListEmptyState
+          icon={MessageSquareText}
+          title="Нет пользователей"
+          description="Создайте или зарегистрируйте пользователей для выбора хоста"
+        />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Service Chat</h1>
-      <Card>
-        <CardHeader><CardTitle className="text-base">Хост и политика ответов</CardTitle></CardHeader>
-        <CardContent className="space-y-4">
+    <div className={cn(adminPageStackClass(), "space-y-6")}>
+      <AdminPageHeader
+        title="Service Chat"
+        description="Хост сервисных чатов, цепочка приветствия и рассылки."
+      />
+      <AdminPanelCard className="space-y-4 p-5 sm:p-6">
+        <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Хост и политика ответов</h2>
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label>Выбрать хоста</Label>
             <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={hostUserId} onChange={(e) => setHostUserId(e.target.value)}>
@@ -155,12 +202,12 @@ export default function AdminServiceChat() {
           <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Включить авто-цепочки для новых пользователей</label>
           <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={globalRepliesAllowed} onChange={(e) => setGlobalRepliesAllowed(e.target.checked)} /> Глобально разрешить ответы в сервисных чатах</label>
           <div className="flex justify-end"><Button disabled={!hostUserId || hostMutation.isPending} onClick={() => hostMutation.mutate()}>{hostMutation.isPending ? "Сохранение..." : "Сохранить хоста"}</Button></div>
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Шаблон цепочки (after-read)</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
+      <AdminPanelCard className="space-y-3 p-5 sm:p-6">
+        <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Шаблон цепочки (after-read)</h2>
+        <div className="space-y-3">
           <Input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="Название шаблона" />
           {steps.map((s, i) => (
             <div key={i} className="rounded-lg border border-border p-3 space-y-2">
@@ -170,8 +217,60 @@ export default function AdminServiceChat() {
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[70px]"
                 value={s.mediaUrls}
                 onChange={(e) => setSteps((prev) => prev.map((x, idx) => idx === i ? { ...x, mediaUrls: e.target.value } : x))}
-                placeholder={"URL медиа (картинка/видео), по одному в строке\nhttps://.../welcome.mp4\nhttps://.../cover.jpg"}
+                placeholder={
+                  "URL медиа (картинка/видео), по одному в строке — или кнопка «Загрузить» ниже\nhttps://.../welcome.mp4\nhttps://.../cover.jpg"
+                }
               />
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="file"
+                  id={`service-chat-step-media-${i}`}
+                  className="sr-only"
+                  accept="image/*,video/*,.mp4,.mov,.webm,.heic,.heif"
+                  multiple
+                  onChange={(e) => {
+                    const input = e.currentTarget;
+                    const list = input.files;
+                    input.value = "";
+                    if (!list?.length) return;
+                    void (async () => {
+                      setMediaUploadBusy({ kind: "step", index: i });
+                      try {
+                        const urls = await uploadFilesToUrls(list);
+                        if (urls.length) {
+                          setSteps((prev) =>
+                            prev.map((x, idx) =>
+                              idx === i ? { ...x, mediaUrls: appendLines(x.mediaUrls, urls) } : x,
+                            ),
+                          );
+                          toast({
+                            title: urls.length === 1 ? "Файл загружен" : `Загружено файлов: ${urls.length}`,
+                          });
+                        }
+                      } catch (err) {
+                        toast({
+                          title: err instanceof Error ? err.message : "Не удалось загрузить",
+                          variant: "destructive",
+                        });
+                      } finally {
+                        setMediaUploadBusy(null);
+                      }
+                    })();
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="min-h-[var(--uix-touch-min)]"
+                  disabled={!!mediaUploadBusy}
+                  onClick={() => document.getElementById(`service-chat-step-media-${i}`)?.click()}
+                >
+                  <Upload className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  {mediaUploadBusy?.kind === "step" && mediaUploadBusy.index === i ? "Загрузка…" : "Загрузить файлы"}
+                </Button>
+                <span className="text-xs text-muted-foreground">Фото и видео (как в чате), несколько файлов подряд</span>
+              </div>
               <div className="flex items-center gap-2">
                 <Label className="text-xs">Задержка после прочтения (сек)</Label>
                 <Input type="number" min={0} value={s.delayAfterReadSec} onChange={(e) => setSteps((prev) => prev.map((x, idx) => idx === i ? { ...x, delayAfterReadSec: Number(e.target.value) || 0 } : x))} />
@@ -181,12 +280,12 @@ export default function AdminServiceChat() {
           ))}
           <Button variant="outline" onClick={() => setSteps((prev) => [...prev, { content: "", delayAfterReadSec: 0, mediaUrls: "" }])}><Plus className="h-4 w-4 mr-1" />Добавить шаг</Button>
           <div className="flex justify-end"><Button disabled={!hostUserId || templateMutation.isPending} onClick={() => templateMutation.mutate()}>{templateMutation.isPending ? "Сохранение..." : "Сохранить шаблон"}</Button></div>
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Рассылка</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
+      <AdminPanelCard className="space-y-3 p-5 sm:p-6">
+        <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Рассылка</h2>
+        <div className="space-y-3">
           <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={campaignMode} onChange={(e) => setCampaignMode(e.target.value as "all" | "selected" | "personal")}>
             <option value="all">Всем</option>
             <option value="selected">Выборочно</option>
@@ -205,11 +304,59 @@ export default function AdminServiceChat() {
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm min-h-[70px]"
             value={campaignMediaUrls}
             onChange={(e) => setCampaignMediaUrls(e.target.value)}
-            placeholder={"URL медиа для рассылки, по одному в строке\nhttps://.../update.mp4\nhttps://.../banner.jpg"}
+            placeholder={
+              "URL медиа для рассылки, по одному в строке — или «Загрузить файлы»\nhttps://.../update.mp4\nhttps://.../banner.jpg"
+            }
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="file"
+              id="service-chat-campaign-media"
+              className="sr-only"
+              accept="image/*,video/*,.mp4,.mov,.webm,.heic,.heif"
+              multiple
+              onChange={(e) => {
+                const input = e.currentTarget;
+                const list = input.files;
+                input.value = "";
+                if (!list?.length) return;
+                void (async () => {
+                  setMediaUploadBusy({ kind: "campaign" });
+                  try {
+                    const urls = await uploadFilesToUrls(list);
+                    if (urls.length) {
+                      setCampaignMediaUrls((prev) => appendLines(prev, urls));
+                      toast({
+                        title: urls.length === 1 ? "Файл загружен" : `Загружено файлов: ${urls.length}`,
+                      });
+                    }
+                  } catch (err) {
+                    toast({
+                      title: err instanceof Error ? err.message : "Не удалось загрузить",
+                      variant: "destructive",
+                    });
+                  } finally {
+                    setMediaUploadBusy(null);
+                  }
+                })();
+              }}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="min-h-[var(--uix-touch-min)]"
+              disabled={!!mediaUploadBusy}
+              onClick={() => document.getElementById("service-chat-campaign-media")?.click()}
+            >
+              <Upload className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {mediaUploadBusy?.kind === "campaign" ? "Загрузка…" : "Загрузить файлы"}
+            </Button>
+            <span className="text-xs text-muted-foreground">В поле выше подставятся пути на сервер</span>
+          </div>
           <div className="flex justify-end"><Button disabled={!hostUserId || campaignMutation.isPending} onClick={() => campaignMutation.mutate()}><Send className="h-4 w-4 mr-1" />{campaignMutation.isPending ? "Запуск..." : "Запустить рассылку"}</Button></div>
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
     </div>
   );
 }

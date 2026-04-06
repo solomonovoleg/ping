@@ -42,7 +42,7 @@ export function formatCareDeadlineHint(iso: string | null): string | null {
   if (min < 60) return `До идеального корма ~${min} мин`;
   const h = Math.ceil(min / 60);
   if (h < 72) return `До идеального корма ~${h} ч`;
-  return "Скоро идеальное время для корма";
+  return "До комфортного корма ещё больше трёх суток";
 }
 
 export function formatLastFedShort(iso: string | null): string {
@@ -62,6 +62,24 @@ export function formatLastFedShort(iso: string | null): string {
  * Прогресс к следующему уровню: полоса внутри [level×100, (level+1)×100).
  * Совпадает с правилом level на сервере EDGE (шаг 100 XP на уровень).
  */
+/** Короткий статус для карточки: сон vs бодрствование (по mood + happyScore). */
+export function edgeVitalityLabel(
+  mood: string,
+  happyScore: number,
+): { label: string; tone: "sleep" | "awake" | "calm" } {
+  const h = Math.min(100, Math.max(0, happyScore));
+  if (h < 32 || mood === "sad") {
+    return { label: "Спит", tone: "sleep" };
+  }
+  if (mood === "happy" && h >= 58) {
+    return { label: "Бодрствует", tone: "awake" };
+  }
+  if (h >= 48) {
+    return { label: "Бодрствует", tone: "awake" };
+  }
+  return { label: "Спокоен", tone: "calm" };
+}
+
 export function xpProgressWithinLevel(xp: number, level: number): { pct: number; toNext: number } {
   const safeXp = Math.max(0, xp);
   const safeLevel = Math.max(0, level);

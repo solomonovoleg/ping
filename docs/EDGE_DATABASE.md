@@ -25,6 +25,13 @@ node EDGE/db/run-migrations.cjs
 
 Участник = пара (`campaign_public_id`, `platform_user_id`). Состояние персонажа — одна строка на участника (`participant_id`).
 
+С `0005_edge_dual_leaderboard.sql` в `edge_character_states` добавлены:
+
+- `primary_xp` — очки **основного** рейтинга;
+- `secondary_xp` — очки **дополнительного** рейтинга.
+
+Текущий legacy `xp` пока сохранён для обратной совместимости экранов/логики, но целевая модель — два независимых счётчика.
+
 API EDGE: `GET/POST /v1/participant/…` (с сервера платформы: секрет + заголовок `X-Platform-User-Id`). Дополнительно: `GET /v1/participant/leaderboard`, `POST /v1/participant/interact` (тело `{ "kind": "play" | "pet" }`), **`POST /v1/participant/task?edgeId=`** (тело `{ "taskKey": "view_post" | "react_post" | "share_post" | "follow_creator", "ref": "<postId|creatorId>" }`) — идемпотентное начисление XP по `edge_task_grants`, суммы из `edge_campaigns.config_json.tasks` (или дефолты), **`POST /v1/participant/follow-reward`** (тело `{ "followedPlatformUserId": "<id>" }`) — начисление `follow_creator` по всем кампаниям автора с `follow_reward_enabled`, `POST /v1/campaign/draw` (только секрет) — розыгрыш призов.
 
 ## Таблица `edge_task_grants`
@@ -49,9 +56,16 @@ API EDGE: `GET/POST /v1/participant/…` (с сервера платформы: 
 | `edge_type` | `character`, позже другие типы контента |
 | `creator_platform_user_id` | ID создателя на платформе (строка) |
 | `title`, `status` | Заголовок и статус кампании |
-| `gifts_json` | JSON массива шаблонов призов или объект с `templates` |
+| `gifts_json` | JSON массива шаблонов призов или объект с `templates`; расширение под новую модель: `leaderboardScopes: ("primary" \| "secondary")[]`, `drawAt` (ISO), `selectionRule` |
 | `leaderboard_global_enabled`, `follow_reward_enabled` | Флаги для клиента |
 | `config_json` | Расширение: призы, **`tasks`** (`view_post` / `react_post` / `share_post` → `xp`), decay и т.д.; объект **`companion`** — `surfaceOrder`, `infoArticle` (блоки paragraph/image/video), `results` (итоги розыгрышей) для UI полноэкранного Companion |
+
+С `0005_edge_dual_leaderboard.sql` в таблицу также добавлены:
+
+- `leaderboard_primary_enabled boolean` — включён ли основной рейтинг;
+- `leaderboard_secondary_enabled boolean` — включён ли дополнительный рейтинг;
+- `primary_leaderboard_frozen_at timestamptz` — момент заморозки основного рейтинга;
+- `secondary_leaderboard_frozen_at timestamptz` — момент заморозки дополнительного рейтинга.
 
 Пример вставки (ручной сид):
 

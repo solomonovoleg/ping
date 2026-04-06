@@ -1,4 +1,6 @@
-const TTL_MS = 2 * 60 * 1000; // 2 минуты — даём время на медленный upgrade
+import { randomBytes, randomUUID } from "node:crypto";
+
+export const CALL_TOKEN_TTL_MS = 2 * 60 * 1000; // 2 минуты — даём время на медленный upgrade
 
 const tokens = new Map<
   string,
@@ -6,13 +8,7 @@ const tokens = new Map<
 >();
 
 function randomToken(): string {
-  const bytes = new Uint8Array(24);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${randomBytes(24).toString("hex")}${randomUUID().replace(/-/g, "")}`;
 }
 
 function prune(): void {
@@ -25,7 +21,7 @@ function prune(): void {
 export function createCallToken(userId: string): string {
   prune();
   const token = randomToken();
-  tokens.set(token, { userId, expiresAt: Date.now() + TTL_MS });
+  tokens.set(token, { userId, expiresAt: Date.now() + CALL_TOKEN_TTL_MS });
   return token;
 }
 

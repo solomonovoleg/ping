@@ -1,4 +1,4 @@
-import { getIceServers, transformSdp } from "@/features/call/call-ice-config";
+import { transformSdp } from "@/features/call/call-ice-config";
 
 type Handlers = {
   onIceCandidate: (c: RTCIceCandidateInit) => void;
@@ -18,13 +18,13 @@ export class GroupMeshLink {
 
   constructor(
     private readonly localStream: MediaStream,
-    private readonly iceServers: RTCIceServer[],
+    private readonly rtcConfiguration: RTCConfiguration,
     private readonly handlers: Handlers,
   ) {}
 
   private ensurePc(): RTCPeerConnection {
     if (this.pc) return this.pc;
-    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.pc = new RTCPeerConnection(this.rtcConfiguration);
     this.pc.onicecandidate = (e) => {
       if (e.candidate && !this.destroyed) this.handlers.onIceCandidate(e.candidate.toJSON());
     };

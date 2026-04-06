@@ -1,3 +1,5 @@
+import { outgoingRequestIdHeaders } from "../lib/outgoing-request-id";
+
 function isProduction(): boolean {
   return String(process.env.NODE_ENV).toLowerCase() === "production";
 }
@@ -42,6 +44,22 @@ export function getParserProxyTimeoutMs(): number {
   return 25_000;
 }
 
+function getParserBodyReadTimeoutMs(): number {
+  return Math.min(45_000, Math.max(3_000, getParserProxyTimeoutMs()));
+}
+
+async function readTextWithTimeout(response: Response, timeoutMs: number): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("parser_body_timeout")), timeoutMs);
+  });
+  try {
+    return await Promise.race([response.text(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function parserUpstreamHeaders(): Record<string, string> {
   const s = process.env.PARSER_SERVICE_SECRET;
   const t = typeof s === "string" ? s.trim() : "";
@@ -54,7 +72,7 @@ export type ParserProxyResult = { ok: true; status: number; text: string } | { o
 export async function proxyParserRequest(
   method: string,
   path: string,
-  opts?: { body?: string; query?: string },
+  opts?: { body?: string; query?: string; requestId?: string },
 ): Promise<ParserProxyResult> {
   const base = getParserUpstreamBase();
   if (!base) {
@@ -83,12 +101,13 @@ export async function proxyParserRequest(
       method,
       headers: {
         ...parserUpstreamHeaders(),
+        ...outgoingRequestIdHeaders(opts?.requestId),
         ...(opts?.body ? { "Content-Type": "application/json" } : {}),
       },
       body: opts?.body,
       signal: ac.signal,
     });
-    const text = await r.text();
+    const text = await readTextWithTimeout(r, getParserBodyReadTimeoutMs());
     return { ok: true, status: r.status, text };
   } catch {
     return {

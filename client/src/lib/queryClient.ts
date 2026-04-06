@@ -1,10 +1,9 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api-base";
+import { ApiRequestError, apiFetch, isApiRequestError, toApiRequestError } from "@/lib/api-base";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    throw await toApiRequestError(res);
   }
 }
 
@@ -50,11 +49,18 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       staleTime: Infinity,
       retry: (failureCount, error) => {
-        const msg = error?.message ?? "";
-        if (typeof msg === "string" && msg.includes("401")) return false;
+        if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+        if (isApiRequestError(error)) {
+          if (error.status === 401 || error.status === 403 || error.status === 404) return false;
+          if (error.retryable) return failureCount < 3;
+          return false;
+        }
+        if (error instanceof Error && /timeout|network|failed to fetch|load failed/i.test(error.message)) {
+          return failureCount < 2;
+        }
         return failureCount < 2;
       },
-      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
+      retryDelay: (attemptIndex) => Math.min(1200 * 2 ** attemptIndex, 8000),
     },
     mutations: {
       retry: false,

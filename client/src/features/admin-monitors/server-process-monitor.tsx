@@ -10,35 +10,35 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AdminMetricTile, AdminPanelCard } from "@/features/admin-shell";
 import type { AdminMetricPoint } from "@/lib/admin";
 import { Activity, Cpu } from "lucide-react";
 
 export function ServerProcessLiveCards({ current }: { current: AdminMetricPoint | undefined }) {
   if (!current) return null;
   return (
-    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-      <Card className="p-3">
-        <p className="text-xs text-muted-foreground">Сейчас в сети (WS)</p>
-        <p className="text-xl font-semibold tabular-nums">{current.onlineUsers}</p>
-      </Card>
-      <Card className="p-3">
-        <p className="text-xs text-muted-foreground">Соединений /calls</p>
-        <p className="text-xl font-semibold tabular-nums">{current.openConnections}</p>
-      </Card>
-      <Card className="p-3">
-        <p className="text-xs text-muted-foreground">Heap (Node)</p>
-        <p className="text-xl font-semibold tabular-nums">{current.heapUsedMb} МБ</p>
-      </Card>
-      <Card className="p-3">
-        <p className="text-xs text-muted-foreground">RSS (процесс)</p>
-        <p className="text-xl font-semibold tabular-nums">{current.rssMb} МБ</p>
-      </Card>
-      <Card className="p-3 sm:col-span-2 lg:col-span-1">
-        <p className="text-xs text-muted-foreground">Load 1m</p>
-        <p className="text-xl font-semibold tabular-nums">{current.load1m}</p>
-      </Card>
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <AdminMetricTile>
+        <p className="text-xs admin-text-muted">Сейчас в сети (WS)</p>
+        <p className="text-xl font-semibold tabular-nums text-[hsl(210_20%_98%)]">{current.onlineUsers}</p>
+      </AdminMetricTile>
+      <AdminMetricTile>
+        <p className="text-xs admin-text-muted">Соединений /calls</p>
+        <p className="text-xl font-semibold tabular-nums text-[hsl(210_20%_98%)]">{current.openConnections}</p>
+      </AdminMetricTile>
+      <AdminMetricTile>
+        <p className="text-xs admin-text-muted">Heap (Node)</p>
+        <p className="text-xl font-semibold tabular-nums text-[hsl(210_20%_98%)]">{current.heapUsedMb} МБ</p>
+      </AdminMetricTile>
+      <AdminMetricTile>
+        <p className="text-xs admin-text-muted">RSS (процесс)</p>
+        <p className="text-xl font-semibold tabular-nums text-[hsl(210_20%_98%)]">{current.rssMb} МБ</p>
+      </AdminMetricTile>
+      <AdminMetricTile className="sm:col-span-2 lg:col-span-1">
+        <p className="text-xs admin-text-muted">Load 1m</p>
+        <p className="text-xl font-semibold tabular-nums text-[hsl(210_20%_98%)]">{current.load1m}</p>
+      </AdminMetricTile>
     </div>
   );
 }
@@ -52,19 +52,19 @@ type HistoryChartProps = {
 
 export function ServerProcessHistoryChart({ data, metricsNote, isFetching, animate }: HistoryChartProps) {
   return (
-    <Card className="p-4 pt-5">
-      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+    <AdminPanelCard className="p-4 pt-5">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-base font-semibold">Онлайн и нагрузка процесса</h2>
+          <Activity className="h-4 w-4 text-[hsl(var(--admin-muted))]" />
+          <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Онлайн и нагрузка процесса</h2>
         </div>
-        {isFetching ? <span className="text-xs text-muted-foreground">Обновление…</span> : null}
+        {isFetching ? <span className="text-xs admin-text-muted">Обновление…</span> : null}
       </div>
-      <p className="text-xs text-muted-foreground mb-4">
+      <p className="mb-4 text-xs admin-text-muted">
         Точки каждые 5 минут после перезапуска сервера. {metricsNote ?? ""}
       </p>
       {data.length === 0 ? (
-        <div className="h-64 flex flex-col items-center justify-center text-center text-sm text-muted-foreground gap-2 px-4">
+        <div className="flex h-64 flex-col items-center justify-center gap-2 px-4 text-center text-sm admin-text-muted">
           <Cpu className="h-8 w-8 opacity-50" />
           <p>Нет снимков нагрузки. Подождите до первого интервала сбора (до 5 мин после старта сервера).</p>
         </div>
@@ -72,7 +72,7 @@ export function ServerProcessHistoryChart({ data, metricsNote, isFetching, anima
         <div className="h-64 w-full min-h-[16rem]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--admin-border))" opacity={0.5} />
               <XAxis
                 dataKey="at"
                 tick={{ fontSize: 10 }}
@@ -91,7 +91,7 @@ export function ServerProcessHistoryChart({ data, metricsNote, isFetching, anima
                 type="monotone"
                 dataKey="onlineUsers"
                 name="В сети"
-                stroke="hsl(var(--primary))"
+                stroke="hsl(var(--admin-accent))"
                 strokeWidth={2}
                 dot={false}
                 isAnimationActive={animate}
@@ -101,7 +101,7 @@ export function ServerProcessHistoryChart({ data, metricsNote, isFetching, anima
                 type="monotone"
                 dataKey="heapUsedMb"
                 name="Heap МБ"
-                stroke="hsl(var(--muted-foreground))"
+                stroke="hsl(215 16% 55%)"
                 strokeWidth={1.5}
                 dot={false}
                 isAnimationActive={animate}
@@ -120,7 +120,7 @@ export function ServerProcessHistoryChart({ data, metricsNote, isFetching, anima
           </ResponsiveContainer>
         </div>
       )}
-    </Card>
+    </AdminPanelCard>
   );
 }
 
@@ -148,25 +148,31 @@ export function ServerProcessMonitorBlock({
   if (isLoading) {
     return (
       <div className="space-y-3">
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[1, 2, 3, 4, 5].map((i) => (
-            <Card key={i} className="h-20 animate-pulse bg-muted/30" />
+            <div key={i} className="admin-surface-card h-20 animate-pulse bg-[hsl(var(--admin-elevated)/0.5)]" />
           ))}
         </div>
-        <Card className="h-72 animate-pulse bg-muted/30" />
+        <div className="admin-surface-card h-72 animate-pulse bg-[hsl(var(--admin-elevated)/0.5)]" />
       </div>
     );
   }
   if (error) {
     return (
-      <Card className="p-4">
-        <p className="text-destructive text-sm mb-2">
+      <AdminPanelCard className="p-4">
+        <p className="mb-2 text-sm text-[hsl(0_72%_62%)]">
           {error instanceof Error ? error.message : "Не удалось загрузить метрики процесса"}
         </p>
-        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="border-[hsl(var(--admin-border))] bg-transparent"
+          onClick={onRetry}
+        >
           Повторить
         </Button>
-      </Card>
+      </AdminPanelCard>
     );
   }
   return (

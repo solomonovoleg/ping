@@ -9,11 +9,18 @@ export type SearchUser = {
   gender?: string | null;
   birthDate?: string | null;
   avatarUrl: string | null;
+  businessStatus?: "none" | "pending" | "approved" | "rejected" | "revision_required";
 };
 
-export async function searchUsers(q: string, signal?: AbortSignal): Promise<SearchUser[]> {
+export async function searchUsers(
+  q: string,
+  signal?: AbortSignal,
+  opts?: { businessOnly?: boolean },
+): Promise<SearchUser[]> {
   if (!q.trim()) return [];
-  const res = await apiFetch(`${API}/users/search?q=${encodeURIComponent(q.trim())}`, {
+  const params = new URLSearchParams({ q: q.trim() });
+  if (opts?.businessOnly) params.set("businessOnly", "1");
+  const res = await apiFetch(`${API}/users/search?${params.toString()}`, {
     cache: "no-store",
     signal,
   });
@@ -25,6 +32,7 @@ export type Chat = {
   id: string;
   type: string;
   name: string | null;
+  shortCode?: string | null;
   createdAt: string;
   otherMember?: { id: string; publicId: number } | null;
 };

@@ -54,9 +54,11 @@
   --uix-text-caption: 0.75rem;     /* 12px — time, hints */
   --uix-text-input: 1.0625rem;    /* 17px — iOS-style input */
   --uix-touch-min: 44px;          /* minimum touch target (a11y) */
-  /* Высота полосы по боковым вкладкам; центр (ПИНГОК) может выпирать вверх (overflow visible). */
-  --uix-nav-height: 3.75rem;
-  --uix-nav-bottom: calc(var(--uix-nav-height) + env(safe-area-inset-bottom, 0px));
+  /* Мин. высота полосы по боковым вкладкам; центр (ПИНГОК) позиционируется absolute и выпирает в контент. */
+  --uix-nav-height: 3.125rem;
+  /* Внутренние pt/pb сетки навбара (AppLayout) — учитываем в отступе контента */
+  --uix-nav-inner-y: 0.5rem;
+  --uix-nav-bottom: calc(var(--uix-nav-height) + var(--uix-nav-inner-y) + env(safe-area-inset-bottom, 0px));
   /* Экран чата: глобальное нижнее меню скрыто — только safe area */
   --uix-chat-bottom-pad: env(safe-area-inset-bottom, 0px);
 
@@ -82,6 +84,8 @@
   --chat-vibe-bubble-out: transparent;
   --chat-vibe-accent: transparent;
   --chat-vibe-overlay-opacity: 0;
+  /** Длительность смены токенов пузырей при активной атмосфере; задаётся из `useChatVibe` */
+  --chat-vibe-token-transition: 280ms;
 
   /* Apple/Native Inspired Light Theme */
   --background: 0 0% 98%; /* Very light grey */
@@ -116,6 +120,16 @@
 }
 
 /* ========== UIX utility classes (Design System) ========== */
+/* Полноэкранные оверлеи: одинаковый горизонтальный inset + минимальная зона «назад/закрыть» */
+.uix-fullscreen-overlay-x {
+  padding-left: max(var(--uix-space-4), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--uix-space-4), env(safe-area-inset-right, 0px));
+}
+.uix-overlay-icon-hit {
+  min-height: var(--uix-touch-min);
+  min-width: var(--uix-touch-min);
+}
+
 /* Контент: горизонтальный отступ от края экрана + safe-area (вырезы, островки) */
 .uix-content-x {
   padding-left: max(var(--uix-space-4), env(safe-area-inset-left, 0px));
@@ -126,6 +140,39 @@
 .uix-content-x-tight {
   padding-left: max(5px, env(safe-area-inset-left, 0px));
   padding-right: max(5px, env(safe-area-inset-right, 0px));
+}
+
+/* Сенсор / PWA / WebView: долгий тап по кнопкам и иконкам не даёт системное «Копировать» и серое выделение.
+   На десктопе с мышью не применяется (pointer: fine). Текст в полях ввода и в .uix-select-text — как обычно. */
+@media (pointer: coarse) {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  textarea,
+  select,
+  [contenteditable="true"],
+  [contenteditable=""] {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+  }
+
+  .uix-select-text {
+    -webkit-touch-callout: default;
+  }
+}
+
+.uix-select-text {
+  /* !important: пузырь сообщения остаётся select-none для жестов, текст внутри — копируемый */
+  -webkit-user-select: text !important;
+  user-select: text !important;
 }
 
 /* Типографика по ролям — использовать вместо произвольных text-sm/text-base */
@@ -283,16 +330,41 @@
     margin-left: auto;
     margin-right: auto;
   }
-  /* На десктопе приложение всегда в мобильном формате — колонка 480px по центру */
+  /* Широкий браузер: колонка 480px по центру. Нативный планшет/fold: см. data-native-wide-layout (хук в App). */
   @media (min-width: 481px) {
     #root {
       max-width: 480px;
       box-shadow: 0 0 0 1px hsl(var(--border) / 0.2);
     }
   }
+  #root[data-native-wide-layout="1"],
+  #root[data-admin-full-width="1"] {
+    max-width: 100%;
+    box-shadow: none;
+  }
 }
 
 @layer utilities {
+  /*
+   * Шитты и «телефонные» колонки: 480 → от 600dp Medium → от 840dp Expanded (Material window size classes).
+   */
+  .uix-responsive-max-w {
+    width: 100%;
+    max-width: min(100%, 480px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  @media (min-width: 600px) {
+    .uix-responsive-max-w {
+      max-width: min(100%, 560px);
+    }
+  }
+  @media (min-width: 840px) {
+    .uix-responsive-max-w {
+      max-width: min(100%, 720px);
+    }
+  }
+
   /* Safe area: отступы под вырез/островок/статус-бар на iOS и Android */
   .pt-safe {
     padding-top: env(safe-area-inset-top, 0px);
@@ -383,6 +455,56 @@
   .chat-composer-pill-action[data-active="true"] {
     color: hsl(var(--primary));
     background-color: hsl(var(--primary) / 0.12);
+  }
+
+  /*
+   * Пульс передачи: свечение на ::after только пока на кнопке сердце (класс вешается из ChatDetail).
+   * В обычном режиме микрофон статичен.
+   */
+  @keyframes chat-composer-mic-heartbeat-halo {
+    0%,
+    100% {
+      opacity: 0.55;
+      transform: scale(1);
+      box-shadow:
+        0 0 0 0 rgba(239, 68, 68, 0.55),
+        0 4px 14px rgba(239, 68, 68, 0.35);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.12);
+      box-shadow:
+        0 0 0 10px rgba(239, 68, 68, 0),
+        0 8px 28px rgba(239, 68, 68, 0.55);
+    }
+  }
+
+  button.chat-composer-mic-heartbeat:not(:disabled) {
+    position: relative;
+    z-index: 0;
+    overflow: visible;
+    isolation: isolate;
+  }
+
+  button.chat-composer-mic-heartbeat:not(:disabled)::after {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    border-radius: 9999px;
+    z-index: -1;
+    pointer-events: none;
+    background: transparent;
+    will-change: opacity, transform, box-shadow;
+    animation: chat-composer-mic-heartbeat-halo 1.2s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    button.chat-composer-mic-heartbeat:not(:disabled)::after {
+      animation: none;
+      opacity: 0.65;
+      transform: none;
+      box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+    }
   }
 
   /*
@@ -584,6 +706,11 @@
     border-bottom-color: rgba(99, 102, 241, 0.22);
   }
 
+  .chat-pulse-dm-mobile .chat-composer-strip--upload {
+    background-color: rgba(99, 102, 241, 0.1);
+    border-color: rgba(129, 140, 248, 0.28);
+  }
+
   .chat-pulse-dm-mobile .chat-composer-recording-strip {
     border-color: rgba(248, 113, 113, 0.35);
     background: linear-gradient(
@@ -639,6 +766,11 @@
   .chat-pulse-dm-light-mobile .chat-composer-strip--draft {
     background-color: rgba(99, 102, 241, 0.08);
     border-bottom-color: rgba(99, 102, 241, 0.2);
+  }
+
+  .chat-pulse-dm-light-mobile .chat-composer-strip--upload {
+    background-color: rgba(99, 102, 241, 0.07);
+    border-color: rgba(99, 102, 241, 0.22);
   }
 
   .chat-pulse-dm-light-mobile .chat-composer-recording-strip {
@@ -887,6 +1019,20 @@
     box-shadow: 0 0 0 8px rgba(129, 140, 248, 0.28);
   }
 }
+@keyframes pingok-logo-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.pingok-nav-logo-float {
+  animation-name: pingok-logo-float;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
 @keyframes pingok-v-bar {
   0%,
   100% {
@@ -975,6 +1121,109 @@
 }
 
 /* EDGE пост в ленте: мягкая аура вокруг персонажа (2 цикла при монтировании), акцент CTA */
+@keyframes edge-feed-shell-shimmer {
+  0% {
+    opacity: 0.3;
+    transform: translateX(-42%);
+  }
+  50% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0.3;
+    transform: translateX(42%);
+  }
+}
+
+.edge-feed-shell {
+  position: relative;
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.04),
+    0 10px 26px hsl(var(--background) / 0.22),
+    0 0 0 1px hsl(var(--primary) / 0.05);
+  backdrop-filter: saturate(120%) blur(2px);
+}
+
+.edge-feed-shell__glow {
+  background:
+    radial-gradient(130% 88% at -8% -12%, hsl(var(--primary) / 0.18), transparent 60%),
+    radial-gradient(128% 92% at 108% 112%, hsl(var(--accent) / 0.14), transparent 64%);
+}
+
+.edge-feed-shell::after {
+  content: "";
+  position: absolute;
+  inset: -22% -12%;
+  pointer-events: none;
+  background: linear-gradient(
+    115deg,
+    transparent 24%,
+    hsl(var(--foreground) / 0.06) 47%,
+    transparent 68%
+  );
+  animation: edge-feed-shell-shimmer 4.2s ease-in-out infinite;
+}
+
+@keyframes edge-feed-stage-breath {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1px hsl(var(--foreground) / 0.03),
+      inset 0 -44px 120px hsl(var(--background) / 0.36),
+      0 18px 46px hsl(var(--background) / 0.24);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px hsl(var(--foreground) / 0.05),
+      inset 0 -52px 130px hsl(var(--background) / 0.42),
+      0 20px 52px hsl(var(--background) / 0.3);
+  }
+}
+
+.edge-feed-character-stage {
+  animation: edge-feed-stage-breath 5.5s ease-in-out infinite;
+}
+
+.edge-feed-state-badge {
+  backdrop-filter: blur(3px);
+}
+
+.edge-feed-cta-button {
+  background-image: linear-gradient(
+    105deg,
+    hsl(37 87% 48%) 0%,
+    hsl(31 93% 53%) 34%,
+    hsl(286 60% 56%) 70%,
+    hsl(267 79% 57%) 100%
+  );
+  border: 1px solid hsl(var(--foreground) / 0.09);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--foreground) / 0.24),
+    0 8px 26px hsl(var(--primary) / 0.28);
+}
+
+/* Лента EDGE: пузырь только по контенту; в колоночном flex (в т.ч. Edge) не растягивать по высоте */
+.edge-feed-bubble {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  align-self: center;
+  min-height: 0;
+}
+
+@media (max-width: 380px) {
+  .edge-feed-hud-left,
+  .edge-feed-hud-right {
+    width: 30%;
+  }
+  .edge-feed-bubble {
+    max-width: 188px;
+    padding: 0.42rem 0.6rem;
+  }
+  .edge-feed-state-badge {
+    top: 4.65rem;
+  }
+}
+
 @keyframes edge-feed-character-aura {
   0%,
   100% {
@@ -1012,7 +1261,94 @@
   animation: edge-feed-cta-accent 2.4s ease-in-out infinite;
 }
 
+/* StoryViewer: keyframes один раз в бандле — без повторного <style> при каждом открытии */
+@keyframes story-sv-heart-pop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  40% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes story-sv-heart-big {
+  0% {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+  }
+  20% {
+    transform: translate(-50%, -50%) scale(1.3);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.1);
+    opacity: 0;
+  }
+}
+@keyframes story-sv-bloom {
+  0% {
+    opacity: 0.75;
+    filter: blur(0);
+  }
+  35% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    filter: blur(1px);
+  }
+}
+@keyframes story-sv-edge-nav {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.story-sv-anim-heart-pop {
+  animation: story-sv-heart-pop 0.55s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.story-sv-anim-heart-big {
+  animation: story-sv-heart-big 0.9s ease forwards;
+}
+.story-sv-anim-bloom {
+  animation: story-sv-bloom 0.42s ease-out forwards;
+}
+.story-sv-anim-edge-nav {
+  animation: story-sv-edge-nav 0.14s ease-out forwards;
+}
+
+@media (orientation: landscape) {
+  .story-viewer-root {
+    padding-left: max(10px, env(safe-area-inset-left, 0px));
+    padding-right: max(10px, env(safe-area-inset-right, 0px));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .edge-feed-shell::after {
+    animation: none !important;
+    opacity: 0.18;
+    transform: none !important;
+  }
+  .edge-feed-character-stage {
+    animation: none !important;
+  }
+  .edge-feed-state-badge {
+    backdrop-filter: none;
+  }
   .edge-feed-character-aura,
   .edge-feed-cta-accent-wrap {
     animation: none !important;
@@ -1030,6 +1366,12 @@
   .pingok-voice-check,
   .pingok-voice-v-in,
   .pingok-voice-bar {
+    animation: none !important;
+  }
+  .story-sv-anim-heart-pop,
+  .story-sv-anim-heart-big,
+  .story-sv-anim-bloom,
+  .story-sv-anim-edge-nav {
     animation: none !important;
   }
 }

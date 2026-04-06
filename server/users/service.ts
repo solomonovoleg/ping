@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { computeDmAllowedForViewer, normalizeSocialPolicy } from "./social-policy";
 import { normalizePhone } from "../auth/phone";
 import { getDb } from "../db";
@@ -6,6 +6,7 @@ import { storage } from "../storage";
 import { getAuthorWall } from "../posts/author-wall";
 import { getStoriesByAuthorId } from "../stories/service";
 import { recordProfilePageView } from "./profile-analytics";
+import { resolveMediaUrlForClient } from "../upload/s3-presign-media-urls";
 import { notifyFollow } from "../notifications/create";
 import {
   NAME_MAX_LENGTH,
@@ -14,7 +15,11 @@ import {
   postComments,
   postReactions,
   posts,
+  users,
 } from "@shared/schema";
+
+const BUSINESS_CONTACT_PHONE_MAX_LENGTH = 64;
+const BUSINESS_ADDRESS_MAX_LENGTH = 300;
 
 export class UsersServiceError extends Error {
   status: number;
@@ -22,6 +27,40 @@ export class UsersServiceError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+function normalizeBusinessStatusValue(value: unknown): "none" | "pending" | "approved" | "rejected" | "revision_required" {
+  if (
+    value === "none" ||
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "revision_required"
+  ) {
+    return value;
+  }
+  return "none";
+}
+
+function sanitizeBusinessContactPhone(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw !== "string") throw new UsersServiceError(400, "Телефон бизнеса указан неверно");
+  const value = raw.trim();
+  if (!value) return null;
+  if (!/^[+()\-\d\s]{5,64}$/u.test(value)) {
+    throw new UsersServiceError(400, "Телефон бизнеса: допустимы цифры, пробел, +, скобки и дефис");
+  }
+  return value.slice(0, BUSINESS_CONTACT_PHONE_MAX_LENGTH);
+}
+
+function sanitizeBusinessAddress(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw !== "string") throw new UsersServiceError(400, "Адрес бизнеса указан неверно");
+  const value = raw.trim();
+  if (!value) return null;
+  return value.slice(0, BUSINESS_ADDRESS_MAX_LENGTH);
 }
 
 export function normalizeProfileIdParam(raw: unknown): string {
@@ -74,20 +113,21 @@ export function normalizeGenderValue(value: unknown): "male" | "female" | "other
   return null;
 }
 
-function buildUnavailableProfile(target: {
+async function buildUnavailableProfile(target: {
   id: string;
   publicId: number;
   displayName: string | null;
   surname: string | null;
   avatarUrl: string | null;
 }) {
+  const avatarUrl = await resolveMediaUrlForClient(target.avatarUrl ?? null);
   return {
     id: target.id,
     publicId: target.publicId,
     displayName: target.displayName ?? "Пользователь",
     surname: target.surname ?? null,
     gender: null,
-    avatarUrl: target.avatarUrl ?? null,
+    avatarUrl,
     coverUrl: null,
     showCover: false,
     profileLink: null,
@@ -106,6 +146,10 @@ function buildUnavailableProfile(target: {
     commentsCount: 0,
     isFollowedByTarget: false,
     isMutualFollow: false,
+    pinnedPostId: null,
+    businessStatus: "none",
+    businessContactPhone: null,
+    businessAddress: null,
   };
 }
 
@@ -113,6 +157,18 @@ export async function resolveProfileTarget(idParam: string) {
   let target = await storage.getUser(idParam);
   if (!target && /^\d+$/.test(String(idParam))) {
     target = await storage.getUserByPublicId(parseInt(String(idParam), 10));
+  }
+  if (!target) {
+    const normalizedNickname = String(idParam).trim().replace(/^@+/, "");
+    if (normalizedNickname) {
+      const db = getDb();
+      const [byNickname] = await db
+        .select()
+        .from(users)
+        .where(sql`LOWER(${users.nickname}) = LOWER(${normalizedNickname})`)
+        .limit(1);
+      if (byNickname) target = byNickname;
+    }
   }
   if (!target) throw new UsersServiceError(404, "Пользователь не найден");
   return target;
@@ -123,7 +179,7 @@ async function getProfileCounters(userId: string) {
   const [postsRow] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(posts)
-    .where(eq(posts.authorId, userId));
+    .where(and(eq(posts.authorId, userId), eq(posts.showOnAuthorWall, true)));
   const [reactionsRow] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(postReactions)
@@ -141,7 +197,7 @@ async function getProfileCounters(userId: string) {
 
 async function buildProfileForViewer(viewerId: string, target: NonNullable<Awaited<ReturnType<typeof storage.getUser>>>) {
   if (target.deletedAt || target.isBlocked) {
-    return buildUnavailableProfile(target);
+    return await buildUnavailableProfile(target);
   }
   const isMe = target.id === viewerId;
   let canMessage = true;
@@ -179,8 +235,23 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
   const [mutualCount, mutualPreview] = mutualPair;
   const mutualFollowers =
     !isMe && !isBlockedByMe && !isBlockedMe && mutualCount > 0
-      ? { count: mutualCount, preview: mutualPreview }
+      ? {
+          count: mutualCount,
+          preview: await Promise.all(
+            mutualPreview.map(async (u) => ({
+              ...u,
+              avatarUrl: await resolveMediaUrlForClient(u.avatarUrl),
+            })),
+          ),
+        }
       : undefined;
+
+  const [avatarUrl, coverUrl] = await Promise.all([
+    resolveMediaUrlForClient(target.avatarUrl ?? null),
+    resolveMediaUrlForClient(target.coverUrl ?? null),
+  ]);
+  const targetBusinessStatus = normalizeBusinessStatusValue((target as { businessStatus?: string | null }).businessStatus);
+  const canShowBusinessContacts = targetBusinessStatus === "approved";
 
   return {
     id: target.id,
@@ -189,8 +260,8 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     surname: target.surname ?? null,
     nickname: target.nickname ?? null,
     gender: normalizeGenderValue(target.gender) ?? null,
-    avatarUrl: target.avatarUrl ?? null,
-    coverUrl: target.coverUrl ?? null,
+    avatarUrl,
+    coverUrl,
     showCover: (target as { showCover?: boolean }).showCover !== false,
     profileLink: target.profileLink ?? null,
     city: (target as { city?: string | null }).city ?? null,
@@ -209,6 +280,7 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
     reactionsCount: counters.reactionsCount,
     commentsCount: counters.commentsCount,
     mutualFollowers,
+    pinnedPostId: (target as { pinnedPostId?: string | null }).pinnedPostId ?? null,
     blockedByProfileOwner:
       !isMe && theirBlockOfViewer
         ? {
@@ -218,25 +290,71 @@ async function buildProfileForViewer(viewerId: string, target: NonNullable<Await
             note: theirBlockOfViewer.blockNote,
           }
         : null,
+    businessStatus: targetBusinessStatus,
+    businessContactPhone: canShowBusinessContacts
+      ? ((target as { businessContactPhone?: string | null }).businessContactPhone ?? null)
+      : null,
+    businessAddress: canShowBusinessContacts
+      ? ((target as { businessAddress?: string | null }).businessAddress ?? null)
+      : null,
   };
 }
 
-export async function searchUsersForViewer(viewerId: string, q: string) {
+export async function searchUsersForViewer(
+  viewerId: string,
+  q: string,
+  opts?: { businessOnly?: boolean },
+) {
   const users = await storage.searchUsers(q, viewerId);
-  return users.map((u) => ({
-    id: u.id,
-    publicId: u.publicId,
-    displayName: u.displayName ?? null,
-    surname: u.surname ?? null,
-    nickname: u.nickname ?? null,
-    gender: u.gender ?? null,
-    birthDate: u.birthDate ?? null,
-    avatarUrl: u.avatarUrl ?? null,
-  }));
+  const filtered = opts?.businessOnly
+    ? users.filter(
+        (u) =>
+          normalizeBusinessStatusValue((u as { businessStatus?: string | null }).businessStatus) === "approved",
+      )
+    : users;
+  return Promise.all(
+    filtered.map(async (u) => ({
+      id: u.id,
+      publicId: u.publicId,
+      displayName: u.displayName ?? null,
+      surname: u.surname ?? null,
+      nickname: u.nickname ?? null,
+      gender: u.gender ?? null,
+      birthDate: u.birthDate ?? null,
+      avatarUrl: await resolveMediaUrlForClient(u.avatarUrl ?? null),
+      businessStatus: normalizeBusinessStatusValue((u as { businessStatus?: string | null }).businessStatus),
+    })),
+  );
 }
 
 export async function savePushToken(userId: string, token: string | null): Promise<void> {
   await storage.updateUserFcmToken(userId, token || null);
+}
+
+export async function saveIosVoipToken(userId: string, token: string | null): Promise<void> {
+  await storage.updateUserIosVoipToken(userId, token || null);
+}
+
+/** Поля профиля (имя, обложка и т.д.): при их изменении требуем непустые имя, фамилию и пол. */
+const PROFILE_PATCH_IDENTITY_KEYS: readonly string[] = [
+  "displayName",
+  "surname",
+  "gender",
+  "birthDate",
+  "nickname",
+  "bio",
+  "avatarUrl",
+  "coverUrl",
+  "showCover",
+  "profileLink",
+  "city",
+  "status",
+  "profileVisibility",
+  "showOnlineTo",
+];
+
+function profilePatchTouchesPublicFields(body: Record<string, unknown>): boolean {
+  return PROFILE_PATCH_IDENTITY_KEYS.some((k) => Object.prototype.hasOwnProperty.call(body, k));
 }
 
 export async function updateMyProfile(userId: string, body: Record<string, unknown>) {
@@ -265,6 +383,8 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     vibeShareWithPartner,
     dmPolicy: dmPolicyRaw,
     groupAddMePolicy: groupAddMePolicyRaw,
+    businessContactPhone,
+    businessAddress,
   } = body ?? {};
   let name = typeof displayName === "string" ? displayName.trim() : (current.displayName ?? "");
   let fam = typeof surname === "string" ? surname.trim() : (current.surname ?? "");
@@ -298,10 +418,52 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     groupAddMePolicy = groupAddMePolicyRaw;
   }
 
+  const touchesProfile = profilePatchTouchesPublicFields(body ?? {});
+  const businessStatus = normalizeBusinessStatusValue((current as { businessStatus?: string | null }).businessStatus);
+  const businessContactPhonePatch = sanitizeBusinessContactPhone(businessContactPhone);
+  const businessAddressPatch = sanitizeBusinessAddress(businessAddress);
+  if (
+    (businessContactPhonePatch !== undefined || businessAddressPatch !== undefined) &&
+    businessStatus !== "approved"
+  ) {
+    throw new UsersServiceError(403, "Контакты бизнеса доступны только для одобренного бизнес-профиля");
+  }
+  let pinnedPostIdPatch: string | null | undefined;
+  if (pinnedPostId !== undefined) {
+    if (pinnedPostId === null || pinnedPostId === "") {
+      pinnedPostIdPatch = null;
+    } else {
+      const candidate = typeof pinnedPostId === "string" ? pinnedPostId.trim() : "";
+      if (!candidate) throw new UsersServiceError(400, "Пост не указан");
+      const db = getDb();
+      const [p] = await db
+        .select({
+          id: posts.id,
+          authorId: posts.authorId,
+          isDraft: posts.isDraft,
+          showOnAuthorWall: posts.showOnAuthorWall,
+        })
+        .from(posts)
+        .where(eq(posts.id, candidate))
+        .limit(1);
+      if (!p) throw new UsersServiceError(404, "Пост не найден");
+      if (p.authorId !== userId) throw new UsersServiceError(403, "Можно закрепить только свой пост");
+      if (p.isDraft) throw new UsersServiceError(400, "Черновик нельзя закрепить");
+      if (p.showOnAuthorWall === false) {
+        throw new UsersServiceError(400, "Пост только для Push нельзя закрепить на профиле");
+      }
+      pinnedPostIdPatch = candidate;
+    }
+  }
+
   const user = await storage.updateUserProfile(userId, {
-    displayName: name || null,
-    surname: fam || null,
-    gender: genderVal,
+    ...(touchesProfile
+      ? {
+          displayName: name || null,
+          surname: fam || null,
+          gender: genderVal,
+        }
+      : {}),
     ...(birthDateVal !== undefined && { birthDate: birthDateVal }),
     ...(typeof avatarUrl === "string" && { avatarUrl: avatarUrl.trim() || null }),
     ...(typeof hideFromSearch === "boolean" && { hideFromSearch }),
@@ -318,7 +480,7 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
             : null,
     }),
     ...(status !== undefined && { status: status === null || status === "" ? null : (typeof status === "string" ? status.trim() || null : null) }),
-    ...(pinnedPostId !== undefined && { pinnedPostId: pinnedPostId === null || pinnedPostId === "" ? null : (typeof pinnedPostId === "string" ? pinnedPostId.trim() || null : null) }),
+    ...(pinnedPostIdPatch !== undefined && { pinnedPostId: pinnedPostIdPatch }),
     ...(profileVisibility === "all" || profileVisibility === "followers" ? { profileVisibility } : {}),
     ...(showOnlineTo === "all" || showOnlineTo === "followers" ? { showOnlineTo } : {}),
     ...(typeof pushEnabled === "boolean" && { pushEnabled }),
@@ -327,8 +489,15 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     ...(nicknameVal !== undefined && { nickname: nicknameVal }),
     ...(dmPolicy !== undefined && { dmPolicy }),
     ...(groupAddMePolicy !== undefined && { groupAddMePolicy }),
+    ...(businessContactPhonePatch !== undefined && { businessContactPhone: businessContactPhonePatch }),
+    ...(businessAddressPatch !== undefined && { businessAddress: businessAddressPatch }),
   });
   if (!user) throw new UsersServiceError(404, "User not found");
+
+  const [patchedAvatarUrl, patchedCoverUrl] = await Promise.all([
+    resolveMediaUrlForClient(user.avatarUrl ?? null),
+    resolveMediaUrlForClient(user.coverUrl ?? null),
+  ]);
 
   return {
     id: user.id,
@@ -339,10 +508,10 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     nickname: user.nickname ?? null,
     gender: normalizeGenderValue(user.gender) ?? null,
     birthDate: user.birthDate ?? null,
-    avatarUrl: user.avatarUrl ?? null,
+    avatarUrl: patchedAvatarUrl,
     hideFromSearch: user.hideFromSearch ?? false,
     bio: user.bio ?? null,
-    coverUrl: user.coverUrl ?? null,
+    coverUrl: patchedCoverUrl,
     showCover: (user as { showCover?: boolean }).showCover !== false,
     profileLink: user.profileLink ?? null,
     city: (user as { city?: string | null }).city ?? null,
@@ -355,7 +524,56 @@ export async function updateMyProfile(userId: string, body: Record<string, unkno
     vibeShareWithPartner: (user as { vibeShareWithPartner?: boolean }).vibeShareWithPartner === true,
     dmPolicy: normalizeSocialPolicy((user as { dmPolicy?: string }).dmPolicy),
     groupAddMePolicy: normalizeSocialPolicy((user as { groupAddMePolicy?: string }).groupAddMePolicy),
+    businessStatus: normalizeBusinessStatusValue((user as { businessStatus?: string | null }).businessStatus),
+    businessContactPhone:
+      normalizeBusinessStatusValue((user as { businessStatus?: string | null }).businessStatus) === "approved"
+        ? ((user as { businessContactPhone?: string | null }).businessContactPhone ?? null)
+        : null,
+    businessAddress:
+      normalizeBusinessStatusValue((user as { businessStatus?: string | null }).businessStatus) === "approved"
+        ? ((user as { businessAddress?: string | null }).businessAddress ?? null)
+        : null,
   };
+}
+
+/** Один закреплённый пост в шапке профиля (`users.pinned_post_id`). */
+export async function updateMyPinnedPost(userId: string, body: Record<string, unknown>) {
+  const b = body ?? {};
+  if (!Object.prototype.hasOwnProperty.call(b, "postId")) {
+    throw new UsersServiceError(400, "Укажите postId");
+  }
+  const raw = b.postId;
+  const db = getDb();
+
+  if (raw === null || raw === "") {
+    await storage.updateUserProfile(userId, { pinnedPostId: null });
+    const user = await storage.getUser(userId);
+    return { pinnedPostId: (user as { pinnedPostId?: string | null }).pinnedPostId ?? null };
+  }
+
+  const id = typeof raw === "string" ? raw.trim() : "";
+  if (!id) throw new UsersServiceError(400, "Пост не указан");
+
+  const [p] = await db
+    .select({
+      id: posts.id,
+      authorId: posts.authorId,
+      isDraft: posts.isDraft,
+      showOnAuthorWall: posts.showOnAuthorWall,
+    })
+    .from(posts)
+    .where(eq(posts.id, id))
+    .limit(1);
+  if (!p) throw new UsersServiceError(404, "Пост не найден");
+  if (p.authorId !== userId) throw new UsersServiceError(403, "Можно закрепить только свой пост");
+  if (p.isDraft) throw new UsersServiceError(400, "Черновик нельзя закрепить");
+  if (p.showOnAuthorWall === false) {
+    throw new UsersServiceError(400, "Пост только для Push нельзя закрепить на профиле");
+  }
+
+  await storage.updateUserProfile(userId, { pinnedPostId: id });
+  const user = await storage.getUser(userId);
+  return { pinnedPostId: (user as { pinnedPostId?: string | null }).pinnedPostId ?? null };
 }
 
 export async function getProfilePage(viewerId: string, idParam: string, postsLimit: number) {
@@ -408,6 +626,8 @@ export async function followUser(viewerId: string, targetUserId: string): Promis
   if (followInserted) {
     const { scheduleEdgeFollowReward } = await import("./edge-follow-hook");
     scheduleEdgeFollowReward(viewerId, targetUserId);
+    const { scheduleSenderWelcomeDm } = await import("../sender/follow-hook");
+    scheduleSenderWelcomeDm(targetUserId, viewerId);
   }
 }
 
@@ -428,11 +648,29 @@ export async function removeMyFollower(ownerId: string, followerUserId: string):
   await storage.removeFollow(followerUserId, ownerId);
 }
 
-export async function getFollowersList(targetUserId: string, limit: number, offset: number) {
+async function ensureViewerCanAccessSocialGraph(viewerId: string, targetUserId: string): Promise<void> {
+  if (viewerId === targetUserId) return;
+  const [blockOfViewerByTarget, iFollowTarget] = await Promise.all([
+    storage.getBlockFlags(targetUserId, viewerId),
+    storage.isFollowing(viewerId, targetUserId),
+  ]);
+  if (blockOfViewerByTarget?.restrictProfile || blockOfViewerByTarget?.restrictSocial) {
+    throw new UsersServiceError(403, "Список недоступен");
+  }
+  const target = await storage.getUser(targetUserId);
+  const visibility = (target?.profileVisibility ?? "all").toLowerCase();
+  if (visibility === "followers" && !iFollowTarget) {
+    throw new UsersServiceError(403, "Список недоступен");
+  }
+}
+
+export async function getFollowersList(viewerId: string, targetUserId: string, limit: number, offset: number) {
+  await ensureViewerCanAccessSocialGraph(viewerId, targetUserId);
   return storage.getFollowersList(targetUserId, limit, offset);
 }
 
-export async function getFollowingList(targetUserId: string, limit: number, offset: number) {
+export async function getFollowingList(viewerId: string, targetUserId: string, limit: number, offset: number) {
+  await ensureViewerCanAccessSocialGraph(viewerId, targetUserId);
   return storage.getFollowingList(targetUserId, limit, offset);
 }
 
@@ -475,15 +713,17 @@ export async function listContacts(userId: string, includeProfiles: boolean) {
   const ids = await storage.listContactUserIds(userId);
   if (includeProfiles && ids.length > 0) {
     const contacts = await Promise.all(ids.map((id) => storage.getUser(id)));
-    return contacts
-      .filter((u): u is NonNullable<typeof u> => !!u && !u.deletedAt && !u.isBlocked)
-      .map((u) => ({
-        id: u.id,
-        publicId: u.publicId,
-        displayName: u.displayName ?? null,
-        surname: u.surname ?? null,
-        avatarUrl: u.avatarUrl ?? null,
-      }));
+    return Promise.all(
+      contacts
+        .filter((u): u is NonNullable<typeof u> => !!u && !u.deletedAt && !u.isBlocked)
+        .map(async (u) => ({
+          id: u.id,
+          publicId: u.publicId,
+          displayName: u.displayName ?? null,
+          surname: u.surname ?? null,
+          avatarUrl: await resolveMediaUrlForClient(u.avatarUrl ?? null),
+        })),
+    );
   }
   return ids;
 }
@@ -527,17 +767,19 @@ export async function matchContactsFromPhoneBook(
     return s || String(u.publicId);
   }
 
-  const matches = found
-    .filter((u) => !blocked.has(u.id))
-    .map((u) => ({
-      id: u.id,
-      publicId: u.publicId,
-      displayName: u.displayName ?? null,
-      surname: u.surname ?? null,
-      avatarUrl: u.avatarUrl ?? null,
-      isInMyContacts: contactIds.has(u.id),
-    }))
-    .sort((a, b) => displaySortKey(a).localeCompare(displaySortKey(b), "ru"));
+  const unsorted = await Promise.all(
+    found
+      .filter((u) => !blocked.has(u.id))
+      .map(async (u) => ({
+        id: u.id,
+        publicId: u.publicId,
+        displayName: u.displayName ?? null,
+        surname: u.surname ?? null,
+        avatarUrl: await resolveMediaUrlForClient(u.avatarUrl ?? null),
+        isInMyContacts: contactIds.has(u.id),
+      })),
+  );
+  const matches = unsorted.sort((a, b) => displaySortKey(a).localeCompare(displaySortKey(b), "ru"));
 
   return { matches };
 }

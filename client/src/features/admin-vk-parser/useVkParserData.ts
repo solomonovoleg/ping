@@ -64,11 +64,13 @@ export function useVkParserData(createOpen: boolean, editBinding: AdminVkParserB
   const queueFrom = queueTotal === 0 ? 0 : queuePage * QUEUE_PAGE_SIZE + 1;
   const queueTo = queueTotal === 0 ? 0 : queuePage * QUEUE_PAGE_SIZE + queue.length;
 
-  const { data: users = [] } = useQuery({
-    queryKey: ["admin", "vk-parser-users", userSearch],
-    queryFn: () => fetchParserUsers(userSearch),
+  const usersQuery = useQuery({
+    queryKey: ["admin", "vk-parser-users", userSearch] as const,
+    queryFn: ({ queryKey, signal }) => fetchParserUsers(queryKey[2], { signal }),
     enabled: createOpen || !!editBinding,
+    placeholderData: keepPreviousData,
   });
+  const users = usersQuery.data ?? [];
 
   const resetForm = () => {
     setPlatformUserId("");
@@ -85,6 +87,7 @@ export function useVkParserData(createOpen: boolean, editBinding: AdminVkParserB
   };
 
   const fillFormFromBinding = (b: AdminVkParserBinding) => {
+    setUserSearch("");
     setPlatformUserId(b.platformUserId);
     setVkAccessToken("");
     setVkOwnerId(b.vkOwnerId);
@@ -143,6 +146,9 @@ export function useVkParserData(createOpen: boolean, editBinding: AdminVkParserB
     queueError,
     refetchQueue,
     users,
+    usersFetching: usersQuery.isFetching,
+    usersError: usersQuery.isError,
+    refetchUsers: usersQuery.refetch,
     resetForm,
     fillFormFromBinding,
     bindingLabel,

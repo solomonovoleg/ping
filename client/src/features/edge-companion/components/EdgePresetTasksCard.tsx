@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ClipboardList, Loader2, Mail } from "lucide-react";
+import { CheckCircle2, ClipboardList, Loader2, Mail, Sparkles } from "lucide-react";
 import { useLocation } from "wouter";
+import { Progress } from "@/components/ui/progress";
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { ToastAction, type ToastActionElement } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
@@ -9,51 +10,60 @@ import {
   EdgePresetVerificationError,
   postEdgeParticipantTask,
   postEdgePingInvitePack,
+  type EdgeParticipantState,
 } from "@/lib/edge-participant";
 import { EDGE_BLOCK_SUB, EDGE_BLOCK_TITLE, EDGE_CARD } from "@/features/edge-companion/edge-uix";
+import {
+  edgePresetTaskWhereLabel,
+  edgeTaskPresetVerifyHint,
+  formatEdgeTaskPresetLabel,
+} from "@/lib/edge-task-preset-label";
+import { edgeScoreTargetCaptionRu, effectiveEdgeTaskPresetScoreTarget } from "@/lib/edge-task-score-target";
+import { EDGE_REWARD_READY_ROW_TW } from "@/lib/edge-task-reward-ready";
+import { triggerSuccessFeedback } from "@/lib/micro-feedback";
+import { cn } from "@/lib/utils";
 
 type Props = {
   edgeId: string;
   presets: EdgeTaskPresetPublic[];
   /** Как у кормления: кампания на паузе / срок вышел. */
   interactLocked?: boolean;
+  /** Полноэкранный свайп «Задания»: без дублирующего заголовка, акцентные карточки и CTA. */
+  variant?: "default" | "surface";
+  /** Состояние участника с `taskProgress` / `taskGrants` с EDGE. */
+  participantState?: EdgeParticipantState;
 };
 
 function denyMessage(code: string | undefined): string {
   switch (code) {
     case "already_claimed":
-      return "Награда за это задание уже получена.";
+      return "Вы уже забрали награду за это задание.";
     case "campaign_locked":
-      return "Кампания недоступна для заданий.";
+      return "Сейчас задания в этой кампании недоступны.";
     case "not_published":
-      return "Кампания ещё не опубликована.";
+      return "Кампания ещё не открыта для участников.";
     case "deadline_passed":
-      return "Срок выполнения задания истёк.";
+      return "Время на это задание вышло.";
     case "invalid_preset":
-      return "Задание не найдено в кампании.";
+      return "Такого задания в кампании нет.";
     case "verification_failed":
-      return "Условие задания не выполнено (уровень, streak или др.).";
+      return "Условие задания ещё не выполнено — проверьте, всё ли сделано.";
+    case "leaderboard_frozen":
+      return "Рейтинг на паузе: наступила дата розыгрыша приза. Начисление очков временно остановлено.";
+    case "honor_disabled":
+      return "Это задание без проверки на сервере отключено. Пусть организатор выберет условие в конструкторе.";
     default:
-      return "Не удалось начислить XP.";
+      return "Сейчас награду выдать не удалось. Попробуйте позже.";
   }
 }
 
-function verifyHint(p: EdgeTaskPresetPublic): string | null {
-  const v = p.verify ?? { type: "honor" as const };
-  if (v.type === "honor") return null;
-  if (v.type === "follow_creator") return "Нужна подписка на автора кампании.";
-  if (v.type === "react_post") return "Нужна реакция на пост кампании (указан в настройках).";
-  if (v.type === "comment_post") return "Нужен комментарий к посту кампании.";
-  if (v.type === "edge_min_level") return `Мин. уровень в кампании: ${v.minLevel}.`;
-  if (v.type === "edge_min_xp") return `Мин. XP в кампании: ${v.minXp}.`;
-  if (v.type === "edge_min_care_streak") return `Серия заботы: минимум ${v.minDays} дн.`;
-  if (v.type === "ping_invited_users") {
-    return `Порог: ${v.minCount} приглашённых. «Коды в ЛС» — столько же персональных кодов от автора (не расходуют ваш лимит).`;
-  }
-  return null;
-}
-
-export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) {
+export function EdgePresetTasksCard({
+  edgeId,
+  presets,
+  interactLocked,
+  variant = "default",
+  participantState,
+}: Props) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [, setLocation] = useLocation();
@@ -63,11 +73,18 @@ export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) 
     onSuccess: (data) => {
       qc.setQueryData(["edge", "participant", "state", edgeId], data.state);
       void qc.invalidateQueries({ queryKey: ["edge", "participant", "leaderboard", edgeId] });
+      const preset = presets.find((x) => x.key === data.taskKey);
+      const scoreTarget = preset ? effectiveEdgeTaskPresetScoreTarget(preset) : "primary";
+      const board = edgeScoreTargetCaptionRu(scoreTarget);
       if (data.awarded) {
+        triggerSuccessFeedback();
         const sign = data.xpDelta >= 0 ? "+" : "";
         toast({
-          title: "Задание",
-          description: `${sign}${data.xpDelta} XP`,
+          title: "Награда",
+          description:
+            data.xpDelta === 0
+              ? `Задание засчитано — зачёт в «${board}».`
+              : `${sign}${data.xpDelta} XP зачислено в «${board}».`,
         });
       } else {
         toast({
@@ -85,7 +102,7 @@ export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) 
             ? e.message
             : "Повторите позже";
       toast({
-        title: e instanceof EdgePresetVerificationError ? "Проверка задания" : "Ошибка",
+        title: e instanceof EdgePresetVerificationError ? "Задание сейчас недоступно" : "Что-то пошло не так",
         description: msg,
         variant: "destructive",
       });
@@ -97,17 +114,17 @@ export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) 
     onSuccess: (data) => {
       const desc =
         data.hint ??
-        `Отправлено кодов: ${data.codesCount}. Смотрите личные сообщения от автора кампании.`;
+        `Автор кампании прислал вам в личный чат пригласительные коды — всего ${data.codesCount} шт. Смотрите раздел «Чаты».`;
       const action = (
         <ToastAction
-          altText="Открыть чат с автором"
+          altText="Открыть чат с автором кампании"
           onClick={() => setLocation(`/chat/${encodeURIComponent(data.chatId)}`)}
         >
-          К чату
+          Открыть чат
         </ToastAction>
       ) as ToastActionElement;
       toast({
-        title: "Коды в ЛС",
+        title: "Коды в чате",
         description: desc,
         duration: 10_000,
         action,
@@ -115,8 +132,8 @@ export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) 
     },
     onError: (e) => {
       toast({
-        title: "Не удалось отправить коды",
-        description: e instanceof Error ? e.message : "Повторите позже",
+        title: "Коды не отправились",
+        description: e instanceof Error ? e.message : "Попробуйте ещё раз чуть позже.",
         variant: "destructive",
       });
     },
@@ -125,83 +142,214 @@ export function EdgePresetTasksCard({ edgeId, presets, interactLocked }: Props) 
   if (!presets.length) return null;
 
   const locked = Boolean(interactLocked);
+  const isSurface = variant === "surface";
 
-  return (
-    <section
-      className={`${EDGE_CARD} mt-[var(--uix-space-4)] space-y-[var(--uix-space-3)]`}
-      aria-label="Задания кампании"
-    >
-      <div className="flex items-center gap-2">
-        <ClipboardList className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-        <h3 className={EDGE_BLOCK_TITLE}>Задания</h3>
-      </div>
+  const rowClass = cn(
+    "flex flex-col gap-2.5 rounded-2xl px-[var(--uix-space-3)] py-[var(--uix-space-3)] sm:flex-row sm:items-center sm:justify-between",
+    isSurface
+      ? "border border-primary/22 bg-gradient-to-br from-card via-primary/[0.05] to-transparent shadow-[0_8px_28px_-16px_hsl(var(--primary)/0.35)] dark:border-primary/28 dark:via-primary/[0.07]"
+      : "border border-border/40 bg-background/40",
+  );
+
+  const xpButtonClass = cn(
+    "inline-flex min-h-[var(--uix-touch-min)] flex-row items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4",
+    isSurface &&
+      "border-0 bg-primary font-semibold text-primary-foreground shadow-md hover:bg-primary/92 active:bg-primary/88",
+  );
+
+  const mailButtonClass = cn(
+    "inline-flex min-h-[var(--uix-touch-min)] flex-row items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-border/60 bg-secondary/70 px-4 font-medium",
+    isSurface && "border-primary/25 bg-primary/10 text-foreground hover:bg-primary/15",
+  );
+
+  const inner = (
+    <>
+      {!isSurface ? (
+        <div className="flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+          <h3 className={EDGE_BLOCK_TITLE}>Задания</h3>
+        </div>
+      ) : null}
       {locked ? (
-        <p className={EDGE_BLOCK_SUB} role="status">
-          Сейчас задания недоступны (кампания на паузе или завершена).
+        <p
+          className={cn(
+            EDGE_BLOCK_SUB,
+            isSurface &&
+              "rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-[13px] text-amber-950 dark:text-amber-100",
+          )}
+          role="status"
+        >
+          Задания сейчас закрыты: кампания на паузе или уже завершилась.
         </p>
-      ) : (
-        <p className={EDGE_BLOCK_SUB}>Выполните условие и нажмите «Получить XP» (один раз на задание).</p>
-      )}
+      ) : !isSurface ? (
+        <p className={EDGE_BLOCK_SUB}>Сделайте условие задания и нажмите «Забрать награду» — по одному разу на каждое.</p>
+      ) : null}
 
-      <ul className="space-y-[var(--uix-space-2)]">
+      <ul className={cn("space-y-[var(--uix-space-2)]", isSurface && "space-y-3")}>
         {presets.map((p) => {
           const net = p.points - p.penalty;
           const busy = claimMut.isPending && claimMut.variables === p.key;
           const packBusy = invitePackMut.isPending && invitePackMut.variables === p.key;
-          const hint = verifyHint(p);
+          const hint = edgeTaskPresetVerifyHint(p.verify);
           const isPingInvite = p.verify?.type === "ping_invited_users";
+          const displayLabel = formatEdgeTaskPresetLabel(p.label, p.verify);
+          const line = participantState?.taskProgress?.find((t) => t.taskKey === p.key);
+          const scoreTarget = effectiveEdgeTaskPresetScoreTarget(p);
+          const boardShort = edgeScoreTargetCaptionRu(scoreTarget);
+          const isClaimed = Boolean(line?.claimed);
+          const blockEdge = Boolean(line && line.tracking === "edge" && !line.satisfied);
+          const progressPct =
+            line && line.ratio !== null && !isClaimed ? Math.min(100, Math.round(line.ratio * 100)) : null;
+          const xpShown = isClaimed && line?.xpAwardedIfClaimed != null ? line.xpAwardedIfClaimed : net;
+          const isHonor = p.verify?.type === "honor";
+          const blockUnverifiable = isHonor;
+          const whereLabel = edgePresetTaskWhereLabel(p);
+          const edgeRewardReady =
+            !isClaimed && line?.tracking === "edge" && Boolean(line?.satisfied);
+          const platformRowAccent =
+            !isClaimed && line?.tracking === "platform" && !edgeRewardReady;
           return (
             <li
               key={p.key}
-              className="flex flex-col gap-2 rounded-2xl border border-border/40 bg-background/40 px-[var(--uix-space-3)] py-[var(--uix-space-3)] sm:flex-row sm:items-center sm:justify-between"
+              className={cn(
+                rowClass,
+                edgeRewardReady && EDGE_REWARD_READY_ROW_TW,
+                platformRowAccent && "border-sky-500/35",
+              )}
             >
               <div className="min-w-0 flex-1">
-                <p className="uix-text-body font-medium text-foreground">{p.label}</p>
-                <p className="uix-text-caption text-muted-foreground">
-                  {net >= 0 ? `+${net}` : `${net}`} XP · срок {p.deadlineDays} дн. с входа в кампанию
+                <p className={cn("uix-text-body font-medium text-foreground", isSurface && "text-[15px] font-semibold")}>
+                  <span>{displayLabel}</span>
+                  {whereLabel ? (
+                    <span
+                      className={cn(
+                        "ml-2 inline-flex align-middle text-[10px] font-bold uppercase tracking-wide",
+                        whereLabel === "в игре" && "text-emerald-600 dark:text-emerald-400",
+                        whereLabel === "приложение" && "text-sky-600 dark:text-sky-400",
+                        whereLabel === "нет проверки" && "text-destructive",
+                      )}
+                      aria-label={`Где считается задание: ${whereLabel}`}
+                    >
+                      · {whereLabel}
+                    </span>
+                  ) : null}
+                </p>
+                <p className={cn("uix-text-caption text-muted-foreground", isSurface && "mt-0.5 text-[12px] leading-snug")}>
+                  <span className="font-semibold text-primary tabular-nums">
+                    {xpShown >= 0 ? `+${xpShown}` : `${xpShown}`} XP
+                  </span>
+                  {" · "}
+                  {boardShort}
+                  {" · "}
+                  срок {p.deadlineDays} дн. с входа в кампанию
                   {hint ? ` · ${hint}` : ""}
                 </p>
+                {isHonor && !isClaimed ? (
+                  <p className="mt-1 text-[11px] font-medium text-destructive/95">
+                    Награда недоступна: не задано условие, которое сервер может проверить. Организатору нужно выбрать тип
+                    проверки (питомец, пост в ленте, приглашения, реакция…).
+                  </p>
+                ) : null}
+                {line?.tracking === "platform" && !isClaimed ? (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Условие проверяется в приложении при нажатии «Забрать награду».
+                  </p>
+                ) : null}
+                {progressPct !== null ? (
+                  <div className="mt-2 space-y-1">
+                    <div className="flex justify-between text-[11px] tabular-nums text-muted-foreground">
+                      <span>Прогресс</span>
+                      <span>
+                        {line?.current ?? 0} / {line?.target ?? "—"}
+                      </span>
+                    </div>
+                    <Progress value={progressPct} className="h-1.5" aria-label={`Прогресс задания: ${progressPct}%`} />
+                  </div>
+                ) : null}
+                {blockEdge ? (
+                  <p className="mt-1.5 text-[11px] text-amber-800/95 dark:text-amber-100/90">
+                    Сначала выполните условие в игре — кнопка разблокируется автоматически.
+                  </p>
+                ) : null}
+                {edgeRewardReady ? (
+                  <p
+                    className="mt-2 flex items-center gap-1.5 text-[12px] font-semibold text-primary"
+                    role="status"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden strokeWidth={2.25} />
+                    Условие в игре выполнено — заберите награду.
+                  </p>
+                ) : null}
               </div>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                {isPingInvite ? (
-                  <TapScaleButton
-                    type="button"
-                    haptic
-                    subtle
-                    disabled={locked || packBusy}
-                    className="min-h-[var(--uix-touch-min)] rounded-xl px-4"
-                    aria-label={`Получить коды приглашения в личные сообщения: ${p.label}`}
-                    onClick={() => invitePackMut.mutate(p.key)}
+                {isClaimed ? (
+                  <div
+                    className="inline-flex min-h-[var(--uix-touch-min)] flex-row items-center justify-center gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-[13px] font-semibold text-emerald-800 dark:text-emerald-100"
+                    role="status"
                   >
-                    {packBusy ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                    ) : (
-                      <Mail className="h-4 w-4 shrink-0" aria-hidden />
-                    )}
-                    Коды в ЛС
-                  </TapScaleButton>
-                ) : null}
-                <TapScaleButton
-                  type="button"
-                  haptic
-                  subtle
-                  disabled={locked || busy}
-                  className="min-h-[var(--uix-touch-min)] rounded-xl px-4"
-                  aria-label={`Получить XP за задание: ${p.label}`}
-                  onClick={() => claimMut.mutate(p.key)}
-                >
-                  {busy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
                     <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
-                  )}
-                  Получить XP
-                </TapScaleButton>
+                    Получено
+                  </div>
+                ) : (
+                  <>
+                    {isPingInvite ? (
+                      <TapScaleButton
+                        type="button"
+                        haptic
+                        subtle={!isSurface}
+                        disabled={locked || packBusy}
+                        className={mailButtonClass}
+                        aria-label={`Прислать пригласительные коды в чат. Задание: ${displayLabel}`}
+                        onClick={() => invitePackMut.mutate(p.key)}
+                      >
+                        {packBusy ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                        ) : (
+                          <Mail className="h-4 w-4 shrink-0" aria-hidden />
+                        )}
+                        Коды в ЛС
+                      </TapScaleButton>
+                    ) : null}
+                    <TapScaleButton
+                      type="button"
+                      haptic
+                      subtle={!isSurface}
+                      disabled={locked || busy || blockEdge || blockUnverifiable}
+                      className={xpButtonClass}
+                      aria-label={`Забрать награду за задание: ${displayLabel}`}
+                      onClick={() => claimMut.mutate(p.key)}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+                      )}
+                      Забрать награду
+                    </TapScaleButton>
+                  </>
+                )}
               </div>
             </li>
           );
         })}
       </ul>
+    </>
+  );
+
+  if (isSurface) {
+    return (
+      <section className="space-y-4" aria-label="Задания">
+        {inner}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className={`${EDGE_CARD} mt-[var(--uix-space-4)] space-y-[var(--uix-space-3)]`}
+      aria-label="Задания"
+    >
+      {inner}
     </section>
   );
 }

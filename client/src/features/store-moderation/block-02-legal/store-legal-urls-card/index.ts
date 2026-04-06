@@ -1,0 +1,1 @@
+export { StoreLegalUrlsCard } from "./StoreLegalUrlsCard";

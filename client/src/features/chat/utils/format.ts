@@ -2,12 +2,16 @@
  * Форматирование времени и дат в чате.
  * Используем parseServerTimestamp и formatTimeLocal — всегда локальное время устройства.
  */
+import type { ClientOutgoingSendStatus } from "@shared/message-delivery-status";
 import { formatTimeLocal, formatDateShortLocal, formatDateLongLocal, parseServerTimestamp } from "@/lib/timezone";
 
 /** Парсит дату от API (сервер должен отправлять UTC в ISO). */
 export function parseMessageDate(raw: string): Date {
   return parseServerTimestamp(raw);
 }
+
+/** Допуск при сравнении времени сообщения и last_read собеседника (мс в JSON/БД могут отличаться). */
+const READ_RECEIPT_TIME_EPSILON_MS = 2500;
 
 /**
  * Две галочки у исходящих: только если у собеседника на сервере last_read ≥ времени сообщения.
@@ -21,7 +25,7 @@ export function isOutgoingMessageReadByPeer(
   const msgT = parseMessageDate(messageCreatedAtIso).getTime();
   const readT = parseMessageDate(peerLastReadAtIso).getTime();
   if (!Number.isFinite(msgT) || !Number.isFinite(readT)) return false;
-  return msgT <= readT;
+  return msgT <= readT + READ_RECEIPT_TIME_EPSILON_MS;
 }
 
 export function formatMessageTime(iso: string): string {
@@ -64,3 +68,42 @@ export function toDateKey(iso: string): string {
 
 export const isUuid = (s: string): boolean =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+/** Подсказка у галочек исходящего: одна галочка = доставлено, две = прочитано собеседником. */
+export function outgoingDeliveryTitle(
+  isReadByPeer: boolean,
+  peerLastReadAtIso: string | null | undefined,
+  sendStatus?: ClientOutgoingSendStatus | null,
+): string {
+  if (isReadByPeer && peerLastReadAtIso) {
+    return `Прочитано · ${formatMessageTime(peerLastReadAtIso)}`;
+  }
+  return "Доставлено";
+}
+
+export function outgoingDeliveryAriaLabel(
+  isReadByPeer: boolean,
+  peerLastReadAtIso: string | null | undefined,
+  sendStatus?: ClientOutgoingSendStatus | null,
+): string {
+  if (sendStatus === "sending") return "Отправляется";
+  if (sendStatus === "failed") return "Ошибка отправки";
+  if (isReadByPeer && peerLastReadAtIso) return `Прочитано ${formatMessageTime(peerLastReadAtIso)}`;
+  return "Доставлено";
+}
+
+/** Компактная строка под PULSE-видеокружок: время + галочки (без дубля с нижним футером строки). */
+export function outgoingDeliveryPulseFooterLabel(
+  messageCreatedAtIso: string,
+  isReadByPeer: boolean,
+  sendStatus?: ClientOutgoingSendStatus | null,
+): string | null {
+  if (sendStatus === "sending" || sendStatus === "failed") return null;
+  const t = formatMessageTime(messageCreatedAtIso);
+  return isReadByPeer ? `${t} ✓✓` : `${t} ✓`;
+}
+
+/** Доступное описание времени у входящего сообщения в футере пузыря. */
+export function incomingMessageFooterAria(messageCreatedAtIso: string): string {
+  return `Время сообщения ${formatMessageTime(messageCreatedAtIso)}`;
+}

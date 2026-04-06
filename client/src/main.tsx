@@ -4,9 +4,11 @@ import * as ReactDOM from "react-dom";
 import App from "./App";
 import "./index.css";
 import { getSavedTheme, applyTheme } from "./lib/theme";
+import { ensureDeviceIdCookie } from "./lib/device-id";
 
 // Применить сохранённую тему до первого рендера (без мигания)
 applyTheme(getSavedTheme());
+ensureDeviceIdCookie();
 
 const root = createRoot(document.getElementById("root")!);
 root.render(<App />);

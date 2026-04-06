@@ -1,0 +1,32 @@
+name: Calls SLO Monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check-calls-slo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run calls SLO check
+        env:
+          CALLS_SLO_API_URL: ${{ secrets.CALLS_SLO_API_URL }}
+          CALLS_SLO_ADMIN_LOGIN: ${{ secrets.CALLS_SLO_ADMIN_LOGIN }}
+          CALLS_SLO_ADMIN_PASSWORD: ${{ secrets.CALLS_SLO_ADMIN_PASSWORD }}
+          CALLS_SLO_SETUP_SUCCESS_MIN: ${{ secrets.CALLS_SLO_SETUP_SUCCESS_MIN }}
+          CALLS_SLO_FAILED_MAX: ${{ secrets.CALLS_SLO_FAILED_MAX }}
+        run: node scripts/check-calls-slo.cjs

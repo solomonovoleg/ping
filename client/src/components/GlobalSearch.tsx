@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { useQueryClient } from "@tanstack/react-query";
-import { Search, X, MessageCircle, UserPlus, AlertCircle, UserCircle } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Search, X, MessageCircle, UserPlus, AlertCircle, UserCircle, BriefcaseBusiness } from "lucide-react";
 import { searchUsers, startDm, formatUserDisplayName, formatSearchUserSubtitle, type SearchUser } from "@/lib/search";
+import { buildChatPath } from "@/lib/chat-route";
 import { followUser } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/UserAvatar";
+import { BusinessBadge } from "@/components/ui/business-badge";
 
 const DEBOUNCE_MS = 300;
+const SEARCH_STALE_MS = 30_000;
 
 type GlobalSearchProps = {
   value: string;
@@ -16,6 +19,9 @@ type GlobalSearchProps = {
   placeholder?: string;
   className?: string;
   onClear?: () => void;
+  businessOnly?: boolean;
+  onBusinessOnlyChange?: (value: boolean) => void;
+  showBusinessToggle?: boolean;
 };
 
 export function GlobalSearch({
@@ -24,64 +30,49 @@ export function GlobalSearch({
   placeholder = "Имя, @ник, ID или полный номер…",
   className,
   onClear,
+  businessOnly,
+  onBusinessOnlyChange,
+  showBusinessToggle = true,
 }: GlobalSearchProps) {
-  const [results, setResults] = useState<SearchUser[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [searchError, setSearchError] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [internalBusinessOnly, setInternalBusinessOnly] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const requestSeqRef = useRef(0);
-  const activeControllerRef = useRef<AbortController | null>(null);
 
-  const runSearch = (q: string) => {
-    if (!q.trim()) return;
-    requestSeqRef.current += 1;
-    const requestSeq = requestSeqRef.current;
-    activeControllerRef.current?.abort();
-    const controller = new AbortController();
-    activeControllerRef.current = controller;
-    setLoading(true);
-    setSearchError(false);
-    searchUsers(q, controller.signal)
-      .then((list) => {
-        if (requestSeq !== requestSeqRef.current) return;
-        setResults(list);
-        setOpen(true);
-      })
-      .catch((err) => {
-        if (requestSeq !== requestSeqRef.current) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setResults([]);
-        setSearchError(true);
-        setOpen(true);
-        toast({ title: "Ошибка поиска", variant: "destructive" });
-      })
-      .finally(() => {
-        if (requestSeq !== requestSeqRef.current) return;
-        setLoading(false);
-      });
-  };
+  const isBusinessOnly = businessOnly ?? internalBusinessOnly;
+  const setBusinessOnly = onBusinessOnlyChange ?? setInternalBusinessOnly;
 
   useEffect(() => {
     if (!query.trim()) {
-      activeControllerRef.current?.abort();
-      activeControllerRef.current = null;
-      setResults([]);
-      setSearchError(false);
-      setOpen(false);
-      setLoading(false);
+      setDebouncedQuery("");
       return;
     }
-    const t = setTimeout(() => runSearch(query), DEBOUNCE_MS);
-    return () => {
-      clearTimeout(t);
-      activeControllerRef.current?.abort();
-      activeControllerRef.current = null;
-    };
-  }, [query, toast]);
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const {
+    data: results = [],
+    isFetching,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ["search", "users", debouncedQuery, isBusinessOnly],
+    queryFn: ({ signal }) => searchUsers(debouncedQuery, signal, { businessOnly: isBusinessOnly }),
+    enabled: debouncedQuery.length > 0,
+    staleTime: SEARCH_STALE_MS,
+  });
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setOpen(false);
+      return;
+    }
+    if (debouncedQuery) setOpen(true);
+  }, [query, debouncedQuery]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -93,13 +84,15 @@ export function GlobalSearch({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const loading = Boolean(debouncedQuery) && isFetching;
+
   const handleStartChat = async (user: SearchUser) => {
     try {
       const chat = await startDm(user.id);
       setOpen(false);
       setQuery("");
       onClear?.();
-      setLocation(`/chat/${encodeURIComponent(chat.id)}`);
+      setLocation(buildChatPath(chat, chat.id));
     } catch (e) {
       toast({
         title: e instanceof Error ? e.message : "Не удалось начать диалог",
@@ -129,7 +122,10 @@ export function GlobalSearch({
   return (
     <div ref={containerRef} className={cn("relative flex-1", className)}>
       <div className="relative group">
-        <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary"
+          aria-hidden
+        />
         <input
           type="text"
           placeholder={placeholder}
@@ -155,13 +151,32 @@ export function GlobalSearch({
         )}
       </div>
 
+      {showBusinessToggle ? (
+      <div className="mt-1 flex items-center">
+        <button
+          type="button"
+          className={cn(
+            "inline-flex min-h-[var(--uix-touch-min)] items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors",
+            isBusinessOnly
+              ? "border-amber-400/50 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+              : "border-border text-muted-foreground hover:bg-muted/60",
+          )}
+          onClick={() => setBusinessOnly(!isBusinessOnly)}
+          aria-label="Только бизнес-профили"
+        >
+          <BriefcaseBusiness className="h-3.5 w-3.5" aria-hidden />
+          Бизнес-профили
+        </button>
+      </div>
+      ) : null}
+
       {open && query.trim() && (
         <div className="absolute top-full left-0 right-0 mt-1 z-[100] rounded-xl border border-border bg-popover text-popover-foreground shadow-xl ring-1 ring-black/5 dark:ring-white/10 overflow-hidden max-h-[min(60vh,320px)] overflow-y-auto">
           {loading ? (
             <div className="p-6 flex items-center justify-center min-h-[100px]">
               <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Поиск" />
             </div>
-          ) : searchError ? (
+          ) : isError ? (
             <div className="p-4 flex flex-col items-center gap-3">
               <div className="flex items-center gap-2 text-destructive text-sm">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -169,7 +184,7 @@ export function GlobalSearch({
               </div>
               <button
                 type="button"
-                onClick={() => runSearch(query)}
+                onClick={() => void refetch()}
                 className="min-h-[var(--uix-touch-min)] px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-transform duration-100"
               >
                 Повторить
@@ -193,9 +208,13 @@ export function GlobalSearch({
                       seed={user.id}
                       size={40}
                       className="h-10 w-10 shrink-0"
+                      pointerEventsNone
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[15px] font-medium">{formatUserDisplayName(user)}</p>
+                      <p className="flex items-center gap-1.5 truncate text-[15px] font-medium">
+                        <span className="truncate">{formatUserDisplayName(user)}</span>
+                        {user.businessStatus === "approved" ? <BusinessBadge compact className="shrink-0" /> : null}
+                      </p>
                       <p className="text-xs text-muted-foreground">{formatSearchUserSubtitle(user)}</p>
                     </div>
                   </button>

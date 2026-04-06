@@ -145,7 +145,6 @@ export type AdminReferralCode = {
 };
 
 export async function adminCreateReferralCode(opts?: {
-  format?: "phrase" | "digits";
   expiresInHours?: number;
 }): Promise<AdminReferralCode> {
   const res = await fetch(`${API}/admin/referrals/create`, {

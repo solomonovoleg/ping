@@ -3,10 +3,11 @@
  * Отдельный Sheet с вкладками «Медиа» и «Ссылки».
  */
 import { useState, useEffect, useCallback } from "react";
-import { Image, Link2, Mic, Video, Loader2 } from "lucide-react";
+import { FileText, Image, Link2, Mic, Table2, Video, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getChatMedia, getChatLinks } from "@/lib/chat";
 import { resolveUrl } from "@/lib/api-base";
+import { isNative } from "@/lib/capacitor-native";
 import {
   Sheet,
   SheetContent,
@@ -15,6 +16,10 @@ import {
 } from "@/components/ui/sheet";
 import { ListEmptyState } from "@/components/ui/empty";
 import { TapScaleButton } from "@/components/ui/tap-scale";
+import {
+  chatFileAttachmentKind,
+  parseChatFilePayload,
+} from "@/features/chat/utils/chat-file-payload";
 
 type Tab = "media" | "links";
 
@@ -35,7 +40,7 @@ export function ChatMediaLinksSheet({
   chatName: string;
   folderId?: string | null;
   /** Открыть медиа во встроенном просмотрщике (вместо внешнего окна) */
-  onOpenMedia?: (src: string, type: "image" | "video" | "video_note") => void;
+  onOpenMedia?: (src: string, type: "image" | "video" | "video_note" | "pdf", title?: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("media");
   const [media, setMedia] = useState<MediaItem[]>([]);
@@ -145,13 +150,32 @@ export function ChatMediaLinksSheet({
               <ListEmptyState
                 icon={Image}
                 title="Нет медиафайлов"
-                description="Фото, видео и голосовые сообщения появятся здесь"
+                description="Фото, видео, PDF, CSV, XLSX и голосовые сообщения появятся здесь"
               />
             ) : (
               <div className="grid grid-cols-3 gap-1.5">
                 {media.map((item) => {
-                  const url = resolveUrl(item.content);
-                  const mediaType = item.type === "image" ? "image" : item.type === "video" || item.type === "video_note" ? (item.type as "video" | "video_note") : null;
+                  let url = "";
+                  let fileTitle: string | undefined;
+                  let fileKind: "pdf" | "csv" | "xlsx" | null = null;
+                  if (item.type === "file") {
+                    const parsed = parseChatFilePayload(item.content);
+                    if (parsed) {
+                      url = resolveUrl(parsed.url);
+                      fileTitle = parsed.name;
+                      fileKind = chatFileAttachmentKind(parsed.mime, parsed.name);
+                    }
+                  } else {
+                    url = resolveUrl(item.content);
+                  }
+                  const mediaType =
+                    item.type === "image"
+                      ? "image"
+                      : item.type === "video" || item.type === "video_note"
+                        ? (item.type as "video" | "video_note")
+                        : item.type === "file" && fileKind === "pdf"
+                          ? ("pdf" as const)
+                          : null;
                   return (
                     <button
                       key={item.id}
@@ -159,10 +183,21 @@ export function ChatMediaLinksSheet({
                       onClick={() => {
                         if (!url) return;
                         if (mediaType && onOpenMedia) {
-                          onOpenMedia(url, mediaType);
+                          onOpenMedia(url, mediaType, fileTitle);
                           onOpenChange(false);
                         } else {
-                          window.open(url, "_blank", "noopener,noreferrer");
+                          if (isNative()) {
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.target = "_blank";
+                            a.rel = "noopener noreferrer";
+                            a.style.display = "none";
+                            document.body.appendChild(a);
+                            a.click();
+                            setTimeout(() => a.remove(), 100);
+                          } else {
+                            window.open(url, "_blank", "noopener,noreferrer");
+                          }
                         }
                       }}
                       className="aspect-square rounded-lg overflow-hidden bg-muted/50 block focus:outline-none focus:ring-2 focus:ring-primary/50 w-full text-left"
@@ -183,6 +218,27 @@ export function ChatMediaLinksSheet({
                           />
                           <Video className="absolute right-1 bottom-1 w-4 h-4 text-white drop-shadow" />
                         </div>
+                      ) : item.type === "file" ? (
+                        fileKind === "csv" ? (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-emerald-500/10 dark:bg-emerald-500/15 p-1">
+                            <Table2 className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
+                            <span className="text-[9px] font-medium text-emerald-800/90 dark:text-emerald-300/90">
+                              CSV
+                            </span>
+                          </div>
+                        ) : fileKind === "xlsx" ? (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-violet-500/10 dark:bg-violet-500/15 p-1">
+                            <Table2 className="w-7 h-7 text-violet-600 dark:text-violet-400" />
+                            <span className="text-[9px] font-medium text-violet-800/90 dark:text-violet-300/90">
+                              XLSX
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-red-500/10 dark:bg-red-500/15 p-1">
+                            <FileText className="w-7 h-7 text-red-600 dark:text-red-400" />
+                            <span className="text-[9px] font-medium text-red-700/90 dark:text-red-300/90">PDF</span>
+                          </div>
+                        )
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-muted">
                           <Mic className="w-6 h-6 text-muted-foreground" />

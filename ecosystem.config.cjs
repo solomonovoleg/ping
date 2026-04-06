@@ -49,6 +49,8 @@ const mainApp = {
   env: {
     NODE_ENV: "production",
     PORT: port,
+    // Как у feed-worker/parser: иначе PM2 может отдать процессу «урезанный» env — миграции пишут в одну БД, API ходит в другую.
+    ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
   },
 };
 

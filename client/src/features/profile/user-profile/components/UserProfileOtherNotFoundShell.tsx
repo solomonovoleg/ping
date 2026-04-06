@@ -2,8 +2,18 @@ import { ChevronLeft, UserX } from "lucide-react";
 import { ListEmptyState } from "@/components/ui/empty";
 import { userProfileRu } from "../i18n.ru";
 
-export function UserProfileOtherNotFoundShell({ onBack }: { onBack: () => void }) {
+export function UserProfileOtherNotFoundShell({
+  onBack,
+  onRetry,
+  showRetry,
+}: {
+  onBack: () => void;
+  /** Сеть / временная ошибка загрузки — не только «аккаунт удалён». */
+  onRetry?: () => void;
+  showRetry?: boolean;
+}) {
   const s = userProfileRu.shells;
+  const canRetry = Boolean(showRetry && onRetry);
   return (
     <div className="flex flex-col h-full min-h-0 w-full max-w-full overflow-x-hidden bg-background">
       <div className="uix-content-x py-3 flex items-center border-b border-border/50">
@@ -16,13 +26,15 @@ export function UserProfileOtherNotFoundShell({ onBack }: { onBack: () => void }
           <ChevronLeft className="w-6 h-6" />
         </button>
       </div>
-      <div className="flex-1 flex items-center justify-center p-4">
+      <div className="flex flex-1 items-center justify-center p-4">
         <ListEmptyState
           icon={UserX}
           title={s.otherNotFoundTitle}
-          description={s.otherNotFoundDesc}
+          description={canRetry ? `${s.otherNotFoundDesc} ${s.otherNotFoundNetworkHint}` : s.otherNotFoundDesc}
           actionLabel={s.toFeed}
           onAction={onBack}
+          secondaryActionLabel={canRetry ? s.retryLoadProfile : undefined}
+          onSecondaryAction={canRetry ? onRetry : undefined}
         />
       </div>
     </div>

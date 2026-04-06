@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
+import { Capacitor } from "@capacitor/core";
 import { CallController, type CallControllerSnapshot } from "./call-controller";
 import { CallSignalingClient } from "./call-signaling";
 import { useRealtimeContext } from "@/contexts/RealtimeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "@/hooks/use-toast";
+import { API, apiFetch } from "@/lib/api-base";
 import type { CallMediaType, CallStoreActions, CallReactionKind, CallMessageListContext } from "./call-types";
 
 const INITIAL_SNAPSHOT: CallControllerSnapshot = {
@@ -19,6 +21,7 @@ const INITIAL_SNAPSHOT: CallControllerSnapshot = {
   remoteStream: null,
   connectionState: null,
   networkQuality: "unknown",
+  videoQualityMode: "auto",
   cameraFacingMode: "user",
   isScreenShareActive: false,
   remoteScreenShareActive: false,
@@ -53,6 +56,8 @@ const INITIAL_SNAPSHOT: CallControllerSnapshot = {
 export function useCallStore() {
   const { user } = useAuth();
   const realtime = useRealtimeContext();
+  const realtimeRef = useRef(realtime);
+  realtimeRef.current = realtime;
   const [snapshot, setSnapshot] = useState<CallControllerSnapshot>(INITIAL_SNAPSHOT);
 
   const signalingRef = useRef<CallSignalingClient | null>(null);
@@ -66,30 +71,39 @@ export function useCallStore() {
     signalingRef.current?.updateTransport(realtime.sendJson);
   }, [realtime.sendJson]);
 
-  useEffect(() => {
-    if (!user?.id || !signalingRef.current) return;
+  /**
+   * useLayoutEffect: сразу вешаем callMessageHandlerRef до отрисовки, чтобы первое call.incoming
+   * с WS не ушло в пустой ref между эффектами.
+   */
+  useLayoutEffect(() => {
+    const signaling = signalingRef.current;
+    if (!signaling) return;
 
-    const ctrl = new CallController(signalingRef.current, user.id);
+    const { callMessageHandlerRef } = realtimeRef.current;
+    callMessageHandlerRef.current = (raw) => signaling.handleRawMessage(raw);
+
+    if (!user?.id) {
+      controllerRef.current?.destroy();
+      controllerRef.current = null;
+      setSnapshot(INITIAL_SNAPSHOT);
+      return () => {
+        realtimeRef.current.callMessageHandlerRef.current = () => {};
+      };
+    }
+
+    const ctrl = new CallController(signaling, user.id);
     controllerRef.current = ctrl;
 
     const unsub = ctrl.subscribe((snap) => setSnapshot(snap));
 
     return () => {
+      realtimeRef.current.callMessageHandlerRef.current = () => {};
       unsub();
       ctrl.destroy();
       controllerRef.current = null;
       setSnapshot(INITIAL_SNAPSHOT);
     };
   }, [user?.id]);
-
-  // Один обработчик на весь транспорт: ref-объект стабилен → эффект не дублируется при ререндерах.
-  useEffect(() => {
-    const signaling = signalingRef.current;
-    if (!signaling) return;
-    realtime.callMessageHandlerRef.current = (raw) => {
-      signaling.handleRawMessage(raw);
-    };
-  }, [realtime.callMessageHandlerRef]);
 
   // Wire transport disconnect → controller
   useEffect(() => {
@@ -103,6 +117,92 @@ export function useCallStore() {
       controllerRef.current?.onTransportConnected();
     };
   }, [realtime.onSocketConnectedRef]);
+
+  /** iOS: VoIP-токен на сервер + ответ/сброс из CallKit → WebRTC. */
+  useEffect(() => {
+    if (!user?.id) return;
+    let platform: string;
+    try {
+      platform = Capacitor.getPlatform();
+    } catch {
+      return;
+    }
+    if (platform !== "ios") return;
+
+    let cancelled = false;
+    let removeVoip: (() => void) | undefined;
+    let removeKit: (() => void) | undefined;
+
+    const postVoipToken = (token: string) =>
+      apiFetch(`${API}/users/me/voip-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+        suppressSessionExpireOn401: true,
+      }).catch(() => {});
+
+    const processCallKitPayload = async (raw: Record<string, string>) => {
+      const action = raw.action;
+      const callId = raw.callId;
+      const fromUserId = raw.fromUserId;
+      const chatId = raw.chatId;
+      if (!action || !callId || !fromUserId || !chatId) return;
+      const mediaType: CallMediaType = raw.mediaType === "video" ? "video" : "audio";
+      const fromDisplayName = raw.fromDisplayName?.trim() || "Абонент";
+      const ctrl = controllerRef.current;
+      if (!ctrl || cancelled) return;
+      try {
+        await realtimeRef.current.ensureOpenWs();
+      } catch {
+        return;
+      }
+      ctrl.applyIncomingRingingFromNativeVoip(
+        {
+          callId,
+          fromUserId,
+          fromDisplayName,
+          fromAvatarUrl: null,
+          chatId,
+          mediaType,
+        },
+        { skipAlert: true },
+      );
+      if (action === "answer") {
+        await ctrl.acceptCall();
+      } else if (action === "reject") {
+        ctrl.rejectCall();
+      }
+    };
+
+    void (async () => {
+      const { PingCallKitVoip } = await import("@/lib/ping-callkit-voip");
+      const hVoip = await PingCallKitVoip.addListener("pingVoipToken", (ev) => {
+        const t = typeof ev?.token === "string" ? ev.token.trim() : "";
+        if (t && !cancelled) void postVoipToken(t);
+      });
+      removeVoip = () => void hVoip.remove();
+
+      const hKit = await PingCallKitVoip.addListener("pingCallKitAction", (ev) => {
+        void processCallKitPayload(ev as Record<string, string>);
+      });
+      removeKit = () => void hKit.remove();
+
+      try {
+        const { actions } = await PingCallKitVoip.getPendingCallKitActions();
+        for (const a of actions) {
+          await processCallKitPayload(a);
+        }
+      } catch {
+        /* */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      removeVoip?.();
+      removeKit?.();
+    };
+  }, [user?.id]);
 
   const startCall = useCallback(
     async (
@@ -174,8 +274,17 @@ export function useCallStore() {
   }, []);
 
   const retryCall = useCallback(() => {
-    controllerRef.current?.retryCall();
-  }, []);
+    void (async () => {
+      try {
+        await realtime.ensureOpenWs();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Не удалось подключиться к серверу звонков";
+        toast({ title: msg, variant: "destructive" });
+        return;
+      }
+      controllerRef.current?.retryCall();
+    })();
+  }, [realtime]);
 
   const switchCamera = useCallback(async () => {
     await controllerRef.current?.switchCamera();
@@ -201,6 +310,10 @@ export function useCallStore() {
     controllerRef.current?.toggleCaptions();
   }, []);
 
+  const toggleVideoHd = useCallback(() => {
+    controllerRef.current?.toggleVideoHd();
+  }, []);
+
   const actions: CallStoreActions = useMemo(
     () => ({
       startCall,
@@ -216,6 +329,7 @@ export function useCallStore() {
       toggleRecordingPause,
       sendReaction,
       toggleCaptions,
+      toggleVideoHd,
       retryCall,
     }),
     [
@@ -232,6 +346,7 @@ export function useCallStore() {
       toggleRecordingPause,
       sendReaction,
       toggleCaptions,
+      toggleVideoHd,
       retryCall,
     ],
   );

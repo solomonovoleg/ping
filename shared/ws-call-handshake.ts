@@ -5,13 +5,17 @@
 
 export const CALL_WS_SUBPROTOCOL = "ping.call.v1";
 
-/** Matches server/calls/token.ts randomToken (24 bytes → 48 hex chars). */
-export const CALL_WS_TOKEN_HEX_LEN = 48;
+/** Исторически: только `randomBytes(24).toString("hex")` (48 символов). */
+export const CALL_WS_TOKEN_HEX_LEN_LEGACY = 48;
+/** Текущий `server/calls/token.ts`: 48 hex + UUID без дефисов (32 hex) = 80. */
+export const CALL_WS_TOKEN_HEX_LEN = 80;
 
 export type ResolvedCallHandshake = { kind: "subprotocol" | "legacy"; token: string };
 
 function isHexSessionToken(s: string): boolean {
-  return s.length === CALL_WS_TOKEN_HEX_LEN && /^[a-f0-9]+$/.test(s);
+  if (!/^[a-f0-9]+$/.test(s)) return false;
+  const len = s.length;
+  return len === CALL_WS_TOKEN_HEX_LEN_LEGACY || len === CALL_WS_TOKEN_HEX_LEN;
 }
 
 /**

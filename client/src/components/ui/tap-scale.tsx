@@ -100,3 +100,40 @@ const TapScaleDiv = forwardRef<HTMLDivElement, TapScaleDivProps>(
 TapScaleDiv.displayName = "TapScaleDiv";
 
 export { TapScaleDiv };
+
+export interface TapScaleAProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
+  /** Более мягкий scale (по умолчанию) для строк списка */
+  subtle?: boolean;
+}
+
+/** Ссылка с тем же spring-scale, что у строк списка (внешние URL, mailto). */
+const TapScaleA = forwardRef<HTMLAnchorElement, TapScaleAProps>(
+  ({ subtle = true, className, children, ...rest }, ref) => {
+    const reduced = usePrefersReducedMotion();
+    const scale = subtle ? TAP_SCALE_SUBTLE : TAP_SCALE;
+
+    if (reduced) {
+      return (
+        <a ref={ref} className={cn(className)} {...rest}>
+          {children}
+        </a>
+      );
+    }
+
+    return (
+      <motion.a
+        ref={ref as React.Ref<HTMLAnchorElement>}
+        className={cn(className)}
+        whileTap={{ scale }}
+        transition={SPRING_TAP}
+        {...(rest as React.ComponentProps<typeof motion.a>)}
+      >
+        {children}
+      </motion.a>
+    );
+  }
+);
+
+TapScaleA.displayName = "TapScaleA";
+
+export { TapScaleA };

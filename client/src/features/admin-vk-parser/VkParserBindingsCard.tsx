@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPanelCard } from "@/features/admin-shell";
+import { cn } from "@/lib/utils";
 import { ListEmptyState } from "@/components/ui/empty";
 import type { AdminVkParserBinding } from "@/lib/admin";
 import { AlertCircle, Inbox, Play, Trash2 } from "lucide-react";
@@ -29,16 +30,21 @@ export function VkParserBindingsCard(props: {
 
   return (
     <>
-      <Card className={props.fetching && !props.loading ? "opacity-95 transition-opacity" : ""}>
-        <CardHeader>
-          <CardTitle className="text-lg" id="vk-parser-bindings-title">
+      <AdminPanelCard
+        className={cn(
+          "space-y-3 p-5 sm:p-6",
+          props.fetching && !props.loading && "opacity-95 transition-opacity",
+        )}
+      >
+        <div>
+          <h2 className="text-lg font-semibold text-[hsl(210_20%_98%)]" id="vk-parser-bindings-title">
             Привязки
-          </CardTitle>
-          <CardDescription>
+          </h2>
+          <p className="mt-1 text-sm admin-text-muted">
             Пользователь платформы, токен ВК и стена (owner_id). Отсюда же запускается ручной опрос.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           {props.loading ? (
             <VkParserBindingsSkeleton />
           ) : props.error ? (
@@ -134,8 +140,8 @@ export function VkParserBindingsCard(props: {
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </AdminPanelCard>
 
       <VkParserDeleteBindingAlert
         open={!!toDelete}

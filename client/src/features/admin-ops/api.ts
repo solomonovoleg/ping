@@ -1,4 +1,4 @@
-import { API, apiFetch } from "@/lib/api-base";
+import { API, apiFetch, toApiRequestError } from "@/lib/api-base";
 
 function adminOpsFetch(path: string, init?: RequestInit) {
   return apiFetch(`${API}${path}`, { ...init, credentials: "include" });
@@ -11,11 +11,13 @@ export type PlatformOpsDto = {
   maintenanceMode: boolean;
   /** Ужесточить лимиты для неавторизованных запросов к API */
   strictApiShield: boolean;
+  /** Регистрация со звонком New-Tel (если ключи на сервере заданы) */
+  registrationPhoneCallVerificationEnabled: boolean;
 };
 
 export async function fetchOpsPlatform(): Promise<PlatformOpsDto> {
   const res = await adminOpsFetch("/admin/ops/platform");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -37,6 +39,9 @@ export type OpsReportRow = {
   reporterUserId: string;
   targetType: string;
   targetId: string;
+  contextPostId: string | null;
+  contextChatId: string | null;
+  reasonCode: string | null;
   reason: string;
   status: string;
   adminNote: string | null;
@@ -55,7 +60,7 @@ export async function fetchOpsReports(opts: {
   if (opts.limit != null) p.set("limit", String(opts.limit));
   if (opts.offset != null) p.set("offset", String(opts.offset));
   const res = await adminOpsFetch(`/admin/ops/reports?${p}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -72,6 +77,35 @@ export async function patchOpsReport(
     const d = await res.json().catch(() => ({}));
     throw new Error((d as { message?: string }).message || "Ошибка");
   }
+}
+
+async function deleteOpsExpectNoContent(path: string, body?: Record<string, string>): Promise<void> {
+  const res = await adminOpsFetch(path, {
+    method: "DELETE",
+    ...(body
+      ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+      : {}),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error((d as { message?: string }).message || "Ошибка удаления");
+  }
+}
+
+export async function deleteOpsModerationPost(postId: string): Promise<void> {
+  await deleteOpsExpectNoContent(`/admin/ops/content/post/${encodeURIComponent(postId)}`);
+}
+
+export async function deleteOpsModerationStory(storyId: string): Promise<void> {
+  await deleteOpsExpectNoContent(`/admin/ops/content/story/${encodeURIComponent(storyId)}`);
+}
+
+export async function deleteOpsModerationMessage(chatId: string, messageId: string): Promise<void> {
+  await deleteOpsExpectNoContent("/admin/ops/content/message", { chatId, messageId });
+}
+
+export async function deleteOpsModerationComment(postId: string, commentId: string): Promise<void> {
+  await deleteOpsExpectNoContent("/admin/ops/content/comment", { postId, commentId });
 }
 
 export type AnnouncementDto = {
@@ -118,7 +152,7 @@ export type TrafficShieldDto = {
 
 export async function fetchOpsTrafficShield(): Promise<TrafficShieldDto> {
   const res = await adminOpsFetch("/admin/ops/traffic-shield");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -151,11 +185,41 @@ export type ModulesTelemetryDto = {
   uptimeSec: number;
   modules: ModulesTelemetryRow[];
   recentErrors: ModulesTelemetryRecentError[];
+  clientTelemetry?: {
+    tablePasteFallback: {
+      counts: {
+        fallback_shown: number;
+        retry_clicked: number;
+        reopen_success: number;
+      };
+      uniqueUsers: number;
+      recent: Array<{
+        at: string;
+        event: "fallback_shown" | "retry_clicked" | "reopen_success";
+        chatId: string;
+        cols: number;
+        rows: number;
+        viaRetry: boolean;
+        userId: string;
+      }>;
+    };
+    iseeTimeToFirstPlay?: {
+      count: number;
+      uniqueUsers: number;
+      recent: Array<{
+        at: string;
+        userId: string;
+        ms: number;
+        postId: string;
+        connectionType: string | null;
+      }>;
+    };
+  };
 };
 
 export async function fetchModulesTelemetry(): Promise<ModulesTelemetryDto> {
   const res = await adminOpsFetch("/admin/modules-telemetry");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }
 
@@ -207,6 +271,8 @@ export type DiskOpsReportDto = {
   statfsPath: string;
   projectPath: string;
   s3Configured: boolean;
+  mediaStorageMode: "s3" | "local";
+  s3BucketProbe: { ran: false } | { ran: true; ok: true } | { ran: true; ok: false; error: string };
   mount: DiskMountStatsDto | null;
   mountError: string | null;
   host: ServerHostSnapshotDto;
@@ -215,6 +281,6 @@ export type DiskOpsReportDto = {
 
 export async function fetchOpsDisk(): Promise<DiskOpsReportDto> {
   const res = await adminOpsFetch("/admin/ops/disk");
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await toApiRequestError(res);
   return res.json();
 }

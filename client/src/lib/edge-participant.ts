@@ -12,11 +12,77 @@ export type EdgeGameScriptMetrics = {
   dailyPetCount: number;
 };
 
+export type EdgeLifeSimQueueItem = {
+  id: string;
+  kind: "feed" | "toilet" | "play" | "calm";
+  spawnedAt: string;
+  respondUntilAt: string;
+  penalized: boolean;
+  overdue: boolean;
+};
+
+/** Рейтинг жизни и очередь запросов (`companion.lifeSimulation` в кампании). */
+export type EdgeLifeSimulationState =
+  | {
+      enabled: true;
+      lifeRating: number;
+      lifeMin: number;
+      lifeMax: number;
+      needQueue: EdgeLifeSimQueueItem[];
+    }
+  | { enabled: false };
+
+/** Начисление за задание (как в EDGE `taskGrants`). */
+export type EdgeTaskGrant = {
+  taskKey: string;
+  refKey: string;
+  xpAwarded: number;
+  createdAt: string;
+};
+
+/** Строка прогресса по пресету — с сервера в `participant/state`. */
+export type EdgeTaskProgressLine = {
+  taskKey: string;
+  scoreTarget: "primary" | "secondary";
+  tracking: "edge" | "platform" | "honor";
+  claimed: boolean;
+  xpAwardedIfClaimed: number | null;
+  current: number | null;
+  target: number | null;
+  ratio: number | null;
+  satisfied: boolean;
+  readyToClaim: boolean;
+};
+
+export type EdgeTaskQuestSummary = {
+  presetTotal: number;
+  objectiveTotal: number;
+  completedObjective: number;
+  edgeIncomplete: number;
+  edgeReadyToClaim: number;
+  platformOpen: number;
+  blockedConfig: number;
+};
+
+const EMPTY_TASK_QUEST_SUMMARY: EdgeTaskQuestSummary = {
+  presetTotal: 0,
+  objectiveTotal: 0,
+  completedObjective: 0,
+  edgeIncomplete: 0,
+  edgeReadyToClaim: 0,
+  platformOpen: 0,
+  blockedConfig: 0,
+};
+
 export type EdgeParticipantState = {
   edgeId: string;
   platformUserId: string;
   level: number;
   xp: number;
+  /** Очки основного рейтинга (игра/персонаж). */
+  primaryXp?: number;
+  /** Очки дополнительного рейтинга (задания ленты и т.д.). */
+  secondaryXp?: number;
   mood: string;
   happyScore: number;
   careStreakDays: number;
@@ -40,7 +106,40 @@ export type EdgeParticipantState = {
     play: number;
     target: number;
   };
+  /** Сквозной счётчик тапов по персонажу (онбординг EDGE). */
+  introTapCount?: number;
+  /** Нет в старых ответах — считаем выключенным. */
+  lifeSimulation?: EdgeLifeSimulationState;
+  taskGrants?: EdgeTaskGrant[];
+  taskProgress?: EdgeTaskProgressLine[];
+  taskQuestSummary?: EdgeTaskQuestSummary;
 };
+
+function normalizeParticipantState(raw: EdgeParticipantState): EdgeParticipantState {
+  const xp = raw.xp;
+  return {
+    ...raw,
+    primaryXp: raw.primaryXp ?? xp,
+    secondaryXp: raw.secondaryXp ?? 0,
+    lifeSimulation: raw.lifeSimulation ?? { enabled: false },
+    taskGrants: Array.isArray(raw.taskGrants) ? raw.taskGrants : [],
+    taskProgress: Array.isArray(raw.taskProgress) ? raw.taskProgress : [],
+    taskQuestSummary:
+      raw.taskQuestSummary && typeof raw.taskQuestSummary === "object"
+        ? {
+            presetTotal: Number((raw.taskQuestSummary as EdgeTaskQuestSummary).presetTotal) || 0,
+            objectiveTotal: Number((raw.taskQuestSummary as EdgeTaskQuestSummary).objectiveTotal) || 0,
+            completedObjective:
+              Number((raw.taskQuestSummary as EdgeTaskQuestSummary).completedObjective) || 0,
+            edgeIncomplete: Number((raw.taskQuestSummary as EdgeTaskQuestSummary).edgeIncomplete) || 0,
+            edgeReadyToClaim:
+              Number((raw.taskQuestSummary as EdgeTaskQuestSummary).edgeReadyToClaim) || 0,
+            platformOpen: Number((raw.taskQuestSummary as EdgeTaskQuestSummary).platformOpen) || 0,
+            blockedConfig: Number((raw.taskQuestSummary as EdgeTaskQuestSummary).blockedConfig) || 0,
+          }
+        : { ...EMPTY_TASK_QUEST_SUMMARY },
+  };
+}
 
 export type EdgeLeaderboardEntry = {
   rank: number;
@@ -48,10 +147,15 @@ export type EdgeLeaderboardEntry = {
   level: number;
   careStreakDays: number;
   isMe: boolean;
+  /** Имя для UI (платформа обогащает из профиля). */
+  displayName?: string;
+  avatarUrl?: string | null;
 };
 
 export type EdgeLeaderboardPayload = {
   edgeId: string;
+  kind?: "primary" | "secondary";
+  frozen?: boolean;
   entries: EdgeLeaderboardEntry[];
   totalParticipants: number;
   myRank: number | null;
@@ -82,7 +186,9 @@ export type EdgeTaskRewardResponse = {
     | "not_published"
     | "deadline_passed"
     | "invalid_preset"
-    | "verification_failed";
+    | "verification_failed"
+    | "leaderboard_frozen"
+    | "honor_disabled";
 };
 
 export class EdgePresetVerificationError extends Error {
@@ -120,6 +226,8 @@ function presetVerificationMessageRu(reason: string): string {
       return "Нужно больше реакций на посты в PING.";
     case "user_not_found":
       return "Профиль не найден.";
+    case "honor_task_disabled":
+      return "Тип задания «без проверки» отключён: организатор должен задать реальное условие (пост, питомец, приглашения и т.д.).";
     default:
       return "Условие задания ещё не выполнено.";
   }
@@ -132,6 +240,8 @@ export type PingInvitePackResult = {
   ok: true;
   chatId: string;
   codesCount: number;
+  inviteIssueMode?: "batch_min_count" | "single_per_request" | "one_multi_use";
+  maxUses?: number;
   hint?: string;
 };
 
@@ -166,6 +276,20 @@ export async function postEdgePingInvitePack(edgeId: string, taskKey: string): P
       if (j.error === "dm_failed") {
         throw new Error(typeof j.message === "string" && j.message.trim() ? j.message : "Не удалось отправить ЛС.");
       }
+      if (j.error === "preset_verification_failed") {
+        const reason = (j as { reason?: string }).reason;
+        if (reason === "not_enough_invites") {
+          throw new Error("Сначала пригласите нужное число друзей по правилам задания.");
+        }
+        throw new Error("Условия задания ещё не выполнены. Проверьте прогресс и попробуйте снова.");
+      }
+      if (j.error === "invite_pack_failed") {
+        throw new Error(
+          typeof j.message === "string" && j.message.trim()
+            ? j.message
+            : "Не удалось выдать коды. Повторите позже.",
+        );
+      }
       if (j.error === "edge_companion_unavailable" || j.error === "edge_companion_invalid") {
         throw new Error("Конфиг кампании временно недоступен. Повторите позже.");
       }
@@ -194,6 +318,16 @@ export async function postEdgeParticipantTask(
   });
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
+    if (res.status === 429) {
+      let sec = 5;
+      try {
+        const j = JSON.parse(text) as { retryAfterSec?: number; error?: string };
+        if (typeof j.retryAfterSec === "number" && j.retryAfterSec > 0) sec = j.retryAfterSec;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(`Слишком частые запросы награды. Повторите через ~${sec} сек.`);
+    }
     if (res.status === 403) {
       try {
         const j = JSON.parse(text) as { error?: string; reason?: string };
@@ -206,7 +340,8 @@ export async function postEdgeParticipantTask(
     }
     throw new Error(text || `${res.status}`);
   }
-  return (await res.json()) as EdgeTaskRewardResponse;
+  const raw = (await res.json()) as EdgeTaskRewardResponse;
+  return { ...raw, state: normalizeParticipantState(raw.state) };
 }
 
 export async function fetchEdgeParticipantState(edgeId: string): Promise<EdgeParticipantState> {
@@ -219,7 +354,7 @@ export async function fetchEdgeParticipantState(edgeId: string): Promise<EdgePar
     const text = (await res.text()) || res.statusText;
     throw new Error(text || `${res.status}`);
   }
-  return (await res.json()) as EdgeParticipantState;
+  return normalizeParticipantState((await res.json()) as EdgeParticipantState);
 }
 
 export async function postEdgeParticipantFeed(edgeId: string): Promise<EdgeParticipantState> {
@@ -241,14 +376,14 @@ export async function postEdgeParticipantFeed(edgeId: string): Promise<EdgeParti
     }
     throw new Error(errBody || res.statusText || `${res.status}`);
   }
-  return (await res.json()) as EdgeParticipantState;
+  return normalizeParticipantState((await res.json()) as EdgeParticipantState);
 }
 
 function formatEdgeParticipantFetchError(res: Response, rawBody: string): string {
   const t = rawBody.trim();
   const lower = t.toLowerCase();
   if (res.status === 404 || lower === "not found" || lower.includes("<!doctype")) {
-    return "Лидерборд не отвечает. Обновите страницу; если так и будет — напишите в поддержку.";
+    return "Список участников сейчас не открывается. Обновите экран или зайдите позже.";
   }
   try {
     const j = JSON.parse(t) as { error?: string; message?: string };
@@ -267,8 +402,12 @@ function formatEdgeParticipantFetchError(res: Response, rawBody: string): string
   return res.statusText || `Ошибка ${res.status}`;
 }
 
-export async function fetchEdgeLeaderboard(edgeId: string, limit = 30): Promise<EdgeLeaderboardPayload> {
-  const qs = new URLSearchParams({ edgeId: edgeId.trim(), limit: String(limit) });
+export async function fetchEdgeLeaderboard(
+  edgeId: string,
+  limit = 30,
+  kind: "primary" | "secondary" = "primary",
+): Promise<EdgeLeaderboardPayload> {
+  const qs = new URLSearchParams({ edgeId: edgeId.trim(), limit: String(limit), kind });
   const res = await apiFetch(`${API}/edge/participant/leaderboard?${qs}`, {
     method: "GET",
     credentials: "include",
@@ -297,8 +436,17 @@ export async function postEdgeParticipantInteract(
     if (res.status === 429) {
       let msg = "Подождите, действие ещё на перезарядке.";
       try {
-        const j = (await res.json()) as { nextAvailableAt?: string };
-        if (j.nextAvailableAt) {
+        const j = (await res.json()) as {
+          nextAvailableAt?: string;
+          error?: string;
+          retryAfterSec?: number;
+        };
+        if (j.error === "tap_rate_limited" && typeof j.retryAfterSec === "number" && j.retryAfterSec > 0) {
+          msg =
+            j.retryAfterSec <= 8
+              ? "Слишком частые тапы. Подождите несколько секунд."
+              : `Слишком много тапов подряд. Повторите примерно через ${j.retryAfterSec} сек.`;
+        } else if (j.nextAvailableAt) {
           const t = new Date(j.nextAvailableAt);
           if (!Number.isNaN(t.getTime())) {
             msg = `Снова можно после ${t.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
@@ -322,5 +470,5 @@ export async function postEdgeParticipantInteract(
     const text = (await res.text()) || res.statusText;
     throw new Error(text || `${res.status}`);
   }
-  return (await res.json()) as EdgeParticipantState;
+  return normalizeParticipantState((await res.json()) as EdgeParticipantState);
 }

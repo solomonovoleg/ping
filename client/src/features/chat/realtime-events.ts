@@ -26,12 +26,30 @@ export type ChatVibeUpdateDetail = {
   visualIntensity: number;
 };
 
+export type ChatVibeTensionPulseDetail = {
+  chatId: string;
+  senderId: string;
+  at: number;
+};
+
+/** WS «пульс передачи» из композера лички (собеседник + список чатов). */
+export type ComposerTransferPulseDetail = {
+  chatId: string;
+  userId: string;
+  displayName: string | null;
+  at: number;
+};
+
 const EVT_CHAT_LIST_UPDATE = "ping:chat-list-update";
 const EVT_INCOMING_CHAT_MESSAGE_HINT = "ping:incoming-chat-message-hint";
+const EVT_REALTIME_SOCKET_CONNECTED = "ping:realtime-socket-connected";
 const EVT_CHAT_READ = "ping:chat-read";
 const EVT_MESSAGE_REACTION = "ping:message-reaction";
 const EVT_MESSAGE_EDITED = "ping:message-edited";
 const EVT_CHAT_VIBE_UPDATE = "ping:chat-vibe-update";
+const EVT_CHAT_VIBE_TENSION_PULSE = "ping:chat-vibe-tension-pulse";
+const EVT_COMPOSER_TRANSFER_PULSE = "ping:composer-transfer-pulse";
+const EVT_COMPOSER_PULSE_PENDING_RESOLVED = "ping:composer-pulse-pending-resolved";
 
 function emit<T>(name: string, detail?: T): void {
   if (typeof window === "undefined") return;
@@ -56,6 +74,17 @@ export function onChatListUpdate(handler: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   window.addEventListener(EVT_CHAT_LIST_UPDATE, handler);
   return () => window.removeEventListener(EVT_CHAT_LIST_UPDATE, handler);
+}
+
+/** После открытия /calls WebSocket (в т.ч. реконнект): подтянуть метаданные открытого чата, если вкладка видима. */
+export function emitRealtimeSocketConnected(): void {
+  emit(EVT_REALTIME_SOCKET_CONNECTED);
+}
+
+export function onRealtimeSocketConnected(handler: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(EVT_REALTIME_SOCKET_CONNECTED, handler);
+  return () => window.removeEventListener(EVT_REALTIME_SOCKET_CONNECTED, handler);
 }
 
 export type IncomingChatMessageHintDetail = { chatId: string; senderId: string };
@@ -138,4 +167,28 @@ export function emitChatVibeUpdate(detail: ChatVibeUpdateDetail): void {
 
 export function onChatVibeUpdate(handler: (detail: ChatVibeUpdateDetail) => void): () => void {
   return on(EVT_CHAT_VIBE_UPDATE, handler);
+}
+
+export function emitChatVibeTensionPulse(detail: ChatVibeTensionPulseDetail): void {
+  emit(EVT_CHAT_VIBE_TENSION_PULSE, detail);
+}
+
+export function onChatVibeTensionPulse(handler: (detail: ChatVibeTensionPulseDetail) => void): () => void {
+  return on(EVT_CHAT_VIBE_TENSION_PULSE, handler);
+}
+
+export function emitComposerTransferPulse(detail: ComposerTransferPulseDetail): void {
+  emit(EVT_COMPOSER_TRANSFER_PULSE, detail);
+}
+
+export function onComposerTransferPulse(handler: (detail: ComposerTransferPulseDetail) => void): () => void {
+  return on(EVT_COMPOSER_TRANSFER_PULSE, handler);
+}
+
+export function emitComposerPulsePendingResolved(detail: { chatId: string }): void {
+  emit(EVT_COMPOSER_PULSE_PENDING_RESOLVED, detail);
+}
+
+export function onComposerPulsePendingResolved(handler: (detail: { chatId: string }) => void): () => void {
+  return on(EVT_COMPOSER_PULSE_PENDING_RESOLVED, handler);
 }

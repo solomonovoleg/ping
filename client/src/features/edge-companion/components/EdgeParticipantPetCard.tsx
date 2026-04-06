@@ -15,7 +15,6 @@ import {
 import { TapScaleButton } from "@/components/ui/tap-scale";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorWithRetry } from "@/components/ui/empty";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +25,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   EdgeCampaignLockedError,
   EdgeInteractCooldownError,
+  fetchEdgeLeaderboard,
   fetchEdgeParticipantState,
   postEdgeParticipantFeed,
   postEdgeParticipantInteract,
@@ -37,15 +37,12 @@ import {
   getHungerLevel,
   hungerBadgeLabel,
 } from "@/features/edge-companion/edge-pet-display-helpers";
-import { EdgePresetTasksCard } from "@/features/edge-companion/components/EdgePresetTasksCard";
 import { EdgeCompanionCharacterHero } from "@/features/edge-companion/components/EdgeCompanionCharacterHero";
 import {
   EDGE_FEED_NEW_PLAYER_SUBLINE,
   hasStartedEdgePlay,
 } from "@/features/edge-companion/edge-feed-play-state";
 import type { CompanionCharacterConfig } from "@/features/edge-companion/companion-surfaces/types";
-import type { EdgeTaskPresetPublic } from "@/lib/edge-gamification";
-import { EDGE_CHIP_ACCENT, EDGE_CHIP_WARN } from "@/features/edge-companion/edge-uix";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +52,17 @@ const ACTIVE_NEED_RU: Record<"hungry" | "dirty" | "bored" | "anxious", string> =
   bored: "Хочет поиграть",
   anxious: "Нуждается в спокойствии",
 };
+
+const LIFE_QUEUE_RU: Record<"feed" | "toilet" | "play" | "calm", string> = {
+  feed: "Покормить",
+  toilet: "Туалет",
+  play: "Поиграть",
+  calm: "Успокоить",
+};
+
+function clampPct(n: number): number {
+  return Math.max(0, Math.min(100, n));
+}
 
 type ActionKind = "feed" | EdgeInteractKind;
 
@@ -77,7 +85,8 @@ type Props = {
   campaignTitle?: string;
   character?: CompanionCharacterConfig | null;
   interactLocked?: boolean;
-  taskPresets?: EdgeTaskPresetPublic[];
+  /** Есть ли экран «Задания» в свайпе — показываем короткую подсказку. */
+  showTasksPagerHint?: boolean;
   giftTemplates?: unknown[];
 };
 
@@ -90,7 +99,7 @@ export function EdgeParticipantPetCard({
   campaignTitle: _campaignTitle,
   character,
   interactLocked,
-  taskPresets = [],
+  showTasksPagerHint = false,
   giftTemplates = [],
 }: Props) {
   const { toast } = useToast();
@@ -102,6 +111,13 @@ export function EdgeParticipantPetCard({
     queryFn: () => fetchEdgeParticipantState(edgeId),
     enabled: Boolean(edgeId),
     retry: 1,
+  });
+
+  const leaderboardQuery = useQuery({
+    queryKey: ["edge", "participant", "leaderboard", edgeId],
+    queryFn: () => fetchEdgeLeaderboard(edgeId, 30),
+    enabled: Boolean(edgeId),
+    staleTime: 60_000,
   });
 
   const feedMutation = useMutation({
@@ -216,6 +232,14 @@ export function EdgeParticipantPetCard({
   const activeNeedHint =
     s.activeNeed && ACTIVE_NEED_RU[s.activeNeed] ? ACTIVE_NEED_RU[s.activeNeed] : null;
   const careHint = formatCareDeadlineHint(s.careDeadlineAt ?? null);
+  const life = s.lifeSimulation?.enabled === true ? s.lifeSimulation : null;
+  const lifePct =
+    life && life.lifeMax > life.lifeMin
+      ? Math.round(
+          ((life.lifeRating - life.lifeMin) / (life.lifeMax - life.lifeMin)) * 100,
+        )
+      : 0;
+  const myRank = leaderboardQuery.data?.myRank;
 
   const started = hasStartedEdgePlay(s);
   const showStartCta = !locked && !started;
@@ -245,15 +269,39 @@ export function EdgeParticipantPetCard({
     (effectiveKind !== "feed" && feedMutation.isPending);
 
   return (
-    <section className="space-y-[var(--uix-space-4)] pb-[var(--uix-space-6)] pt-[var(--uix-space-2)]" aria-label="Персонаж кампании EDGE">
-      <div className="flex flex-wrap items-center gap-2">
+    <section
+      className="space-y-[var(--uix-space-4)] rounded-3xl border border-primary/12 bg-gradient-to-b from-primary/[0.06] via-transparent to-transparent px-1 pb-[var(--uix-space-6)] pt-[var(--uix-space-2)] dark:from-primary/[0.08]"
+      aria-label="Персонаж и уход"
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-xl bg-primary/[0.05] px-2 py-1.5 text-[11px] text-foreground/80 dark:bg-primary/[0.07]">
+        {life ? (
+          <span
+            className="inline-flex flex-col gap-0.5 font-medium text-emerald-800 dark:text-emerald-300/95"
+            title="Рейтинг жизни персонажа"
+          >
+            <span className="tabular-nums">
+              Жизнь {life.lifeRating}/{life.lifeMax}
+            </span>
+            <span className="h-[3px] w-[4.5rem] max-w-full overflow-hidden rounded-full bg-muted/60">
+              <span
+                className="block h-full rounded-full bg-emerald-500/90 dark:bg-emerald-400/90"
+                style={{ width: `${clampPct(lifePct)}%` }}
+              />
+            </span>
+          </span>
+        ) : null}
+        {typeof myRank === "number" ? (
+          <span className="font-medium tabular-nums text-foreground/90" title="Место в лидерборде кампании">
+            Топ #{myRank}
+          </span>
+        ) : null}
         {hungerBadge ? (
-          <span className={cn(EDGE_CHIP_WARN, "rounded-full px-2.5 py-0.5 text-[11px]")}>{hungerBadge}</span>
+          <span className="font-medium text-orange-600 dark:text-orange-400">{hungerBadge}</span>
         ) : null}
         {s.careStreakDays > 0 ? (
-          <span className={cn(EDGE_CHIP_ACCENT, "rounded-full px-2.5 py-0.5 text-[11px]")}>
+          <span className="inline-flex items-center gap-1 font-medium text-primary">
             <Flame className="h-3.5 w-3.5" aria-hidden />
-            {s.careStreakDays} дн.
+            {s.careStreakDays} дн. подряд
           </span>
         ) : null}
       </div>
@@ -269,12 +317,47 @@ export function EdgeParticipantPetCard({
       />
 
       {locked ? (
+        <p className="text-[12px] leading-relaxed text-amber-700 dark:text-amber-300/95" role="status">
+          Кампания на паузе или уже закончилась — с персонажом сейчас нельзя взаимодействовать. Остальные разделы — верхние вкладки или свайп.
+        </p>
+      ) : null}
+
+      {!locked && showTasksPagerHint ? (
         <p
-          className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-950/90 dark:text-amber-100/95"
+          className="flex items-start gap-2 rounded-2xl border border-primary/15 bg-primary/[0.06] px-3 py-2.5 text-[12px] leading-snug text-muted-foreground dark:bg-primary/[0.09]"
           role="status"
         >
-          Кампания на паузе или завершена — действия недоступны. Другие разделы — свайпом по точкам сверху.
+          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden strokeWidth={2} />
+          <span>
+            <span className="font-semibold text-foreground">Дополнительные очки</span> — во вкладке{" "}
+            <span className="font-medium text-primary">«Задания»</span> (слева от «Персонаж») или свайпните экран
+            вбок.
+          </span>
         </p>
+      ) : null}
+
+      {!locked && life && life.needQueue.length > 0 ? (
+        <div
+          className="rounded-xl border border-primary/12 bg-primary/[0.04] px-2.5 py-2 text-[11px] dark:bg-primary/[0.06]"
+          role="status"
+          aria-label="Очередь запросов персонажа"
+        >
+          <p className="mb-1 font-semibold text-foreground/90">Сейчас важно (по очереди)</p>
+          <ol className="list-decimal space-y-0.5 pl-4 text-muted-foreground">
+            {life.needQueue.map((item) => (
+              <li
+                key={item.id}
+                className={cn(
+                  item.penalized && "text-amber-700 dark:text-amber-400",
+                  item.overdue && !item.penalized && "font-medium text-destructive",
+                )}
+              >
+                {LIFE_QUEUE_RU[item.kind]}
+                {item.penalized ? " — просрочено (штраф)" : item.overdue ? " — пора!" : null}
+              </li>
+            ))}
+          </ol>
+        </div>
       ) : null}
 
       {!locked && (activeNeedHint || careHint) ? (
@@ -293,8 +376,19 @@ export function EdgeParticipantPetCard({
       ) : null}
 
       {feedProgress > 0 || toiletProgress > 0 || playProgress > 0 ? (
-        <p className="text-[11px] text-muted-foreground">
-          Прогресс: кормить {feedProgress}/{target} · туалет {toiletProgress}/{target} · игра {playProgress}/{target}
+        <p className="rounded-lg border border-primary/12 bg-primary/[0.05] px-2.5 py-1.5 text-[11px] font-medium text-foreground/85 dark:bg-primary/[0.08]">
+          Прогресс:{" "}
+          <span className="text-primary tabular-nums">
+            кормить {feedProgress}/{target}
+          </span>{" "}
+          · туалет{" "}
+          <span className="text-primary tabular-nums">
+            {toiletProgress}/{target}
+          </span>{" "}
+          · игра{" "}
+          <span className="text-primary tabular-nums">
+            {playProgress}/{target}
+          </span>
         </p>
       ) : null}
 
@@ -324,8 +418,8 @@ export function EdgeParticipantPetCard({
               type="button"
               disabled={locked}
               className={cn(
-                "flex min-h-[var(--uix-touch-min)] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-transparent px-3 py-2.5 text-[13px] font-medium text-muted-foreground transition-colors",
-                "hover:bg-muted/30 hover:text-foreground",
+                "flex min-h-[var(--uix-touch-min)] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-primary/35 bg-primary/[0.04] px-3 py-2.5 text-[13px] font-medium text-primary/90 transition-colors",
+                "hover:bg-primary/10 hover:text-primary",
                 locked && "pointer-events-none opacity-50",
               )}
             >
@@ -351,23 +445,6 @@ export function EdgeParticipantPetCard({
         </DropdownMenu>
       </div>
 
-      {taskPresets.length > 0 ? (
-        <Collapsible className="group border-t border-border/10 pt-3">
-          <CollapsibleTrigger
-            type="button"
-            className="flex min-h-[var(--uix-touch-min)] w-full items-center justify-between gap-2 rounded-lg px-0.5 py-2 text-left text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Задания кампании
-            <ChevronDown
-              className="h-4 w-4 shrink-0 opacity-70 transition-transform duration-200 group-data-[state=open]:rotate-180"
-              aria-hidden
-            />
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-1 data-[state=closed]:animate-none">
-            <EdgePresetTasksCard edgeId={edgeId} presets={taskPresets} interactLocked={locked} />
-          </CollapsibleContent>
-        </Collapsible>
-      ) : null}
     </section>
   );
 }

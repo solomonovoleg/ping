@@ -6,7 +6,8 @@ import { useState } from "react";
 import { UserAvatar } from "@/components/UserAvatar";
 import { buildProfilePath } from "@/lib/profile-route";
 import { useLocation } from "wouter";
-import { UserPlus, UserMinus } from "lucide-react";
+import { UserPlus, UserMinus, Copy, Check } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { addGroupMember, removeGroupMember } from "@/lib/chat";
 import { listContactsWithProfiles, type ContactUser } from "@/lib/users";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +19,7 @@ export function GroupChatParticipantsSheet({
   members,
   currentUserId,
   isAdmin,
+  inviteCode,
   onClose,
   onMembersChange,
 }: {
@@ -25,11 +27,14 @@ export function GroupChatParticipantsSheet({
   members: ApiChatMember[];
   currentUserId: string;
   isAdmin: boolean;
+  /** Любой участник может скопировать ссылку-приглашение в группу. */
+  inviteCode?: string | null;
   onClose: () => void;
   onMembersChange: (updatedChat: ApiChat) => void;
 }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [showAddPicker, setShowAddPicker] = useState(false);
   const [contacts, setContacts] = useState<ContactUser[]>([]);
   const [addLoading, setAddLoading] = useState(false);
@@ -64,6 +69,22 @@ export function GroupChatParticipantsSheet({
     } finally {
       setAddLoading(false);
     }
+  };
+
+  const inviteLink =
+    typeof window !== "undefined" && inviteCode
+      ? `${window.location.origin}/invite/${inviteCode}`
+      : "";
+
+  const copyInviteLink = () => {
+    if (!inviteLink) return;
+    navigator.clipboard?.writeText(inviteLink).then(() => {
+      setInviteCopied(true);
+      window.setTimeout(() => setInviteCopied(false), 2000);
+      toast({ title: "Ссылка скопирована" });
+    }).catch(() => {
+      toast({ title: "Не удалось скопировать ссылку", variant: "destructive" });
+    });
   };
 
   const handleRemove = async (userId: string) => {
@@ -101,6 +122,30 @@ export function GroupChatParticipantsSheet({
             <span className="text-lg leading-none">×</span>
           </button>
         </div>
+        {inviteCode ? (
+          <div className="border-b border-border/60 px-4 py-3">
+            <p className="text-xs font-medium text-muted-foreground">Ссылка-приглашение</p>
+            <div className="mt-2 flex items-center gap-2">
+              <Input
+                readOnly
+                value={inviteLink}
+                className="font-mono text-xs h-10"
+                onClick={(e) => (e.target as HTMLInputElement).select()}
+              />
+              <button
+                type="button"
+                onClick={copyInviteLink}
+                className="shrink-0 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-secondary/60 hover:bg-secondary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]"
+                aria-label="Скопировать ссылку-приглашение"
+              >
+                {inviteCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground leading-snug">
+              По ссылке можно вступить в группу. Поделитесь только с теми, кого хотите видеть в чате.
+            </p>
+          </div>
+        ) : null}
         <div className="overflow-y-auto max-h-[60vh] p-2 pb-[env(safe-area-inset-bottom,0px)]">
           {isAdmin && (
             <button
@@ -137,6 +182,7 @@ export function GroupChatParticipantsSheet({
                   seed={m.id}
                   size={44}
                   className="h-11 w-11 flex-shrink-0"
+                  pointerEventsNone
                 />
                 <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
                   {memberName(m)}
@@ -209,6 +255,7 @@ export function GroupChatParticipantsSheet({
                       seed={c.id}
                       size={44}
                       className="h-11 w-11 flex-shrink-0"
+                      pointerEventsNone
                     />
                     <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
                       {contactDisplayName(c)}

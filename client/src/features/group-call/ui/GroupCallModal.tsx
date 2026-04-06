@@ -117,6 +117,7 @@ export function GroupCallModal({
           handRaisedUserIds: session.handRaisedUserIds,
           setHandRaised: session.setHandRaised,
           sendGroupReaction: session.sendGroupReaction,
+          maxMeshPeers: session.maxMeshPeers,
         }}
         supportsScreenShare={supports.screenShare}
         commandPrompt={

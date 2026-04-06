@@ -1,6 +1,6 @@
 /**
- * Ссылки для App Store: политика конфиденциальности и контакт поддержки.
- * Задаются через VITE_PRIVACY_POLICY_URL и VITE_SUPPORT_EMAIL при сборке.
+ * Ссылки для App Store / Google Play: политика, условия использования, поддержка.
+ * Задаются через VITE_PRIVACY_POLICY_URL, VITE_TERMS_OF_USE_URL и VITE_SUPPORT_EMAIL при сборке.
  */
 
 const baseUrl =
@@ -14,6 +14,14 @@ export function getPrivacyPolicyUrl(): string {
       ? String(import.meta.env.VITE_PRIVACY_POLICY_URL).trim()
       : "";
   return url || `${baseUrl}/privacy`;
+}
+
+export function getTermsOfUseUrl(): string {
+  const url =
+    typeof import.meta !== "undefined" && import.meta.env?.VITE_TERMS_OF_USE_URL
+      ? String(import.meta.env.VITE_TERMS_OF_USE_URL).trim()
+      : "";
+  return url || `${baseUrl}/terms`;
 }
 
 export function getSupportEmail(): string {

@@ -5,6 +5,7 @@ import type { Request, Response } from "express";
 import { getUserId } from "../../auth/session";
 import { MODULE_LABELS_RU, resolveApiModule } from "./api-module-registry";
 import { telemetryHintsForHttpError } from "./error-hints";
+import { getClientTelemetrySnapshot } from "./client-events-store";
 import type { ModulesTelemetryPayload, ModuleTelemetryRow, TelemetryRecentError } from "./types";
 
 import "./express-request";
@@ -117,5 +118,6 @@ export function getModulesTelemetryPayload(): ModulesTelemetryPayload {
     uptimeSec: Math.round(process.uptime()),
     modules: rows,
     recentErrors: [...recentErrors],
+    clientTelemetry: getClientTelemetrySnapshot(),
   };
 }

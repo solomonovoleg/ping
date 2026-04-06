@@ -1,0 +1,25 @@
+{
+  "target": "http://localhost:5000",
+  "mode": "public",
+  "startedAt": "2026-03-31T11:48:08.243Z",
+  "checks": [
+    {
+      "name": "edge_health_public",
+      "path": "/api/edge/health",
+      "ok": false,
+      "status": 403,
+      "code": null,
+      "message": null
+    },
+    {
+      "name": "open_post_by_id_public",
+      "path": "/api/posts/invalid-id",
+      "ok": false,
+      "status": 403,
+      "code": null,
+      "message": null
+    }
+  ],
+  "finishedAt": "2026-03-31T11:48:08.304Z",
+  "ok": false
+}

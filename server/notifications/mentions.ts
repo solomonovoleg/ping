@@ -1,5 +1,6 @@
+import { eq } from "drizzle-orm";
 import { getDb } from "../db";
-import { notifications } from "@shared/schema";
+import { notifications, posts } from "@shared/schema";
 import { extractMentions, MAX_POST_MENTIONS } from "@shared/schema/posts";
 import type { IStorage } from "../storage/types";
 
@@ -72,12 +73,16 @@ export async function notifyMentionsComment(
   const mentions = extractMentions(text);
   if (mentions.length === 0) return;
   const db = getDb();
+  const [postRow] = await db.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, postId)).limit(1);
+  const postAuthorId = postRow?.authorId ?? null;
   const seen = new Set<string>();
   const excerpt = text.slice(0, 100);
   for (const m of mentions) {
     if (seen.size >= MAX_POST_MENTIONS) break;
     const userId = await resolveMentionToUserId(m, storage, authorId);
     if (!userId || seen.has(userId)) continue;
+    /** Автор поста уже получает type «comment» на этот комментарий — не дублируем «mention». */
+    if (postAuthorId && userId === postAuthorId) continue;
     seen.add(userId);
     try {
       await db.insert(notifications).values({

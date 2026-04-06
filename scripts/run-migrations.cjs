@@ -33,10 +33,15 @@ function sleepMs(ms) {
 const RETRY_DB_FULL =
   /53300|remaining connection slots|too many clients|sorry, too many clients already/i;
 
-// Используем DATABASE_URL из shell только если в нём нет "base" (на сервере мог остаться старый .env)
-let dbUrl = process.env.DATABASE_URL && !String(process.env.DATABASE_URL).includes("base")
-  ? String(process.env.DATABASE_URL).trim()
-  : null;
+// Только плейсхолдер хоста @base / base:5432 — не substring "base" (пароль мог бы содержать «base» → ложный сброс на .env).
+function shellDatabaseUrlLooksUsable(url) {
+  if (!url || typeof url !== "string") return false;
+  const s = String(url).trim();
+  if (!s) return false;
+  if (s.includes("@base") || s.includes("base:5432")) return false;
+  return true;
+}
+let dbUrl = shellDatabaseUrlLooksUsable(process.env.DATABASE_URL) ? String(process.env.DATABASE_URL).trim() : null;
 
 if (!dbUrl) {
   const envPath = path.join(process.cwd(), ".env");
@@ -64,7 +69,10 @@ const scripts = [
   "scripts/migrate-user-columns.cjs",
   "scripts/migrate-users-columns.cjs", // модерация users: is_blocked, banned_*, deleted_at, hide_from_search, …
   "scripts/migrate-posts.cjs",
+  "scripts/migrate-post-link-codes.cjs",
   "scripts/migrate-post-comments.cjs",
+  "scripts/migrate-post-comments-parent.cjs",
+  "scripts/migrate-post-comment-likes.cjs",
   "scripts/migrate-missed-calls.cjs",
   "scripts/migrate-referrals.cjs",
   "scripts/migrate-referral-multi-use.cjs",
@@ -78,11 +86,15 @@ const scripts = [
   "scripts/migrate-chat-folders.cjs",
   "scripts/migrate-scheduled-messages.cjs",
   "scripts/migrate-message-hidden.cjs",
+  "scripts/migrate-message-send-idempotency.cjs",
   "scripts/migrate-messages-timestamptz.cjs",
   "scripts/migrate-message-translations.cjs",
   "scripts/migrate-messages-chat-created-index.cjs",
   "scripts/migrate-chat-vibe.cjs",
   "scripts/migrate-admin-ops.cjs",
+  "scripts/migrate-platform-registration-phone-call.cjs",
+  "scripts/migrate-content-reports-context.cjs",
+  "scripts/migrate-content-reports-reason-code.cjs",
   "scripts/migrate-ai-search.cjs",
   "scripts/migrate-profile-pins.cjs",
   "scripts/migrate-chat-member-prefs.cjs",
@@ -91,11 +103,34 @@ const scripts = [
   "scripts/migrate-user-reminders-voice-tasks.cjs",
   "scripts/migrate-service-chat.cjs",
   "scripts/migrate-posts-edge-id.cjs",
+  "scripts/migrate-posts-edge-display-audience.cjs",
+  "scripts/migrate-posts-content-interests.cjs",
+  "scripts/migrate-posts-link-embed-enabled.cjs",
+  "scripts/migrate-posts-show-on-author-wall.cjs",
+  "scripts/migrate-push-feed.cjs",
   "scripts/migrate-profile-page-views.cjs",
   "scripts/migrate-user-dm-group-policies.cjs",
   "scripts/migrate-dm-scheduled-calls.cjs",
   "scripts/migrate-feed-global-snapshot.cjs",
   "scripts/migrate-referral-codes-bypass-inviter-limit.cjs",
+  "scripts/migrate-referral-admin-note.cjs",
+  "scripts/migrate-invite-more-requests.cjs",
+  "scripts/migrate-help-pages.cjs",
+  "scripts/migrate-sender-welcome.cjs",
+  "scripts/migrate-board-api-hub-prime.cjs",
+  "scripts/migrate-referral-program-settings.cjs",
+  "scripts/migrate-admin-media-studio.cjs",
+  "scripts/migrate-chat-codes.cjs",
+  "scripts/migrate-edge-money-invite-batches.cjs",
+  "scripts/migrate-edge-money-chat-counters.cjs",
+  "scripts/migrate-edge-money-call-counters.cjs",
+  "scripts/migrate-edge-money-post-profile-counters.cjs",
+  "scripts/migrate-new-tel-call-password-log.cjs",
+  "scripts/migrate-new-tel-call-password-log-detail.cjs",
+  "scripts/migrate-composer-pulse-pending.cjs",
+  "scripts/migrate-sticker-packs.cjs",
+  "scripts/migrate-user-chat-list-shelves.cjs",
+  "scripts/migrate-dm-multilingual.cjs",
 ];
 
 const envWithDb = { ...process.env, DATABASE_URL: dbUrl };

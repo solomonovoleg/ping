@@ -9,6 +9,9 @@ export type EdgeTaskPresetPublic = {
   points: number;
   penalty: number;
   deadlineDays: number;
+  /** Раздел конструктора; у старых ответов может не быть — тогда считаем primary. */
+  scope?: "game" | "global" | "commercial";
+  scoreTarget?: "primary" | "secondary";
   /** Если нет в старых ответах — считается `honor`. */
   verify?: PresetVerify;
 };
@@ -30,6 +33,23 @@ export type ResultsLivePayload = {
 export type PingInviteDmConfig = {
   template: string;
   codeExpiresInHours: number;
+  inviteIssueMode?: "batch_min_count" | "single_per_request" | "one_multi_use";
+  multiUseRegistrations?: number;
+};
+
+/** Настройки «рейтинга жизни» из EDGE (`companion.lifeSimulation`). */
+export type EdgeLifeSimulationConfig = {
+  enabled: boolean;
+  lifeMin: number;
+  lifeMax: number;
+  lifeInitial: number;
+  intervalHours: { feed: number; toilet: number; play: number; calm: number };
+  responseWindowHours: number;
+  onTimeBonus: number;
+  missedPenalty: number;
+  queueFulfillBonus: number;
+  maxMoodBonus: number;
+  maxQueuePerKind: number;
 };
 
 /** Конфиг кампании EDGE Companion (прокси с микросервиса EDGE). */
@@ -37,7 +57,13 @@ export type EdgeCompanionCampaignConfig = {
   status: "draft" | "published" | "paused" | "ended";
   title: string;
   gifts?: { templates?: unknown[] };
-  leaderboard?: { globalEnabled?: boolean };
+  leaderboard?: {
+    globalEnabled?: boolean;
+    primaryEnabled?: boolean;
+    secondaryEnabled?: boolean;
+    primaryFrozen?: boolean;
+    secondaryFrozen?: boolean;
+  };
   followReward?: { enabled?: boolean };
   edgeId?: string;
   /** character | roulette | catalog | … — с микросервиса EDGE */
@@ -53,6 +79,9 @@ export type EdgeCompanionCampaignConfig = {
   creatorPlatformUserId?: string | null;
   taskPresets?: EdgeTaskPresetPublic[];
   pingInviteDm?: PingInviteDmConfig;
+  /** Кто видит пост с EDGE (с сервера; по умолчанию public). */
+  displayAudience?: "self" | "followers" | "public";
+  lifeSimulation?: EdgeLifeSimulationConfig;
 };
 
 export async function fetchEdgeCompanionCampaignConfig(edgeId: string): Promise<EdgeCompanionCampaignConfig> {

@@ -14,8 +14,13 @@ export const EMOJIS = [
 /** Минимальный разрыв (мс) между сообщениями одного отправителя для новой группы. */
 export const GROUP_GAP_MIN_MS = 5 * 60 * 1000;
 
-export const MESSAGES_PAGE = 50;
-export const CHAT_LOAD_TIMEOUT_MS = 15000;
+/** Первый запрос истории: меньше JSON до первого paint; догрузка вверх без изменения API. */
+export const MESSAGES_PAGE = 30;
+/** Быстрее показываем ошибку/«Повторить» при плохой сети (офлайн-снимок по-прежнему показывается сразу). */
+export const CHAT_LOAD_TIMEOUT_MS = 10000;
 
 /** Максимальная длительность одного видеокружка при записи в чате (сек). */
 export const VIDEO_NOTE_MAX_DURATION_SEC = 60;
+
+/** Сторона квадрата кадра видеокружка при кодировании (center crop как object-cover на квадрате). */
+export const VIDEO_NOTE_RECORD_SIZE_PX = 720;

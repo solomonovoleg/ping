@@ -25,8 +25,8 @@ function statusBadgeClass(status: string): string {
 
 /** Общие стили обёртки `li` / `motion.li` (см. `VkParserQueueAnimatedList`). */
 export const VK_PARSER_QUEUE_ROW_CLASS = cn(
-  "rounded-xl border border-border/80 p-3 sm:p-4 space-y-2 list-none",
-  "bg-card/30 hover:bg-muted/25",
+  "rounded-xl border border-[hsl(var(--admin-border)/0.45)] p-3 sm:p-4 space-y-2 list-none",
+  "bg-[hsl(var(--admin-elevated)/0.35)] hover:bg-[hsl(var(--admin-elevated-strong)/0.45)]",
 );
 
 /** Тело строки очереди без обёртки списка — рядом с `motion.li` в `AnimatePresence`. */

@@ -10,6 +10,8 @@ export interface ReferralCodeRow {
   maxUses: number;
   useCount: number;
   bypassInviterLimit: boolean;
+  adminNote?: string | null;
+  edgeMoneyInviteBatchId?: string | null;
 }
 
 export interface ReferralCodesStore {
@@ -17,11 +19,17 @@ export interface ReferralCodesStore {
     inviterUserId: string,
     code: string,
     expiresAt: Date,
-    opts?: { maxUses?: number; bypassInviterLimit?: boolean },
+    opts?: {
+      maxUses?: number;
+      bypassInviterLimit?: boolean;
+      adminNote?: string | null;
+      edgeMoneyInviteBatchId?: string | null;
+    },
   ): ReferralCodeRow;
   getByCode(code: string): ReferralCodeRow | undefined;
   consume(id: string): boolean;
   listActiveByInviter(inviterUserId: string): ReferralCodeRow[];
+  deleteAllByInviter(inviterUserId: string): void;
 }
 
 function normalizeCode(code: string): string {
@@ -41,11 +49,27 @@ export function createReferralCodesStore(): ReferralCodesStore {
   const byCode = new Map<string, ReferralCodeRow>();
 
   return {
-    create(inviterUserId: string, code: string, expiresAt: Date, opts?: { maxUses?: number; bypassInviterLimit?: boolean }) {
+    create(
+      inviterUserId: string,
+      code: string,
+      expiresAt: Date,
+      opts?: {
+        maxUses?: number;
+        bypassInviterLimit?: boolean;
+        adminNote?: string | null;
+        edgeMoneyInviteBatchId?: string | null;
+      },
+    ) {
       let maxUses = opts?.maxUses ?? 1;
       if (maxUses === 0 || maxUses < -1) maxUses = 1;
       if (maxUses > 10_000) maxUses = 10_000;
       const id = randomUUID();
+      const noteRaw = opts?.adminNote;
+      const adminNote =
+        typeof noteRaw === "string" && noteRaw.trim() ? noteRaw.trim() : null;
+      const batchRaw = opts?.edgeMoneyInviteBatchId;
+      const edgeMoneyInviteBatchId =
+        typeof batchRaw === "string" && batchRaw.trim() ? batchRaw.trim() : null;
       const row: ReferralCodeRow = {
         id,
         code,
@@ -56,6 +80,8 @@ export function createReferralCodesStore(): ReferralCodesStore {
         maxUses: maxUses === -1 || maxUses > 1 ? maxUses : 1,
         useCount: 0,
         bypassInviterLimit: opts?.bypassInviterLimit === true,
+        adminNote,
+        edgeMoneyInviteBatchId,
       };
       byId.set(id, row);
       byCode.set(normalizeCode(code), row);
@@ -81,6 +107,13 @@ export function createReferralCodesStore(): ReferralCodesStore {
     listActiveByInviter(inviterUserId: string) {
       const now = new Date();
       return Array.from(byId.values()).filter((r) => r.inviterUserId === inviterUserId && rowIsUsable(r, now));
+    },
+    deleteAllByInviter(inviterUserId: string) {
+      for (const [id, row] of [...byId.entries()]) {
+        if (row.inviterUserId !== inviterUserId) continue;
+        byId.delete(id);
+        byCode.delete(normalizeCode(row.code));
+      }
     },
   };
 }

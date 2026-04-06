@@ -32,7 +32,7 @@ interface PullToRefreshProps {
    * Скролл задаётся с `scrollPaddingTopPx`, чтобы контент заходил на обложку; фон скролла прозрачный в зоне padding.
    */
   overlayTop?: React.ReactNode;
-  /** Высота оверлея в px (по умолчанию 133 — профиль PULSE). */
+  /** Высота оверлея в px (синхронизируйте с `PULSE_PROFILE_COVER_HEIGHT_PX` в pulse-profile). */
   overlayTopHeightPx?: number;
   /** Верхний padding скролла (например под нахлёст карточки на обложку). */
   scrollPaddingTopPx?: number;
@@ -53,7 +53,7 @@ export function PullToRefresh({
   showScrollToTop,
   scrollRef,
   overlayTop,
-  overlayTopHeightPx = 133,
+  overlayTopHeightPx = 152,
   scrollPaddingTopPx = 0,
 }: PullToRefreshProps) {
   const [pullY, setPullY] = useState(0);
@@ -200,11 +200,11 @@ export function PullToRefresh({
         }}
       >
         {refreshing ? (
-          <Loader2 className="w-6 h-6 animate-spin text-primary" aria-hidden />
+          <Loader2 className="h-6 w-6 animate-spin text-primary" aria-hidden />
         ) : pullY > 16 ? (
           <div className="flex flex-col items-center gap-0.5 px-2">
             <Loader2
-              className="w-5 h-5 text-muted-foreground transition-opacity"
+              className="h-5 w-5 text-muted-foreground transition-[opacity,transform] duration-150"
               style={{ opacity: Math.min(1, pullY / PULL_THRESHOLD) }}
               aria-hidden
             />
@@ -218,6 +218,7 @@ export function PullToRefresh({
       </div>
       <div
         ref={effectiveScrollRef}
+        data-pull-refresh="managed"
         className="relative z-30 min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-transparent"
         style={{
           paddingTop: scrollPaddingTopPx,

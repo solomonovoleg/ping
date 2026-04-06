@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
 import { fetchDashboardAnalytics } from "@/lib/admin";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { OpsModulesTelemetrySection } from "@/features/admin-ops/OpsModulesTelemetrySection";
 import { OpsTrafficSection } from "@/features/admin-ops/OpsTrafficSection";
 import { ServerProcessMonitorBlock } from "@/features/admin-monitors/server-process-monitor";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AdminPageHeader, AdminPanelCard, adminPageStackClass } from "@/features/admin-shell";
 
 const ANALYTICS_DAYS = 14;
 
@@ -25,35 +26,28 @@ export default function AdminMonitorsPage() {
   const history = analytics?.serverMetrics.history ?? [];
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">Мониторы</h1>
-        <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
-          Единая страница технических метрик: процесс Node (память, load, WebSocket звонков), запросы API по модулям и
-          минутный трафик с учётом защиты от флуда. Баннер, жалобы и настройки платформы остаются в разделе «Операции».
-        </p>
-      </div>
+    <div className={cn(adminPageStackClass(), "space-y-8")}>
+      <AdminPageHeader
+        title="Мониторы"
+        description="Технические метрики: процесс Node (память, load, WebSocket звонков), запросы API по модулям и минутный трафик с учётом защиты от флуда. Жалобы и настройки платформы — «Модерация» → «Операции»."
+      />
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Сервер и реальное время</CardTitle>
-          <p className="text-sm text-muted-foreground font-normal">
-            Те же данные, что на дашборде (история — снимки раз в 5 минут).
-          </p>
-        </CardHeader>
-        <CardContent>
-          <ServerProcessMonitorBlock
-            isLoading={isLoading && !analytics}
-            error={err}
-            onRetry={() => refetch()}
-            current={current}
-            history={history}
-            metricsNote={analytics?.metricsNote}
-            isFetching={isFetching}
-            animate={animate}
-          />
-        </CardContent>
-      </Card>
+      <AdminPanelCard className="p-4 pt-5 sm:p-5">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold text-[hsl(210_20%_98%)]">Сервер и реальное время</h2>
+          <p className="mt-1 text-sm admin-text-muted">Те же данные, что на дашборде (история — снимки раз в 5 минут).</p>
+        </div>
+        <ServerProcessMonitorBlock
+          isLoading={isLoading && !analytics}
+          error={err}
+          onRetry={() => refetch()}
+          current={current}
+          history={history}
+          metricsNote={analytics?.metricsNote}
+          isFetching={isFetching}
+          animate={animate}
+        />
+      </AdminPanelCard>
 
       <OpsModulesTelemetrySection />
       <OpsTrafficSection />

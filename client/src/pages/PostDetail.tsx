@@ -1,19 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import {
   ChevronLeft,
+  Heart,
   MessageSquare,
   Eye,
   Trash2,
+  PenSquare,
   FileX,
   SmilePlus,
   Plus,
   Check,
   Share2,
+  MoreHorizontal,
+  Flag,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { UserAvatar } from "@/components/UserAvatar";
 import { PostMedia } from "@/components/PostMedia";
+import { FeedDoubleTapImageLayer } from "@/lib/reels-video";
 import { PostExternalVideoEmbed } from "@/components/PostExternalVideoEmbed";
 import { PostCaptionInlineParts } from "@/components/PostCaptionInlineParts";
 import { extractFirstExternalVideoUrl, isExternalVideoOnlyCaption } from "@/lib/post-external-video";
@@ -21,26 +27,41 @@ import { parseExternalVideoUrl } from "@/lib/external-video";
 import {
   fetchPost,
   formatPostTime,
-  recordPostView,
+  recordPostViewBestEffort,
   deletePost,
   addReaction,
   removeReaction,
   savePost,
   unsavePost,
+  updatePost,
+  type EdgeDisplayAudience,
   type FeedPost,
   type ReactionUser,
 } from "@/lib/posts";
 import { applyReactionOptimistic } from "@/lib/feed-query-cache";
 import { EdgeCompanionFeedCard } from "@/features/edge-companion/components/EdgeCompanionFeedCard";
+import { EdgePostAudienceSubmenu } from "@/features/edge-companion/components/EdgePostAudienceSubmenu";
 import { buildEdgeCompanionOpenHref } from "@/features/edge-companion/edge-companion-navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import CommentsModal from "@/components/CommentsModal";
-import { ListEmptyState } from "@/components/ui/empty";
-import { LoadingProgress } from "@/components/ui/loading-progress";
+import { PostLastCommentTeaser, pickNewestCommentPreview } from "@/features/comments/post-comments/PostLastCommentTeaser";
+import { ErrorWithRetry, ListEmptyState } from "@/components/ui/empty";
+import { PostDetailSkeleton } from "@/features/posts/post-detail-skeleton/PostDetailSkeleton";
 import { useToast } from "@/hooks/use-toast";
-import { buildProfilePath, buildProfilePostPath } from "@/lib/profile-route";
+import { buildProfilePath, buildProfilePostPath, buildReelsPostPath } from "@/lib/profile-route";
 import { cn } from "@/lib/utils";
+import { DOUBLE_TAP_LIKE_EMOJI } from "@/lib/double-tap-like-reaction";
+import { postHasUploadedVideo } from "@/lib/feed-video-post";
+import { EASING_OUT_BEZIER, usePrefersReducedMotion } from "@/lib/motion";
 import { playLikeActionSound } from "@/lib/send-sound";
+import { edgeCreatorDestructiveToast } from "@/lib/edge-creator";
+import { ReportContentDialog } from "@/features/store-moderation/block-01-ugc";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const EMOJIS = ["👍", "❤️", "🔥", "👏", "😂", "🤔"];
 
@@ -52,10 +73,26 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
   const userId = params.id;
   const postId = params.postId;
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const [deepLinkCommentId, setDeepLinkCommentId] = useState<string | null>(null);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [postReportOpen, setPostReportOpen] = useState(false);
   const profilePathFromRoute = buildProfilePath({ isMe: userId === "me", userId, fallbackPath: "/posts" });
 
-  const { data: post, isLoading, error } = useQuery({
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const search = new URLSearchParams(window.location.search);
+    const shouldOpenComments = search.get("openComments") === "1";
+    const targetCommentId = search.get("commentId")?.trim() || null;
+    if (!shouldOpenComments && !targetCommentId) return;
+    setCommentsOpen(true);
+    setDeepLinkCommentId(targetCommentId);
+    search.delete("openComments");
+    search.delete("commentId");
+    const q = search.toString();
+    setLocation(`${window.location.pathname}${q ? `?${q}` : ""}`, { replace: true } as { replace?: boolean });
+  }, [setLocation]);
+
+  const { data: post, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["post", postId],
     queryFn: () => fetchPost(postId),
     enabled: !!postId,
@@ -95,6 +132,31 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
     },
   });
 
+  const edgeAudienceMutation = useMutation({
+    mutationFn: ({ postId, edgeDisplayAudience }: { postId: string; edgeDisplayAudience: EdgeDisplayAudience }) =>
+      updatePost(postId, { edgeDisplayAudience }),
+    onMutate: async ({ postId, edgeDisplayAudience }) => {
+      await queryClient.cancelQueries({ queryKey: ["post", postId] });
+      const prev = queryClient.getQueryData<FeedPost | null>(["post", postId]);
+      if (prev) {
+        queryClient.setQueryData(["post", postId], { ...prev, edgeDisplayAudience });
+      }
+      return { prev };
+    },
+    onError: (e, vars, ctx) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(["post", vars.postId], ctx.prev);
+      const t = edgeCreatorDestructiveToast(e);
+      toast({ title: t.title, description: t.description, variant: "destructive" });
+    },
+    onSettled: (_d, _e, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ["post", vars.postId] });
+      void queryClient.invalidateQueries({ queryKey: ["posts", "feed"] });
+    },
+    onSuccess: () => {
+      toast({ title: "Кому виден EDGE обновлено" });
+    },
+  });
+
   const savePostMutation = useMutation({
     mutationFn: async ({ save }: { save: boolean }) => {
       if (!post?.id) return;
@@ -119,15 +181,33 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
 
   useEffect(() => {
     if (post?.id && user?.id) {
-      recordPostView(post.id).catch(() => {});
+      recordPostViewBestEffort(post.id);
     }
   }, [post?.id, user?.id]);
+
+  /** Старый URL с UUID в пути → короткий `/u/…/p/{linkCode}` (replace). */
+  useEffect(() => {
+    if (!post?.linkCode || !postId) return;
+    if (postId === post.linkCode) return;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)) return;
+    const next = buildProfilePostPath({
+      postId: post.id,
+      linkCode: post.linkCode,
+      isMe: userId === "me",
+      publicId: post.author.publicId,
+      userId: post.authorId,
+      fallbackPath: "/posts",
+    });
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    setLocation(`${next}${search}`, { replace: true } as { replace?: boolean });
+  }, [post, postId, userId, setLocation]);
 
   const shareUrl = useMemo(() => {
     if (!post?.id) return "";
     const path = buildProfilePostPath({
       postId: post.id,
-      isMe: post.authorId === user?.id,
+      linkCode: post.linkCode,
+      isMe: String(post.authorId) === String(user?.id ?? ""),
       publicId: post.author.publicId,
       userId: post.authorId,
       fallbackPath: "/posts",
@@ -137,10 +217,10 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
   }, [post, user?.id]);
 
   const postBodyForEmbed = post?.text ?? "";
-  const primaryExternalVideoUrl = useMemo(
-    () => extractFirstExternalVideoUrl(postBodyForEmbed),
-    [postBodyForEmbed],
-  );
+  const primaryExternalVideoUrl = useMemo(() => {
+    if (post?.linkEmbedEnabled === false) return null;
+    return extractFirstExternalVideoUrl(postBodyForEmbed);
+  }, [post?.linkEmbedEnabled, postBodyForEmbed]);
   const maskExternalEmbed = useMemo(
     () => (primaryExternalVideoUrl ? parseExternalVideoUrl(primaryExternalVideoUrl) : null),
     [primaryExternalVideoUrl],
@@ -165,46 +245,104 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
     }
   };
 
-  if (isLoading || !postId) {
-    return (
-      <div className="flex flex-col h-full min-h-[200px] bg-background">
-        <div className="uix-content-x py-[var(--uix-space-3)] flex items-center border-b border-border/40 bg-background/95 backdrop-blur">
-          <button
-            type="button"
-            onClick={() => setLocation(profilePathFromRoute)}
-            className="p-2 -ml-2 rounded-full hover:bg-secondary/80 text-foreground min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center transition-colors"
-            aria-label="Назад к профилю"
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
-        </div>
-        <LoadingProgress loading minHeight="200px" className="flex-1">
-          <div className="min-h-[200px]" />
-        </LoadingProgress>
-      </div>
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const [doubleTapHeartVisible, setDoubleTapHeartVisible] = useState(false);
+  const doubleTapHeartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerDoubleTapHeart = useCallback(() => {
+    if (doubleTapHeartTimerRef.current) clearTimeout(doubleTapHeartTimerRef.current);
+    setDoubleTapHeartVisible(true);
+    doubleTapHeartTimerRef.current = setTimeout(() => {
+      setDoubleTapHeartVisible(false);
+      doubleTapHeartTimerRef.current = null;
+    }, 600);
+  }, []);
+
+  const fireDoubleTapLike = useCallback(() => {
+    if (!post?.id || !user) return;
+    void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) => triggerLightHaptic());
+    playLikeActionSound();
+    triggerDoubleTapHeart();
+    const mine = post.myReaction;
+    reactionMutation.mutate({
+      emoji: mine === DOUBLE_TAP_LIKE_EMOJI ? null : DOUBLE_TAP_LIKE_EMOJI,
+    });
+  }, [post, user, reactionMutation, triggerDoubleTapHeart]);
+
+  useEffect(() => {
+    return () => {
+      if (doubleTapHeartTimerRef.current) clearTimeout(doubleTapHeartTimerRef.current);
+    };
+  }, []);
+
+  const postHasVideo = useMemo(() => (post ? postHasUploadedVideo(post) : false), [post]);
+
+  const openReelsForCurrentPost = useCallback(() => {
+    if (!post?.id) return;
+    const vid = user?.id != null ? String(user.id) : "";
+    const aid = post.authorId != null ? String(post.authorId) : "";
+    const own = vid.length > 0 && aid === vid;
+    setLocation(
+      buildReelsPostPath({
+        postId: post.id,
+        linkCode: post.linkCode,
+        isMe: own,
+        publicId: post.author.publicId,
+        userId: post.authorId,
+      }),
     );
+  }, [post, user?.id, setLocation]);
+
+  const goBackToProfile = () => setLocation(profilePathFromRoute);
+
+  if (isLoading || !postId) {
+    return <PostDetailSkeleton onBack={goBackToProfile} />;
   }
 
-  if (error || !post) {
+  if (isError) {
+    const msg =
+      error instanceof Error && error.message.trim() ? error.message : "Проверьте интернет и попробуйте снова";
     return (
       <div className="flex flex-col h-full min-h-0 bg-background">
         <div className="uix-content-x py-3 flex items-center border-b border-border/50">
           <button
             type="button"
-            onClick={() => setLocation(profilePathFromRoute)}
+            onClick={goBackToProfile}
             className="p-2 -ml-1 rounded-full hover:bg-secondary text-foreground min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
             aria-label="Назад к профилю"
           >
             <ChevronLeft className="w-6 h-6" />
           </button>
         </div>
-        <div className="flex-1 flex items-center justify-center p-4">
+        <div className="flex flex-1 items-center justify-center p-4">
+          <ErrorWithRetry title="Не удалось загрузить пост" description={msg} onRetry={() => void refetch()} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!post) {
+    return (
+      <div className="flex flex-col h-full min-h-0 bg-background">
+        <div className="uix-content-x py-3 flex items-center border-b border-border/50">
+          <button
+            type="button"
+            onClick={goBackToProfile}
+            className="p-2 -ml-1 rounded-full hover:bg-secondary text-foreground min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center"
+            aria-label="Назад к профилю"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        </div>
+        <div className="flex flex-1 items-center justify-center p-4">
           <ListEmptyState
             icon={FileX}
             title="Пост не найден"
             description="Возможно, он был удалён или ссылка устарела."
             actionLabel="К профилю"
-            onAction={() => setLocation(profilePathFromRoute)}
+            onAction={goBackToProfile}
+            secondaryActionLabel="Обновить"
+            onSecondaryAction={() => void refetch()}
           />
         </div>
       </div>
@@ -212,9 +350,14 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
   }
 
   const authorName = [post.author.displayName, post.author.surname].filter(Boolean).join(" ") || `ID ${post.author.publicId}`;
+  const viewerId = user?.id != null ? String(user.id) : "";
+  const postAuthorId = post.authorId != null ? String(post.authorId) : "";
+  const isOwnPost = viewerId.length > 0 && postAuthorId === viewerId;
   const postBody = post.text ?? "";
+  const linkEmbedOn = post.linkEmbedEnabled !== false;
   const hasCaption =
-    postBody.trim().length > 0 && !isExternalVideoOnlyCaption(postBody, primaryExternalVideoUrl);
+    postBody.trim().length > 0 &&
+    !(linkEmbedOn && isExternalVideoOnlyCaption(postBody, primaryExternalVideoUrl));
   const reactionTotal = post.reactions?.reduce((sum, r) => sum + r.count, 0) ?? 0;
   const topThreeReactionEmojis = [...(post.reactions ?? [])]
     .filter((r) => r.count > 0)
@@ -222,6 +365,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
     .slice(0, 3)
     .map((r) => r.emoji);
   const sharesCount = post.sharesCount ?? 0;
+  const lastCommentPreview = pickNewestCommentPreview(post.latestComments);
 
   return (
     <div className="flex flex-col h-full bg-background pb-[calc(var(--uix-nav-bottom)+var(--uix-space-3))] w-full max-w-full min-w-0 overflow-x-hidden">
@@ -241,7 +385,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
             Пост
           </h1>
           <div className="flex justify-end min-w-0 items-center gap-1">
-            {user && post.authorId !== user.id ? (
+            {user && !isOwnPost ? (
               <button
                 type="button"
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border/50 bg-secondary/40 text-foreground transition-colors hover:bg-secondary min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)]"
@@ -252,23 +396,81 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
                 {post.isSaved ? <Check className="h-5 w-5 text-primary" strokeWidth={2.25} /> : <Plus className="h-5 w-5" />}
               </button>
             ) : null}
-            {post.authorId === user?.id ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm("Удалить пост?")) {
-                    deletePostMutation.mutate(post.id);
-                  }
-                }}
-                disabled={deletePostMutation.isPending}
-                className="p-2 rounded-full text-muted-foreground hover:text-red-600 hover:bg-red-500/10 transition-colors min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] flex items-center justify-center shrink-0"
-                aria-label="Удалить пост"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+            {isOwnPost ? (
+              <div className="relative flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                      aria-label="Меню поста"
+                    >
+                      <MoreHorizontal className="h-5 w-5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={(e) => e.preventDefault()}>
+                    <DropdownMenuItem
+                      className="min-h-[var(--uix-touch-min)]"
+                      onClick={() => setLocation(`/create-post?edit=${encodeURIComponent(post.id)}`)}
+                    >
+                      <PenSquare className="h-4 w-4" />
+                      Редактировать
+                    </DropdownMenuItem>
+                    {post.edgeId ? (
+                      <EdgePostAudienceSubmenu
+                        current={post.edgeDisplayAudience}
+                        disabled={edgeAudienceMutation.isPending}
+                        onPick={(edgeDisplayAudience) => {
+                          void import("@/lib/capacitor-native").then(({ triggerLightHaptic }) =>
+                            triggerLightHaptic(),
+                          );
+                          edgeAudienceMutation.mutate({ postId: post.id, edgeDisplayAudience });
+                        }}
+                      />
+                    ) : null}
+                    <DropdownMenuItem
+                      className="min-h-[var(--uix-touch-min)] text-destructive focus:text-destructive"
+                      onClick={() => {
+                        if (window.confirm("Удалить пост?")) {
+                          deletePostMutation.mutate(post.id);
+                        }
+                      }}
+                      disabled={deletePostMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Удалить пост
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             ) : !user ? (
               <span className="min-w-[var(--uix-touch-min)]" aria-hidden />
-            ) : null}
+            ) : (
+              <div className="relative flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex min-h-[var(--uix-touch-min)] min-w-[var(--uix-touch-min)] items-center justify-center rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground"
+                      aria-label="Меню поста"
+                    >
+                      <MoreHorizontal className="h-5 w-5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={(e) => e.preventDefault()}>
+                    <DropdownMenuItem
+                      className="min-h-[var(--uix-touch-min)]"
+                      onSelect={() => {
+                        requestAnimationFrame(() => setPostReportOpen(true));
+                      }}
+                    >
+                      <Flag className="h-4 w-4" />
+                      Пожаловаться
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -280,7 +482,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
             onClick={() =>
               setLocation(
                 buildProfilePath({
-                  isMe: post.authorId === user?.id,
+                  isMe: isOwnPost,
                   publicId: post.author.publicId,
                   userId: post.authorId,
                   fallbackPath: "/posts",
@@ -295,6 +497,7 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
               seed={post.authorId}
               size={40}
               className="h-10 w-10 shrink-0 rounded-xl object-cover ring-1 ring-border/30"
+              pointerEventsNone
             />
             <div className="min-w-0">
               <h2 className="font-semibold text-[15px] leading-tight group-hover:text-primary transition-colors">
@@ -308,32 +511,13 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
         <div
           className={cn(
             "flex flex-col min-w-0 mb-[var(--uix-space-4)]",
-            (hasCaption || primaryExternalVideoUrl) && "gap-[var(--uix-space-3)]",
+            (hasCaption || primaryExternalVideoUrl || post.edgeId || post.mediaUrls?.length || post.imageUrl) &&
+              "gap-[var(--uix-space-3)]",
           )}
         >
-          {hasCaption ? (
-            <p className="text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap">
-              <PostCaptionInlineParts
-                text={postBody}
-                maskExternalEmbed={maskExternalEmbed}
-                onHashtagClick={() => {}}
-                linkClassName="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
-                hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
-              />
-            </p>
-          ) : null}
-          {primaryExternalVideoUrl ? (
-            <PostExternalVideoEmbed url={primaryExternalVideoUrl} className="rounded-xl" autoplayInViewport />
-          ) : null}
-          <PostMedia
-            mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
-            layout={post.mediaLayout ?? null}
-            className={hasCaption || primaryExternalVideoUrl ? "!mt-0" : undefined}
-          />
           {post.edgeId ? (
             <EdgeCompanionFeedCard
               variant="feed"
-              className="mt-[var(--uix-space-3)]"
               userId={user?.id ?? "guest"}
               edgeId={post.edgeId}
               onOpen={() => {
@@ -348,11 +532,78 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
                 setLocation(
                   buildEdgeCompanionOpenHref(
                     post.edgeId!,
-                    `/profile/${encodeURIComponent(userId)}/post/${encodeURIComponent(postId)}`,
+                    buildProfilePostPath({
+                      postId: post.id,
+                      linkCode: post.linkCode,
+                      isMe: userId === "me",
+                      publicId: post.author.publicId,
+                      userId: post.authorId,
+                      fallbackPath: "/posts",
+                    }),
                   ),
                 );
               }}
             />
+          ) : null}
+          <div className="relative w-full">
+            <PostMedia
+              mediaUrls={post.mediaUrls?.length ? post.mediaUrls : post.imageUrl ? [post.imageUrl] : []}
+              layout={post.mediaLayout ?? null}
+              className="!mt-0"
+              feedEagerImages
+              feedVideoAutoplay
+              feedReelsInteraction={
+                user
+                  ? {
+                      onDoubleTapFire: fireDoubleTapLike,
+                    }
+                  : null
+              }
+              feedReelsDeferredOpen={user && postHasVideo ? openReelsForCurrentPost : undefined}
+            />
+            <AnimatePresence>
+              {doubleTapHeartVisible ? (
+                <motion.div
+                  key="post-detail-double-tap-heart"
+                  initial={{ opacity: 0, scale: 0.72, y: 8 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 1.06, y: -6 }}
+                  transition={{ duration: prefersReducedMotion ? 0.12 : 0.22, ease: EASING_OUT_BEZIER }}
+                  className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+                  aria-hidden
+                >
+                  <Heart className="h-16 w-16 fill-rose-500 text-rose-500/95 drop-shadow-[0_8px_24px_rgba(244,63,94,0.55)]" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+          {primaryExternalVideoUrl ? (
+            <PostExternalVideoEmbed url={primaryExternalVideoUrl} className="rounded-xl" autoplayInViewport />
+          ) : null}
+          {hasCaption ? (
+            user ? (
+              <FeedDoubleTapImageLayer className="min-w-0" onDoubleTap={fireDoubleTapLike} pulseOnDoubleTap={false}>
+                <p className="text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap">
+                  <PostCaptionInlineParts
+                    text={postBody}
+                    maskExternalEmbed={maskExternalEmbed}
+                    onHashtagClick={() => {}}
+                    linkClassName="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
+                    hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
+                  />
+                </p>
+              </FeedDoubleTapImageLayer>
+            ) : (
+              <p className="text-[15px] leading-snug tracking-[-0.01em] text-foreground whitespace-pre-wrap">
+                <PostCaptionInlineParts
+                  text={postBody}
+                  maskExternalEmbed={maskExternalEmbed}
+                  onHashtagClick={() => {}}
+                  linkClassName="text-primary underline decoration-primary/55 underline-offset-[3px] break-all"
+                  hashtagClassName="text-primary font-medium hover:underline underline-offset-2"
+                />
+              </p>
+            )
           ) : null}
         </div>
 
@@ -469,14 +720,36 @@ export default function PostDetail({ params }: { params: { id: string; postId: s
               {post.viewsCount ?? 0}
             </span>
           </div>
+
+          {lastCommentPreview ? (
+            <PostLastCommentTeaser
+              comment={lastCommentPreview}
+              commentsCount={post.commentsCount}
+              onOpen={() => setCommentsOpen(true)}
+              ariaLabel={
+                post.commentsCount > 1
+                  ? `Комментарии: последний от ${lastCommentPreview.user}, есть ещё`
+                  : `Комментарии: ${lastCommentPreview.user}`
+              }
+              className="mt-1"
+            />
+          ) : null}
         </div>
       </article>
+
+      <ReportContentDialog
+        open={postReportOpen}
+        onOpenChange={setPostReportOpen}
+        target={post ? { targetType: "post", targetId: post.id } : null}
+        contextLine="Пост"
+      />
 
       <CommentsModal
         isOpen={commentsOpen}
         onClose={() => setCommentsOpen(false)}
         postId={postId}
         postAuthorId={post?.authorId}
+        targetCommentId={deepLinkCommentId}
       />
     </div>
   );

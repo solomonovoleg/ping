@@ -17,8 +17,22 @@ const DEEP_WINDOW = 20;
 const MIN_CONFIDENCE_TO_SWITCH = 0.48;
 const MIN_GAP_TO_SWITCH = 0.08;
 const COOLDOWN_MS = 35_000;
-const MIN_CONSECUTIVE_BATCHES = 1;
+const MIN_CONSECUTIVE_BATCHES = 2;
 const EMA_ALPHA = 0.4;
+const RECENT_WEIGHT_LAST = 3;
+const RECENT_WEIGHT_PREV = 2;
+const RECENT_WEIGHT_THIRD = 2;
+const IS_DEV = process.env.NODE_ENV === "development";
+const THEME_SWITCH_THRESHOLD: Record<VibeThemeCode, number> = {
+  casual: 0.48,
+  romantic: 0.62,
+  business: 0.5,
+  conflict: 0.56,
+  fun: 0.5,
+  relax: 0.48,
+  support: 0.5,
+  gaming: 0.5,
+};
 
 /**
  * Called after every new message in a DM chat.
@@ -74,17 +88,47 @@ export async function processNewMessage(chatId: string): Promise<void> {
 
   const window = shouldDeepAnalyze ? DEEP_WINDOW : FAST_WINDOW;
   const msgs = await storage.getMessagesByChatId(chatId, window);
-  const texts = msgs
-    .filter((m) => m.type === "text" && m.content?.trim())
-    .map((m) => m.content);
+  const textEntries = msgs
+    .filter((m) => m.type === "text")
+    .map((m) => ({
+      senderId: String(m.senderId ?? ""),
+      content: String(m.content ?? "").trim(),
+    }))
+    // Шум/служебные короткие реплики не должны дергать атмосферу.
+    .filter((m) => isMeaningfulForVibe(m.content));
+  const texts = textEntries.map((m) => m.content);
 
-  if (texts.length < 3) return;
+  if (texts.length < 3) {
+    logVibeDecision({
+      chatId,
+      action: "skip",
+      reason: "not_enough_meaningful_texts",
+      meaningfulTexts: texts.length,
+      required: 3,
+      shouldDeepAnalyze,
+    });
+    return;
+  }
+  const participantCount = new Set(textEntries.map((m) => m.senderId).filter(Boolean)).size;
+  // Не переключаем тему на монологе одного участника.
+  if (participantCount < 2) {
+    logVibeDecision({
+      chatId,
+      action: "skip",
+      reason: "single_participant_context",
+      participantCount,
+      meaningfulTexts: texts.length,
+      shouldDeepAnalyze,
+    });
+    return;
+  }
+  const weightedTexts = applyRecencyWeights(texts);
 
   let batchResult: VibeBatchResult;
   if (shouldDeepAnalyze) {
-    batchResult = await classifyWithLLM(texts, state.theme as VibeThemeCode);
+    batchResult = await classifyWithLLM(weightedTexts, state.theme as VibeThemeCode);
   } else {
-    batchResult = analyzeMessageBatch(texts);
+    batchResult = analyzeMessageBatch(weightedTexts);
   }
 
   await storage.createVibeBatch({
@@ -105,7 +149,8 @@ export async function processNewMessage(chatId: string): Promise<void> {
   const newConfidence = smoothedResult.confidence;
 
   const themeChanged = newTheme !== currentTheme;
-  const passesThreshold = newConfidence >= MIN_CONFIDENCE_TO_SWITCH;
+  const switchThreshold = THEME_SWITCH_THRESHOLD[newTheme] ?? MIN_CONFIDENCE_TO_SWITCH;
+  const passesThreshold = newConfidence >= switchThreshold;
   const passesGap = newConfidence - Number(state.confidence) >= MIN_GAP_TO_SWITCH || newTheme !== currentTheme;
 
   const cooldownPassed = !state.lastBatchAt ||
@@ -129,6 +174,27 @@ export async function processNewMessage(chatId: string): Promise<void> {
     messageCounter: counter,
     touchLastBatchAt: true,
     ...(shouldSwitch && { themeVersion: (state.themeVersion ?? 1) + 1 }),
+  });
+
+  logVibeDecision({
+    chatId,
+    action: shouldSwitch ? "switch" : "hold",
+    trigger: shouldDeepAnalyze ? "deep_recalc" : "fast_batch",
+    currentTheme,
+    candidateTheme: newTheme,
+    finalTheme,
+    previousConfidence: Number(state.confidence),
+    candidateConfidence: Number(newConfidence.toFixed(2)),
+    finalConfidence: Number(finalConfidence.toFixed(2)),
+    threshold: switchThreshold,
+    passesThreshold,
+    passesGap,
+    cooldownPassed,
+    consecutiveCount,
+    participantCount,
+    meaningfulTexts: texts.length,
+    reasonCodes: smoothedResult.reasonCodes,
+    themeVersion: updatedState.themeVersion ?? null,
   });
 
   if (shouldSwitch) {
@@ -232,4 +298,34 @@ function countConsecutiveDominant(batches: BatchLike[], theme: string): number {
     else break;
   }
   return count;
+}
+
+function applyRecencyWeights(texts: string[]): string[] {
+  if (texts.length <= 1) return texts;
+
+  const weighted: string[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    const fromEnd = texts.length - 1 - i;
+    const weight =
+      fromEnd === 0
+        ? RECENT_WEIGHT_LAST
+        : fromEnd === 1
+          ? RECENT_WEIGHT_PREV
+          : fromEnd === 2
+            ? RECENT_WEIGHT_THIRD
+            : 1;
+    for (let r = 0; r < weight; r++) weighted.push(texts[i]);
+  }
+  return weighted;
+}
+
+function isMeaningfulForVibe(text: string): boolean {
+  if (!text) return false;
+  if (text.length < 4) return false;
+  return /[A-Za-zА-Яа-я0-9]/.test(text);
+}
+
+function logVibeDecision(payload: Record<string, unknown>): void {
+  if (!IS_DEV) return;
+  console.log("[vibe] decision", payload);
 }

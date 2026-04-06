@@ -45,7 +45,6 @@ export function AdminDashboard() {
   const [feedSaving, setFeedSaving] = useState(false);
   const [referralCodes, setReferralCodes] = useState<AdminReferralCode[]>([]);
   const [creatingCode, setCreatingCode] = useState(false);
-  const [inviteFormat, setInviteFormat] = useState<"phrase" | "digits">("phrase");
   const { toast } = useToast();
 
   const loadStats = useCallback(async () => {
@@ -105,7 +104,7 @@ export function AdminDashboard() {
   const handleCreateInviteCode = async () => {
     setCreatingCode(true);
     try {
-      const created = await adminCreateReferralCode({ format: inviteFormat, expiresInHours: 7 * 24 });
+      const created = await adminCreateReferralCode({ expiresInHours: 7 * 24 });
       setReferralCodes((prev) => [{ ...created, expiresInHours: created.expiresInHours }, ...prev]);
       toast({ title: "Код создан", description: created.code });
       await navigator.clipboard.writeText(created.code);
@@ -280,22 +279,6 @@ export function AdminDashboard() {
             Админ может создавать неограниченное количество кодов. Пользователи регистрируются по коду. Обычный пользователь — до 3 приглашений.
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-md border border-slate-600 overflow-hidden">
-              <button
-                type="button"
-                className={`px-3 py-2 text-sm ${inviteFormat === "phrase" ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
-                onClick={() => setInviteFormat("phrase")}
-              >
-                Фраза
-              </button>
-              <button
-                type="button"
-                className={`px-3 py-2 text-sm ${inviteFormat === "digits" ? "bg-slate-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}
-                onClick={() => setInviteFormat("digits")}
-              >
-                4 цифры
-              </button>
-            </div>
             <Button
               size="sm"
               disabled={creatingCode}

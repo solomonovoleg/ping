@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { UserPlus, UserCheck } from "lucide-react";
 import { usePulseProfileTheme } from "@/features/profile/pulse-profile";
 import { userProfileRu } from "../i18n.ru";
@@ -9,6 +10,7 @@ export function ProfileOtherPulseActions({
   onFollow,
   onMessage,
   canMessage,
+  middle,
 }: {
   isFollowing: boolean;
   isMutualFollow?: boolean;
@@ -16,19 +18,20 @@ export function ProfileOtherPulseActions({
   onFollow: () => void;
   onMessage: () => void;
   canMessage: boolean;
+  /** Компактный слот между «Подписаться» и «Написать» (например Push-лента) */
+  middle?: ReactNode;
 }) {
   const { th } = usePulseProfileTheme();
   const f = userProfileRu.follow;
   const showMutual = isFollowing && isMutualFollow;
   return (
-    <div className="flex gap-2">
+    <div className="flex items-stretch gap-2">
       <button
         type="button"
         onClick={onFollow}
         disabled={followLoading}
-        className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-all duration-150 disabled:opacity-60"
+        className="flex h-11 min-h-[var(--uix-touch-min)] flex-1 items-center justify-center gap-1.5 rounded-2xl active:scale-[0.98] transition-all duration-150 disabled:opacity-60"
         style={{
-          height: 40,
           background: isFollowing ? `${th.accent}18` : th.accentDim,
           border: `1px solid ${isFollowing ? th.accent : th.accentBorder}`,
         }}
@@ -38,18 +41,19 @@ export function ProfileOtherPulseActions({
         ) : (
           <UserPlus className="h-4 w-4 shrink-0" style={{ color: th.accent }} strokeWidth={2.25} aria-hidden />
         )}
-        <span style={{ fontSize: 13, fontWeight: 700, color: isFollowing ? th.accent : th.accent }}>
+        <span style={{ fontSize: 13, lineHeight: 1.1, fontWeight: 700, color: isFollowing ? th.accent : th.accent }}>
           {followLoading ? f.loading : showMutual ? f.mutualLabel : isFollowing ? f.followingLabel : f.follow}
         </span>
       </button>
+      {middle}
       <button
         type="button"
         onClick={onMessage}
         disabled={!canMessage}
-        className="flex-1 flex items-center justify-center rounded-2xl min-h-[var(--uix-touch-min)] active:scale-[0.98] transition-transform disabled:opacity-50"
-        style={{ height: 40, background: th.surface, border: `1px solid ${th.border}` }}
+        className="flex h-11 min-h-[var(--uix-touch-min)] flex-1 items-center justify-center rounded-2xl active:scale-[0.98] transition-transform disabled:opacity-50"
+        style={{ background: th.surface, border: `1px solid ${th.border}` }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: th.text }}>{f.message}</span>
+        <span style={{ fontSize: 13, lineHeight: 1.1, fontWeight: 600, color: th.text }}>{f.message}</span>
       </button>
     </div>
   );

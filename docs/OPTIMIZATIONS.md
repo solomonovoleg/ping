@@ -15,9 +15,14 @@
 - **Эффект:** лучше кэширование (при обновлении кода приложения эти библиотеки не перекачиваются), предупреждение о размере чанка снижено до 600 KB.
 
 ### 3. Мемоизация строки чата
-- **Файл:** `client/src/pages/Chats.tsx`
-- Компонент `ChatRow` обёрнут в `React.memo`; в пропсах передаются только нужные данные (`chat`, `typingLabel`, `voiceLabel`, `onSelect`).
-- **Эффект:** при обновлении «печатает»/«записывает голосовое» перерисовывается только одна строка, а не весь список чатов.
+- **Файл:** `client/src/pages/chats/ChatRow.tsx` (раньше внутри `Chats.tsx`)
+- `ChatRow` в `React.memo`; превью последнего сообщения — `chats-list-format.ts`.
+- **Эффект:** при «печатает»/«записывает» перерисовывается одна строка.
+
+### 4. Perf roadmap (2026-04): чат и список
+- Сервер: батч reply/reactions, presign-кэш на запрос, опциональное `compression`, тайминги списка сообщений.
+- Клиент: prefetch хвоста при входе в чат (`prefetch-chat-messages-tail.ts`), ключи `chat-query-keys.ts`, инвалидация после отправки текста, `MediaLoadError` / `VideoNoteBubble` вынесен, флаг `VITE_CHAT_BOOTSTRAP`.
+- Зависимость `@tanstack/react-virtual` — под будущую виртуализацию треда (`docs/CHAT_THREAD_VIRTUALIZATION.md`).
 
 ---
 
@@ -35,10 +40,9 @@
 
 ## Что оптимизировать и где решения не самые современные
 
-### 1. Поиск (GlobalSearch) — ручной fetch вместо TanStack Query
-- **Сейчас:** `useState` (results, loading, searchError) + `useEffect` с debounce + вызов `searchUsers(q)` вручную.
-- **Минусы:** нет кэша по запросу, при повторном вводе того же текста запрос уходит снова; нет дедупликации; нет флага `isFetching` из коробки.
-- **Современно:** `useQuery` с `queryKey: ["search", debouncedQuery]`, `enabled: !!debouncedQuery.trim()`, `staleTime: 30_000` — кэш, дедуп, повтор при фокусе по желанию.
+### 1. Поиск (GlobalSearch)
+- **Сделано (2026-04):** поиск пользователей через `useQuery` + debounce и `staleTime`.
+- Дальше по желанию: единый паттерн для остальных вкладок поиска, если появятся лаги.
 
 ### 2. Загрузка чата и сообщений — ручной fetch вместо Query
 - **Сейчас:** в `useChatMessages` — `apiFetch` + `setChat`/`setMessages`/`setLoading`/`setError` вручную, таймауты и проверки `currentChatIdRef`.
